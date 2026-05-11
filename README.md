@@ -113,7 +113,11 @@ sub-wave/
 │   ├── Caddyfile                  # /api → controller, /stream.mp3 → icecast, else → web
 │   ├── icecast.xml.template       # Rendered by setup.sh with random passwords
 │   └── Dockerfile.controller      # Node 22 + Piper + voice
+├── bin/
+│   └── subwave                # `npm run setup` entry — interactive TUI
+├── package.json               # Root manifest: wizard + dev/down/logs/rebuild aliases
 ├── scripts/
+│   ├── setup.mjs              # Interactive setup wizard (@clack/prompts)
 │   ├── setup.sh               # Idempotent, no-sudo: state dirs, .env files, emergency.mp3
 │   ├── generate-jingles.sh    # Render default jingles via Piper
 │   └── update.sh              # Prod: git pull + rebuild + rolling recreate
@@ -131,6 +135,31 @@ sub-wave/
 ```
 
 ## Quick start (dev)
+
+### Easy way — interactive wizard
+
+Requires Node 20+, Docker, and (optionally) `ffmpeg` on the host.
+
+```bash
+npm install
+npm run setup
+```
+
+The wizard prompts for your Navidrome and Ollama details, writes `controller/.env`, runs `scripts/setup.sh` (icecast.xml, emergency.mp3, bed.mp3, docker/.env), brings up the dev docker stack, installs the web dependencies, waits for the controller to report on-air, optionally renders jingles, and optionally launches `next dev` on :3000 in the foreground.
+
+Other npm scripts wrap the common loops:
+
+| Script | What |
+|---|---|
+| `npm run setup` | Run the wizard end-to-end (alias: `npm run dev`) |
+| `npm run dev:docker` | `docker compose up -d` in `docker/` |
+| `npm run dev:web` | `next dev` on :3000 (in `web/`) |
+| `npm run rebuild` | `docker compose up -d --build` (after controller/liquidsoap source edits) |
+| `npm run down` | Stop the docker stack |
+| `npm run logs` | Tail docker compose logs |
+| `npm run jingles` | Render station idents via Piper (dev compose) |
+
+### Manual
 
 ```bash
 # 1. Configure + state dir + emergency audio (idempotent)
@@ -330,10 +359,12 @@ Admin (gated when `ADMIN_USER`/`ADMIN_PASS` are set):
 ## Stopping it
 
 ```bash
+npm run down
+# or, manually:
 cd docker && docker compose down
 ```
 
-State (`settings.json`, `moods.json`, voice WAVs, archives) is persisted in `./state/`. Restart anytime with `docker compose up -d`.
+State (`settings.json`, `moods.json`, voice WAVs, archives) is persisted in `./state/`. Restart anytime with `npm run dev:docker` (or `docker compose up -d`).
 
 ## Known caveats
 

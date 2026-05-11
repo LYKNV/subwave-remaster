@@ -52,6 +52,55 @@ export default function SetupPage() {
           </p>
         </section>
 
+        {/* ── Fast path: interactive dev wizard ──────────────────────────── */}
+        <section className="bs-section">
+          <div className="bs-callout">
+            <div className="bs-eyebrow">FAST PATH · LOCAL DEV</div>
+            <h2 style={{ margin: '4px 0 8px' }}>Just trying it out?</h2>
+            <p>
+              The repo ships an interactive setup wizard built on{' '}
+              <code className="bs-code-inline">@clack/prompts</code>. Requires Node 20+,
+              Docker, and (optionally) <code className="bs-code-inline">ffmpeg</code> for
+              emergency / studio-bed audio.
+            </p>
+            <CodeBlock>{`git clone https://github.com/pklair/subwave.git
+cd subwave
+npm install
+npm run setup`}</CodeBlock>
+            <p>
+              It prompts for your Navidrome and Ollama details, writes{' '}
+              <code className="bs-code-inline">controller/.env</code>, runs the bash
+              setup, brings up the dev docker stack, installs web deps, waits for the
+              controller to report on-air, optionally renders jingles, and optionally
+              launches <code className="bs-code-inline">next dev</code> on
+              {' '}<code className="bs-code-inline">:3000</code> in the foreground.
+              Re-running keeps existing values unless you ask to reconfigure.
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--muted)' }}>
+              The wizard uses the dev compose file (no Caddy, no host TLS, web
+              dev server on <code className="bs-code-inline">:3000</code>). For a
+              public-facing deploy behind Caddy + Cloudflare, follow the
+              numbered production steps below.
+            </p>
+            <p>Useful follow-up scripts:</p>
+            <CodeBlock>{`npm run dev:docker   # docker compose up -d
+npm run dev:web      # next dev on :3000
+npm run rebuild      # docker compose up -d --build (after src changes)
+npm run logs         # tail docker logs
+npm run jingles      # render station idents via Piper
+npm run down         # stop the stack`}</CodeBlock>
+          </div>
+        </section>
+
+        <section className="bs-section">
+          <p className="bs-eyebrow">PRODUCTION</p>
+          <h2>Deploy on a server.</h2>
+          <p>
+            For a public-facing instance — Caddy on the edge, Cloudflare in front,
+            internal-only Icecast/Controller — follow the steps below.
+          </p>
+        </section>
+
         {/* ── Step 1 ── prerequisites ─────────────────────────────────────── */}
         <div className="bs-step">
           <div className="bs-step-num">01</div>

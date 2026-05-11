@@ -1,0 +1,27 @@
+{
+  "name": "sub-wave",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SUB/WAVE — personal internet radio station. One Icecast stream, AI DJ, AI-curated playlists.",
+  "type": "module",
+  "bin": {
+    "subwave": "bin/subwave"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node bin/subwave",
+    "dev": "node bin/subwave",
+    "dev:docker": "cd docker && docker compose up -d",
+    "dev:web": "npm --prefix web run dev",
+    "rebuild": "cd docker && docker compose up -d --build",
+    "down": "cd docker && docker compose down",
+    "logs": "cd docker && docker compose logs -f",
+    "jingles": "COMPOSE_FILE=docker/docker-compose.yml bash scripts/generate-jingles.sh"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.8.2",
+    "picocolors": "^1.1.1"
+  }
+}

@@ -119,9 +119,12 @@ export async function getPlaylist(id) {
   return r.playlist?.entry || [];
 }
 
-// Returns a streamable URL for Liquidsoap to read
+// Returns a streamable URL for Liquidsoap to read. Wrapped in the `subhttp:`
+// protocol scheme so Liquidsoap's radio.liq routes the fetch through curl
+// instead of its built-in http.get.stream (which returns spurious 522s
+// against the Cloudflare-fronted Navidrome origin).
 export function getStreamUrl(songId) {
-  return buildUrl('stream', { id: songId, format: 'mp3' });
+  return `subhttp:${buildUrl('stream', { id: songId, format: 'mp3' })}`;
 }
 
 // Returns the local file path if Navidrome and the controller share the music

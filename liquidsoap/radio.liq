@@ -36,6 +36,39 @@ end
 log("settings loaded: jingle_ratio=#{!jingle_ratio} crossfade_duration=#{!crossfade_duration}")
 
 # ---------------------------------------------------------------------------
+# HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
+# spurious 522s when fetching from Cloudflare-fronted origins. Shelling out
+# to curl (installed via Dockerfile.liquidsoap) is reliable.
+# ---------------------------------------------------------------------------
+
+# subhttp:<full-url> — strips the prefix and shells to curl. Used because
+# Liquidsoap's built-in http.get.stream returns spurious 522s when talking
+# to the Cloudflare-fronted Navidrome origin.
+def proto_subhttp(~rlog, ~maxtime, arg) =
+  ignore(rlog)
+  uri = arg
+  raw_timeout = int_of_float(maxtime - time())
+  timeout = if raw_timeout < 5 then 5 else raw_timeout end
+  ext =
+    if string.contains(substring=".mp3", arg) then ".mp3"
+    elsif string.contains(substring=".ogg", arg) then ".ogg"
+    elsif string.contains(substring=".flac", arg) then ".flac"
+    else ".mp3" end
+  output = file.temp("liq-curl-", ext)
+  cmd = "curl -sS -L --max-time #{timeout} -o #{process.quote(output)} #{process.quote(uri)}"
+  ret = process.run(timeout=float_of_int(timeout), cmd)
+  if ret.status == "exit" and ret.status.code == 0 and file.size(output) > 0 then
+    [output]
+  else
+    log(label="protocol.subhttp", level=3, "curl failed for #{uri}: status=#{ret.status} code=#{ret.status.code} stderr=#{ret.stderr}")
+    file.remove(output)
+    []
+  end
+end
+
+protocol.add(temporary=true, syntax="subhttp:<full url>", doc="Navidrome stream via curl", "subhttp", proto_subhttp)
+
+# ---------------------------------------------------------------------------
 # QUEUE — read tracks from the controller
 # ---------------------------------------------------------------------------
 # The controller writes track URIs to /var/sub-wave/queue.txt, one per line.

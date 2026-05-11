@@ -77,6 +77,18 @@ export async function getAlbum(id) {
   return r.album?.song || [];
 }
 
+// Returns { id, name, albumCount, album: [{ id, name, year, ... }] }
+export async function getArtist(id) {
+  const r = await call('getArtist', { id });
+  return r.artist || null;
+}
+
+// Search just the artist index and return matching artist objects.
+export async function searchArtists(query, { artistCount = 5 } = {}) {
+  const r = await call('search3', { query, artistCount, albumCount: 0, songCount: 0 });
+  return r.searchResult3?.artist || [];
+}
+
 // Async iterator over every song in the library. Walks albums in batches.
 export async function* iterateAllSongs() {
   let offset = 0;

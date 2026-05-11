@@ -18,6 +18,39 @@ import { startScheduler } from './scheduler.js';
 // Background tagger process tracking (single-flight)
 const tagger = { running: false, startedAt: null, pid: null, lastLog: [] };
 
+// Resolve "latest album by Diljit" style requests: find the artist, sort their
+// albums by year, pick a song from the right album. Returns a Subsonic song or null.
+async function pickByArtistAndSort({ artistName, sort, scope, recentIds }) {
+  try {
+    const artists = await subsonic.searchArtists(artistName, { artistCount: 5 });
+    if (artists.length === 0) return null;
+    const artist = await subsonic.getArtist(artists[0].id);
+    let albums = artist?.album || [];
+    if (albums.length === 0) return null;
+
+    if (sort === 'latest') {
+      albums = [...albums].sort((a, b) => (b.year || 0) - (a.year || 0));
+    } else if (sort === 'oldest') {
+      albums = [...albums].sort((a, b) => (a.year || 9999) - (b.year || 9999));
+    }
+    // sort=popular or null → leave order as Subsonic returned
+
+    // Try the top-ranked album first; if its tracks are all recently played,
+    // walk down the list before giving up.
+    for (const album of albums.slice(0, 5)) {
+      const songs = await subsonic.getAlbum(album.id);
+      if (songs.length === 0) continue;
+      const fresh = songs.filter(s => !recentIds.has(s.id));
+      const pool = fresh.length > 0 ? fresh : songs;
+      // scope=album → random track from the album; scope=song → same thing here
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+  } catch (err) {
+    queue.log('error', `pickByArtistAndSort failed: ${err.message}`);
+  }
+  return null;
+}
+
 const app = express();
 app.use(express.json());
 
@@ -68,31 +101,41 @@ app.post('/request', async (req, res) => {
     // 1. LLM matches intent
     const matched = await ollama.matchRequest(text, { listenerName: requester });
 
-    // 2. Search Navidrome
-    let candidates = [];
-    for (const term of matched.search_terms || []) {
-      const r = await subsonic.search(term, { songCount: 25 });
-      candidates = [...candidates, ...r];
+    const recentIds = queue.recentlyPlayedIds(25);
+    let pick = null;
+
+    // 2a. Smart artist + sort path — if the listener asked for "latest/oldest
+    // album by X", resolve the artist's albums and pick from the right one.
+    if (matched.artist && (matched.sort || matched.scope === 'album')) {
+      pick = await pickByArtistAndSort({
+        artistName: matched.artist,
+        sort: matched.sort,
+        scope: matched.scope,
+        recentIds,
+      });
     }
 
-    // De-dup
-    const seen = new Set();
-    const unique = candidates.filter(s => {
-      if (seen.has(s.id)) return false;
-      seen.add(s.id);
-      return true;
-    });
+    // 2b. Generic search path — search by terms, filter recents, random pick.
+    if (!pick) {
+      let candidates = [];
+      for (const term of matched.search_terms || []) {
+        const r = await subsonic.search(term, { songCount: 25 });
+        candidates = [...candidates, ...r];
+      }
 
-    // Avoid picking something we played recently
-    const recentIds = queue.recentlyPlayedIds(25);
-    const fresh = unique.filter(s => !recentIds.has(s.id));
-    const pool = fresh.length > 0 ? fresh : unique;
+      const seen = new Set();
+      const unique = candidates.filter(s => {
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
 
-    // Random pick from the candidate pool so repeat requests for the same
-    // artist/term don't always serve the same track.
-    let pick = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
+      const fresh = unique.filter(s => !recentIds.has(s.id));
+      const pool = fresh.length > 0 ? fresh : unique;
+      pick = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
+    }
 
-    // If no direct match but we have a mood, fall back to mood-based
+    // 2c. Mood fallback
     if (!pick && matched.mood) {
       const moodPool = await subsonic.getRandomSongs({ size: 10, genre: matched.mood });
       pick = moodPool[Math.floor(Math.random() * moodPool.length)] || null;

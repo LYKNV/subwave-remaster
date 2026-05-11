@@ -30,7 +30,6 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.liquidsoap
     image: sub-wave-liquidsoap:local
-    platform: linux/amd64
     container_name: sub-wave-liquidsoap
     restart: unless-stopped
     depends_on:

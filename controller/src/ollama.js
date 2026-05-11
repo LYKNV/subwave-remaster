@@ -55,15 +55,36 @@ async function ollamaChat(messages, { format = null, temperature = 0.7, kind = '
 // REQUEST MATCHING — strict JSON schema
 // ---------------------------------------------------------------------------
 
-const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener has sent in a request. Translate it into search parameters.
+const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener sends a request; you turn it into structured search parameters.
 
-Respond with ONLY a JSON object, no other text:
+You MUST respond with a JSON object containing ALL of these keys, in this exact order. Do not omit any key. Use null where a value does not apply.
+
 {
-  "search_terms": ["1-3 strings to search the library — artist names, song titles, or genres"],
-  "mood": "one of: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural — or null if not applicable",
-  "intent": "one short sentence describing what the listener wants",
-  "ack": "a short on-air acknowledgment the DJ will read aloud, max 20 words, sounds like a real radio DJ. Don't introduce yourself, don't say 'thank you for listening', just acknowledge the request naturally."
-}`;
+  "search_terms": [array of 1-3 strings to search the library],
+  "artist": string or null — the artist name if the listener named one (use the artist's common name, e.g. "Diljit Dosanjh"),
+  "sort": one of "latest" | "oldest" | "popular" | null — set to "latest" for words like latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top. Otherwise null,
+  "scope": one of "album" | "song" — what the listener wants. Default "song",
+  "mood": one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null,
+  "intent": one short sentence describing what the listener wants,
+  "ack": short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros
+}
+
+Worked examples (your output must mirror this structure exactly — these use placeholder names, infer the real artist from the listener's request):
+
+Listener request: "<artist> latest album"
+{"search_terms":["<artist>"],"artist":"<artist>","sort":"latest","scope":"album","mood":null,"intent":"Wants a track from the newest album.","ack":"Pulling their latest for you now."}
+
+Listener request: "<artist> latest song"
+{"search_terms":["<artist>"],"artist":"<artist>","sort":"latest","scope":"song","mood":null,"intent":"Wants the newest track.","ack":"Freshest one coming up."}
+
+Listener request: "old <artist> track"
+{"search_terms":["<artist>"],"artist":"<artist>","sort":"oldest","scope":"song","mood":null,"intent":"Wants an early track.","ack":"Going back in the catalogue for you."}
+
+Listener request: "something romantic"
+{"search_terms":["love"],"artist":null,"sort":null,"scope":"song","mood":"romantic","intent":"Wants a romantic track.","ack":"Slowing things down for you."}
+
+Listener request: "play <title> by <artist>"
+{"search_terms":["<title>","<artist>"],"artist":"<artist>","sort":null,"scope":"song","mood":null,"intent":"Wants a specific song by a specific artist.","ack":"Coming right up."}`;
 
 export async function matchRequest(userQuery, { listenerName = null } = {}) {
   const userPrompt = listenerName

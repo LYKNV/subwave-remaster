@@ -1,0 +1,10 @@
+FROM savonet/liquidsoap:v2.2.5
+
+# Liquidsoap's protocols.https shells out via protocol.external to fetch
+# Subsonic stream URLs; the base image ships without curl/wget so every
+# HTTP fetch silently fails with a fake 522. Install curl to fix it.
+USER root
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+USER liquidsoap

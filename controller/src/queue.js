@@ -5,8 +5,17 @@
 import { writeFile, readFile } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
+import * as ollama from './ollama.js';
 import { speak } from './piper.js';
 import { pickAndEnqueue } from './picker.js';
+import { getFullContext } from './context.js';
+
+// Random gap between DJ links on auto-played tracks.
+// 85% of the time we land in 1-9, 15% we go quiet for 10-15 tracks.
+function pickLinkInterval() {
+  if (Math.random() < 0.15) return 10 + Math.floor(Math.random() * 6);
+  return 1 + Math.floor(Math.random() * 9);
+}
 
 class Queue {
   constructor() {
@@ -18,6 +27,9 @@ class Queue {
     this.senderBusy = false;   // drain-to-Liquidsoap mutex
     this.pickerBusy = false;   // prevent concurrent LLM picks
     this.autoPick = true;      // toggle: should we ask Ollama for next track when idle
+    this.autoLink = true;      // toggle: random DJ links between auto tracks
+    this.tracksUntilLink = pickLinkInterval();
+    this.linkBusy = false;
   }
 
   log(kind, message, meta = {}) {
@@ -28,9 +40,9 @@ class Queue {
   }
 
   // Push a listener request. Adds to upcoming and kicks off the Liquidsoap sender.
-  async push({ track, requestedBy = null, intent = null, introScript = null }) {
+  async push({ track, requestedBy = null, intent = null, introScript = null, aiPicked = false }) {
     const item = {
-      track, requestedBy, intent, introScript,
+      track, requestedBy, intent, introScript, aiPicked,
       queuedAt: new Date().toISOString(),
       sent: false,
     };
@@ -90,7 +102,7 @@ class Queue {
   // Called by the now-playing watcher when Liquidsoap reports a new track.
   onTrackStarted(np) {
     if (!np || !np.title) return;
-    const key = `${np.title}|${np.artist || ''}`;
+    const key = `${np.subsonic_id || ''}|${np.title}|${np.artist || ''}`;
     if (key === this.lastSeenKey) return;
     this.lastSeenKey = key;
 
@@ -100,10 +112,17 @@ class Queue {
       this.history = this.history.slice(0, 50);
     }
 
-    // Try to match this title against an upcoming request
-    const idx = this.upcoming.findIndex(
-      u => u.track.title === np.title && (u.track.artist || '') === (np.artist || '')
-    );
+    // Match upcoming by subsonic_id first (reliable), fall back to title+artist
+    // for older items that pre-date the id annotation.
+    let idx = -1;
+    if (np.subsonic_id) {
+      idx = this.upcoming.findIndex(u => u.track.id && u.track.id === np.subsonic_id);
+    }
+    if (idx < 0) {
+      idx = this.upcoming.findIndex(
+        u => u.track.title === np.title && (u.track.artist || '') === (np.artist || '')
+      );
+    }
 
     if (idx >= 0) {
       const item = this.upcoming.splice(idx, 1)[0];
@@ -124,6 +143,30 @@ class Queue {
         source: 'auto',
       };
       this.log('playing', `${np.title} — ${np.artist}`, { source: 'auto' });
+    }
+
+    // Random DJ link between auto tracks. Listener requests are skipped entirely —
+    // they already get a bespoke intro and shouldn't count toward the gap.
+    const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
+    if (this.autoLink && isAutonomous) {
+      this.tracksUntilLink--;
+      if (this.tracksUntilLink <= 0 && this.history[0] && !this.linkBusy) {
+        this.tracksUntilLink = pickLinkInterval();
+        this.linkBusy = true;
+        const previous = this.history[0].track;
+        const current = this.current.track;
+        (async () => {
+          try {
+            const ctx = await getFullContext();
+            const script = await ollama.generateLink({ previous, current, context: ctx });
+            await this.announce(script, 'link');
+          } catch (err) {
+            this.log('error', `DJ link failed: ${err.message}`);
+          } finally {
+            this.linkBusy = false;
+          }
+        })();
+      }
     }
 
     // Auto-DJ: if nothing is queued, ask the LLM to pick the next track.

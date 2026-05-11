@@ -188,6 +188,25 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   }
 }
 
+export async function generateLink({ previous, current, context }) {
+  const ctxLines = [];
+  if (context?.time) ctxLines.push(`Time: ${context.time.period} (${context.time.vibe})`);
+  if (context?.weather) ctxLines.push(`Weather in ${context.weather.location}: ${context.weather.condition}, ${context.weather.temp}°C`);
+  if (context?.festival) ctxLines.push(`Festival: ${context.festival.name}`);
+  if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
+  if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
+
+  const prompt = `Write a short DJ link between tracks. Back-announce what just played and ease into what's playing now. 1-2 sentences, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
+
+  return ollamaChat(
+    [
+      { role: 'system', content: DJ_SYSTEM },
+      { role: 'user', content: prompt },
+    ],
+    { temperature: 0.85, kind: 'generateLink' }
+  );
+}
+
 export async function generateHourlyTime(time, weather) {
   const prompt = `It's the top of the hour. Time is ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })} in ${weather.location}. ${weather.condition}, ${weather.temp}°C. Brief time check, in character. 1 sentence.`;
   return ollamaChat(

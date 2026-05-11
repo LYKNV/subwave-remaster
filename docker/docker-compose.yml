@@ -26,7 +26,10 @@ services:
   # LIQUIDSOAP — pulls from queue file, broadcasts to Icecast
   # -------------------------------------------------------------------------
   liquidsoap:
-    image: savonet/liquidsoap:v2.2.5
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.liquidsoap
+    image: sub-wave-liquidsoap:local
     platform: linux/amd64
     container_name: sub-wave-liquidsoap
     restart: unless-stopped

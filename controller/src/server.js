@@ -71,7 +71,7 @@ app.post('/request', async (req, res) => {
     // 2. Search Navidrome
     let candidates = [];
     for (const term of matched.search_terms || []) {
-      const r = await subsonic.search(term, { songCount: 5 });
+      const r = await subsonic.search(term, { songCount: 25 });
       candidates = [...candidates, ...r];
     }
 
@@ -83,12 +83,19 @@ app.post('/request', async (req, res) => {
       return true;
     });
 
-    let pick = unique[0];
+    // Avoid picking something we played recently
+    const recentIds = queue.recentlyPlayedIds(25);
+    const fresh = unique.filter(s => !recentIds.has(s.id));
+    const pool = fresh.length > 0 ? fresh : unique;
+
+    // Random pick from the candidate pool so repeat requests for the same
+    // artist/term don't always serve the same track.
+    let pick = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
 
     // If no direct match but we have a mood, fall back to mood-based
     if (!pick && matched.mood) {
       const moodPool = await subsonic.getRandomSongs({ size: 10, genre: matched.mood });
-      pick = moodPool[0];
+      pick = moodPool[Math.floor(Math.random() * moodPool.length)] || null;
     }
 
     if (!pick) {

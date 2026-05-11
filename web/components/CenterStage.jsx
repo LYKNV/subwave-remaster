@@ -8,8 +8,8 @@ export default function CenterStage({ nowPlaying, elapsed }) {
 
   return (
     <div
-      className="absolute"
-      style={{ top: '50%', left: 32, right: 96, transform: 'translateY(-58%)' }}
+      className="absolute left-4 sm:left-8"
+      style={{ top: '50%', right: 96, transform: 'translateY(-58%)' }}
     >
       <div
         className="v3-caption mb-[14px]"

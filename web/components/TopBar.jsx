@@ -12,34 +12,34 @@ export default function TopBar({ tunedIn, context, transmission, djName, onOpenS
 
   return (
     <div
-      className="absolute top-0 left-0 right-0 flex items-baseline justify-between z-20"
-      style={{ padding: '24px 32px', borderBottom: '1px solid var(--ink)' }}
+      className="absolute top-0 left-0 right-0 flex items-baseline justify-between gap-3 z-20 px-4 py-4 sm:px-8 sm:py-6"
+      style={{ borderBottom: '1px solid var(--ink)' }}
     >
-      <div className="flex items-baseline gap-[14px]">
-        <span className="v3-eyebrow">SUB/WAVE</span>
+      <div className="flex items-baseline gap-2 sm:gap-[14px] min-w-0">
+        <span className="v3-eyebrow shrink-0">SUB/WAVE</span>
         {djName && (
-          <span className="v3-caption" style={{ color: 'var(--accent)' }}>
+          <span className="v3-caption truncate" style={{ color: 'var(--accent)' }}>
             with {djName}
           </span>
         )}
-        <span className="v3-caption" style={{ color: 'var(--muted)' }}>
+        <span className="hidden md:inline v3-caption shrink-0" style={{ color: 'var(--muted)' }}>
           vol. 1 · transmission {String(transmission ?? 241).padStart(4, '0')}
         </span>
       </div>
       <div
-        className="flex items-baseline gap-[18px] v3-caption"
+        className="flex items-baseline gap-3 sm:gap-[18px] v3-caption shrink-0"
         style={{ color: 'var(--muted)' }}
       >
-        <span>
-          <span style={{ color: tunedIn ? 'var(--accent)' : 'var(--muted)' }}>●</span>{' '}
-          {tunedIn ? 'on air' : 'off air'}
+        <span className="whitespace-nowrap">
+          <span style={{ color: tunedIn ? 'var(--accent)' : 'var(--muted)' }}>●</span>
+          <span className="hidden sm:inline">{' '}{tunedIn ? 'on air' : 'off air'}</span>
         </span>
         {(city || temp != null || cond) && (
-          <span>
+          <span className="hidden md:inline">
             {[city, temp != null ? `${temp}°C` : null, cond].filter(Boolean).join(' · ')}
           </span>
         )}
-        <span className="v3-tab-num" style={{ color: 'var(--ink)', fontWeight: 600 }}>
+        <span className="v3-tab-num whitespace-nowrap" style={{ color: 'var(--ink)', fontWeight: 600 }}>
           {time}
         </span>
         {onToggleTicker && (

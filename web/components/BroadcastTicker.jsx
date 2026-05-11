@@ -1,6 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+function useIsMobile() {
+  const [m, setM] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const sync = () => setM(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return m;
+}
 
 const VOICE_KINDS = new Set([
   "dj-speak",
@@ -80,6 +92,7 @@ function Row({ items, duration, direction, opacity, fontSize, paused }) {
 
 export default function BroadcastTicker({ items, enabled }) {
   const [paused, setPaused] = useState(false);
+  const isMobile = useIsMobile();
 
   // Snapshot the feed only when the newest id changes — otherwise the 5s poll
   // would re-render every tick and visibly restart the marquee.
@@ -115,15 +128,15 @@ export default function BroadcastTicker({ items, enabled }) {
         duration={140}
         direction="left"
         opacity={0.18}
-        fontSize={13}
+        fontSize={isMobile ? 11 : 13}
         paused={paused}
       />
       <Row
         items={feed}
         duration={360}
         direction="right"
-        opacity={0.3}
-        fontSize={20}
+        opacity={isMobile ? 0.22 : 0.3}
+        fontSize={isMobile ? 14 : 20}
         paused={paused}
       />
       <Row
@@ -131,7 +144,7 @@ export default function BroadcastTicker({ items, enabled }) {
         duration={160}
         direction="left"
         opacity={0.16}
-        fontSize={13}
+        fontSize={isMobile ? 11 : 13}
         paused={paused}
       />
     </div>

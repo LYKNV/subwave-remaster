@@ -10,21 +10,19 @@ export default function TransportBar({ tunedIn, onTune, volume, setVolume, nowPl
 
   return (
     <div
-      className="absolute bottom-0 left-0 right-0 z-20 flex items-center gap-6"
+      className="absolute bottom-0 left-0 right-0 z-20 flex items-center gap-3 sm:gap-6 px-4 py-3 sm:px-8 sm:py-5"
       style={{
-        padding: '20px 32px',
         borderTop: '1px solid var(--ink)',
         background: 'var(--bg)',
       }}
     >
       <button
         onClick={onTune}
-        className="v3-eyebrow v3-focus cursor-pointer flex items-center gap-[10px]"
+        className="v3-eyebrow v3-focus cursor-pointer flex items-center gap-[10px] shrink-0 px-4 py-3 sm:px-7 sm:py-[14px]"
         style={{
           background: 'var(--ink)',
           color: 'var(--bg)',
           border: 'none',
-          padding: '14px 28px',
         }}
       >
         <span
@@ -63,11 +61,11 @@ export default function TransportBar({ tunedIn, onTune, volume, setVolume, nowPl
         </div>
       </div>
 
-      <div className="flex items-center gap-[10px]">
-        <span className="v3-caption" style={{ color: 'var(--muted)' }}>Vol</span>
+      <div className="flex items-center gap-2 sm:gap-[10px] shrink-0">
+        <span className="hidden sm:inline v3-caption" style={{ color: 'var(--muted)' }}>Vol</span>
         <div
-          className="relative flex items-center"
-          style={{ width: 80, height: 18, gap: 2 }}
+          className="relative flex items-center w-[52px] sm:w-[80px]"
+          style={{ height: 18, gap: 2 }}
         >
           {Array.from({ length: cells }).map((_, i) => (
             <span

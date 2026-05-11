@@ -125,9 +125,13 @@ export default function ListenerPage() {
           </div>
         </div>
 
-        <footer className="mt-12 pt-6 border-t border-amber-900/40 text-[10px] text-amber-500/40 tracking-widest uppercase flex justify-between">
-          <span>SUB/WAVE v0.1 · Liquidsoap · Icecast · Qwen 2.5</span>
-          <span>192kbps mp3</span>
+        <footer className="mt-12 pt-6 border-t border-amber-900/40 text-[10px] text-amber-500/40 tracking-widest uppercase flex flex-wrap items-center gap-4 justify-between">
+          <span>SUB/WAVE v0.1 · Liquidsoap · Icecast · Ollama</span>
+          <nav className="flex items-center gap-4">
+            <a href="/settings" className="hover:text-amber-300 underline underline-offset-4">settings</a>
+            <a href="/debug" className="hover:text-amber-300 underline underline-offset-4">debug</a>
+            <span>192kbps mp3</span>
+          </nav>
         </footer>
       </div>
     </div>

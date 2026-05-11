@@ -21,6 +21,8 @@ state/next.txt
 state/say.txt
 state/now-playing.json
 state/emergency.mp3
+state/jingles.json
+state/moods.json
 
 # OS / editor
 .DS_Store

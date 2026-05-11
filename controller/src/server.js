@@ -2,14 +2,19 @@
 // The Next.js web UI hits this for: now-playing, queue state, request submission.
 
 import express from 'express';
+import { spawn } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
 import * as ollama from './ollama.js';
 import * as library from './library.js';
+import * as jingles from './jingles.js';
 import { getFullContext } from './context.js';
 import { queue } from './queue.js';
 import { startScheduler } from './scheduler.js';
+
+// Background tagger process tracking (single-flight)
+const tagger = { running: false, startedAt: null, pid: null, lastLog: [] };
 
 const app = express();
 app.use(express.json());
@@ -138,6 +143,90 @@ app.post('/auto-pick', express.json(), (req, res) => {
 app.get('/health', (req, res) => res.json({ status: 'on-air' }));
 
 // ---------------------------------------------------------------------------
+// JINGLES — list / create / delete pre-recorded TTS stingers
+// ---------------------------------------------------------------------------
+app.get('/jingles', async (req, res) => {
+  try {
+    res.json({ jingles: await jingles.list() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/jingles', async (req, res) => {
+  const text = (req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  if (text.length > 500) return res.status(400).json({ error: 'text too long (max 500)' });
+  try {
+    const created = await jingles.create(text);
+    queue.log('scheduler', `New jingle created: "${text.slice(0, 60)}…"`);
+    res.json(created);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/jingles/:filename', async (req, res) => {
+  try {
+    res.json(await jingles.remove(req.params.filename));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// SETTINGS — single endpoint that returns everything the /settings UI needs
+// ---------------------------------------------------------------------------
+app.get('/settings', async (req, res) => {
+  try {
+    await library.load();
+    res.json({
+      autoPick: queue.autoPick,
+      pickerBusy: queue.pickerBusy,
+      jingles: await jingles.list(),
+      libraryStats: library.stats(),
+      tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
+      ollama: { url: config.ollama.url, model: config.ollama.model },
+      location: config.weather.locationName,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TAG-LIBRARY — kick off the tagger as a background child process.
+// Polls /settings to see progress (library.total grows; tagger.running flips).
+// ---------------------------------------------------------------------------
+app.post('/tag-library', (req, res) => {
+  if (tagger.running) return res.status(409).json({ error: 'tagger already running', tagger });
+  const limit = parseInt(req.body?.limit, 10);
+  const args = ['src/tag-library.js'];
+  if (Number.isFinite(limit) && limit > 0) args.push('--limit', String(limit));
+
+  const child = spawn('node', args, { cwd: '/app', detached: false });
+  tagger.running = true;
+  tagger.startedAt = new Date().toISOString();
+  tagger.pid = child.pid;
+  tagger.lastLog = [];
+
+  const capture = (chunk) => {
+    const lines = chunk.toString().split('\n').filter(l => l.trim());
+    tagger.lastLog.push(...lines);
+    if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
+  };
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
+  child.on('exit', (code) => {
+    tagger.running = false;
+    tagger.lastLog.push(`[exit ${code}]`);
+    queue.log('scheduler', `tagger finished (exit ${code})`);
+  });
+  queue.log('scheduler', `tagger started${Number.isFinite(limit) ? ` (limit=${limit})` : ''}`);
+  res.json({ ok: true, tagger });
+});
+
+// ---------------------------------------------------------------------------
 // GET /debug — everything-at-a-glance for the debug UI
 // ---------------------------------------------------------------------------
 app.get('/debug', async (req, res) => {
@@ -262,4 +351,6 @@ app.listen(config.server.port, () => {
   console.log(`SUB/WAVE controller on :${config.server.port}`);
   queue.startWatcher();
   startScheduler();
+  // Auto-generate the default station ident on first boot (idempotent)
+  jingles.ensureDefaultIdent().catch(err => console.error('[jingles] ident generation failed:', err.message));
 });

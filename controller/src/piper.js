@@ -9,11 +9,16 @@ import { config } from './config.js';
 
 await mkdir(config.piper.outDir, { recursive: true });
 
-export async function speak(text) {
+export async function speak(text, { outPath: customPath } = {}) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
 
   const id = crypto.randomBytes(6).toString('hex');
-  const outPath = path.join(config.piper.outDir, `${id}.wav`);
+  const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
+
+  // Make sure the parent dir exists (custom paths might be in a new folder)
+  if (customPath) {
+    await mkdir(path.dirname(customPath), { recursive: true });
+  }
 
   return new Promise((resolve, reject) => {
     const piper = spawn(config.piper.binary, [

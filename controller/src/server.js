@@ -2,6 +2,7 @@
 // The Next.js web UI hits this for: now-playing, queue state, request submission.
 
 import express from 'express';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
 import * as ollama from './ollama.js';
@@ -118,13 +119,7 @@ app.post('/request', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /skip — manual skip (for the host, not listeners)
-// ---------------------------------------------------------------------------
-app.post('/skip', async (req, res) => {
-  await queue.serveNext();
-  res.json({ success: true });
-});
+// (manual skip is not implemented in this build — Liquidsoap controls pacing)
 
 // ---------------------------------------------------------------------------
 // GET /health
@@ -132,9 +127,113 @@ app.post('/skip', async (req, res) => {
 app.get('/health', (req, res) => res.json({ status: 'on-air' }));
 
 // ---------------------------------------------------------------------------
+// GET /debug — everything-at-a-glance for the debug UI
+// ---------------------------------------------------------------------------
+app.get('/debug', async (req, res) => {
+  const out = { t: new Date().toISOString() };
+
+  // 1. now-playing.json (what Liquidsoap last wrote)
+  try {
+    out.nowPlaying = JSON.parse(await readFile(config.liquidsoap.nowPlayingFile, 'utf8'));
+  } catch (err) {
+    out.nowPlaying = { error: err.message };
+  }
+
+  // 2. Queue snapshot (current + upcoming + history + djLog)
+  out.queue = {
+    current: queue.current ? {
+      title: queue.current.track.title,
+      artist: queue.current.track.artist,
+      album: queue.current.track.album,
+      requestedBy: queue.current.requestedBy,
+      introScript: queue.current.introScript,
+    } : null,
+    upcoming: queue.upcoming.map(i => ({ title: i.track.title, artist: i.track.artist, requestedBy: i.requestedBy })),
+    historyCount: queue.history.length,
+    djLogCount: queue.djLog.length,
+    djLog: queue.djLog.slice(0, 30),
+  };
+
+  // 3. Icecast status
+  try {
+    const r = await fetch('http://icecast:8000/status-json.xsl');
+    const ic = (await r.json()).icestats;
+    const src = Array.isArray(ic.source) ? ic.source[0] : ic.source;
+    out.icecast = src ? {
+      title: src.title,
+      bitrate: src.bitrate,
+      listeners: src.listeners,
+      listener_peak: src.listener_peak,
+      mount: src.listenurl,
+      stream_start: src.stream_start_iso8601,
+      server_start: ic.server_start_iso8601,
+    } : { error: 'no source connected' };
+  } catch (err) {
+    out.icecast = { error: err.message };
+  }
+
+  // 4. Liquidsoap log tail
+  try {
+    const log = await readFile('/var/log/liquidsoap/radio.log', 'utf8');
+    out.liquidsoapLog = log.split('\n').slice(-100).join('\n');
+  } catch (err) {
+    out.liquidsoapLog = `error: ${err.message}`;
+  }
+
+  // 5. State dir listing
+  try {
+    const dir = '/var/sub-wave';
+    const entries = await readdir(dir);
+    out.stateFiles = await Promise.all(entries.map(async (name) => {
+      try {
+        const s = await stat(`${dir}/${name}`);
+        return { name, size: s.size, mtime: s.mtime.toISOString(), isDir: s.isDirectory() };
+      } catch { return { name, error: true }; }
+    }));
+    const voiceDir = `${dir}/voice`;
+    try {
+      const v = await readdir(voiceDir);
+      out.voiceFiles = await Promise.all(v.map(async (name) => {
+        const s = await stat(`${voiceDir}/${name}`);
+        return { name, size: s.size, mtime: s.mtime.toISOString() };
+      }));
+    } catch {}
+  } catch (err) {
+    out.stateFiles = { error: err.message };
+  }
+
+  // 6. Recent Ollama calls
+  out.ollama = {
+    url: config.ollama.url,
+    model: config.ollama.model,
+    recentCalls: ollama.recentCalls,
+  };
+
+  // 7. Context snapshot
+  try {
+    out.context = await getFullContext();
+  } catch (err) {
+    out.context = { error: err.message };
+  }
+
+  // 8. Config (redacted)
+  out.config = {
+    navidromeUrl: config.navidrome.url,
+    navidromeUser: config.navidrome.user,
+    ollamaUrl: config.ollama.url,
+    ollamaModel: config.ollama.model,
+    location: config.weather.locationName,
+    port: config.server.port,
+  };
+
+  res.json(out);
+});
+
+// ---------------------------------------------------------------------------
 // START
 // ---------------------------------------------------------------------------
 app.listen(config.server.port, () => {
   console.log(`SUB/WAVE controller on :${config.server.port}`);
+  queue.startWatcher();
   startScheduler();
 });

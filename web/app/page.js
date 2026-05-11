@@ -7,8 +7,12 @@ import RequestLine from '../components/RequestLine';
 import BoothFeed from '../components/BoothFeed';
 import Clock from '../components/Clock';
 
-const STREAM_URL = process.env.NEXT_PUBLIC_STREAM_URL || 'http://ronin.tail.ts.net:8000/stream.mp3';
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://ronin.tail.ts.net:4000';
+// Defaults are same-origin paths — the production deployment puts Caddy in
+// front and routes /stream.mp3 → icecast and /api/* → controller. In dev,
+// override via web/.env.local (see .env.example) to point at the boxes
+// directly.
+const STREAM_URL = process.env.NEXT_PUBLIC_STREAM_URL || '/stream.mp3';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 export default function ListenerPage() {
   const [tunedIn, setTunedIn] = useState(false);

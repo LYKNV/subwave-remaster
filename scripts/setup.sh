@@ -2,10 +2,10 @@
 # One-time setup — creates state dirs, downloads emergency audio, etc.
 set -euo pipefail
 
-STATE_DIR="${STATE_DIR:-/var/sub-wave}"
+STATE_DIR="${STATE_DIR:-/var/lib/subwave}"
 
 echo "Creating state dir: $STATE_DIR"
-sudo mkdir -p "$STATE_DIR"/{voice,archive,jingles}
+sudo mkdir -p "$STATE_DIR"/{voice,archive,jingles,logs}
 sudo chmod -R 777 "$STATE_DIR"
 
 # Touch the files Liquidsoap and the controller share
@@ -19,4 +19,6 @@ if [[ ! -f "$STATE_DIR/emergency.mp3" ]] && command -v ffmpeg &>/dev/null; then
     -codec:a libmp3lame -b:a 128k "$STATE_DIR/emergency.mp3" -y
 fi
 
-echo "Done. Now: cd docker && docker compose up -d"
+echo "Done."
+echo "  Dev:   cd docker && docker compose up -d"
+echo "  Prod:  docker compose -f docker/docker-compose.prod.yml up -d"

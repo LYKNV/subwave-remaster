@@ -9,24 +9,20 @@ SUB/WAVE is a personal internet radio station: one Icecast stream, all listeners
 ## Common commands
 
 ```bash
-# Boot the radio (Icecast + Liquidsoap + Controller)
-cd docker && docker compose up -d
-docker compose logs -f controller        # or liquidsoap / icecast
-
-# Controller dev loop (Node.js, ESM, --watch)
+# --- dev (Mac smoke test) ---
+cd docker && docker compose up -d        # Icecast + Liquidsoap + Controller only
+cd web && npm install && npm run dev     # web UI on :3000, separate process
 cd controller && npm install && npm run dev
 
-# Web UI dev (Next.js 15 + React 19)
-cd web && npm install && npm run dev     # :3000
+# --- production (single-host, Caddy edge) ---
+sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh
+docker compose -f docker/docker-compose.prod.yml up -d
+./scripts/generate-jingles.sh            # render Piper station idents
+./scripts/update.sh                      # git pull + rebuild + rolling recreate
 
-# Web build / prod
-cd web && npm run build && npm start
-
-# One-time host setup: creates /var/sub-wave dirs and emergency.mp3
-./scripts/setup.sh
-
-# Manual skip (for the host, not exposed in the UI)
-curl -X POST http://localhost:4000/skip
+# Common one-offs
+docker compose -f docker/docker-compose.prod.yml logs -f controller
+curl -X POST http://localhost/api/skip   # manual skip via Caddy
 ```
 
 No test runner, linter, or formatter is configured.
@@ -67,9 +63,28 @@ Pipeline: `dj_queue` (controller-fed) **fallback→** `auto_playlist` → `cross
 
 Next.js 15 App Router. `app/page.js` is the only page; components in `web/components/`. Tailwind. Polls the controller every 5s. Stream URL and API base are public env (`NEXT_PUBLIC_STREAM_URL`, `NEXT_PUBLIC_API_URL`) — both must point at a host reachable from listener browsers (Tailscale hostnames by default).
 
-### Docker layout (`docker/docker-compose.yml`)
+### Docker layout
 
-This file is labelled "Mac local smoke-test variant" — it runs Icecast + Liquidsoap + Controller in containers, expects Ollama on the **host** (`host.docker.internal`), and Navidrome remote (Tailscale). The web UI is **not** in compose — run it separately. Shared volume mapping: repo `state/` → `/var/sub-wave` in both Liquidsoap and Controller containers; this is what makes the file-based IPC work.
+Two compose files, two deployment shapes:
+
+- **`docker/docker-compose.yml`** — "Mac local smoke-test variant". Icecast + Liquidsoap + Controller only. Web UI runs separately via `npm run dev`. State is `../state` (repo-local bind mount). Used for local development.
+- **`docker/docker-compose.prod.yml`** — production single-host deploy. Adds `web` (built from `web/Dockerfile`, Next.js standalone output) and `caddy` (edge router). **Only Caddy binds a host port (`:80`)** — Icecast, Controller, Liquidsoap, and Web are internal-only and reachable via the proxy. State path is `${STATE_DIR:-/var/lib/subwave}`. Cloudflare is expected to terminate TLS in front; Caddy has `auto_https off`.
+
+The shared `/var/sub-wave` mount in **both** the Liquidsoap and Controller containers is what makes the file-based IPC work — they must always be mounted to the same host path.
+
+### Caddy routing (`docker/Caddyfile`)
+
+One origin, three backends:
+
+- `/stream.mp3` → `icecast:8000` with `flush_interval -1` so the audio stream isn't buffered.
+- `/api/*` → `controller:4000`, prefix stripped via `handle_path` so the controller keeps its existing routes (`/now-playing`, `/state`, `/request`, `/skip`, `/health`).
+- everything else → `web:3000`.
+
+The web app uses same-origin defaults (`/api`, `/stream.mp3`) in `web/app/page.js`, so the production image needs no `NEXT_PUBLIC_*` env vars. For dev (separate ports), override via `web/.env.local`.
+
+### Jingles
+
+`state/jingles.m3u` is empty by default. Run `scripts/generate-jingles.sh` after the stack is up — it `docker compose exec`s into the controller container and pipes text through Piper, writing WAVs into `${STATE_DIR}/jingles/` and rewriting the M3U. Liquidsoap's jingles `playlist(...)` uses `reload_mode="watch"`, so new renders are picked up without a restart.
 
 ## Working on this codebase
 

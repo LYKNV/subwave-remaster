@@ -1,0 +1,105 @@
+# SUB/WAVE — production orchestration.
+# Only Caddy is exposed on the host (:80). Cloudflare terminates TLS in front.
+# Icecast, Liquidsoap, Controller, and Web are all internal-only and reachable
+# via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
+#
+# State persists at ${STATE_DIR:-/var/lib/subwave} on the host so container
+# rebuilds, repo cleans, and `docker compose down -v` cannot wipe it.
+
+x-state: &state-mount
+  type: bind
+  source: ${STATE_DIR:-/var/lib/subwave}
+  target: /var/sub-wave
+
+services:
+  # -------------------------------------------------------------------------
+  # CADDY — public edge, the only service bound to a host port
+  # -------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: sub-wave-caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+      - controller
+      - icecast
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # -------------------------------------------------------------------------
+  # ICECAST — broadcast endpoint (internal only)
+  # -------------------------------------------------------------------------
+  icecast:
+    image: moul/icecast:latest
+    container_name: sub-wave-icecast
+    restart: unless-stopped
+    environment:
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?must be set}
+      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:?must be set}
+      - ICECAST_PASSWORD=${ICECAST_RELAY_PASSWORD:?must be set}
+      - ICECAST_HOSTNAME=localhost
+    volumes:
+      - ./icecast.xml:/etc/icecast2/icecast.xml:ro
+
+  # -------------------------------------------------------------------------
+  # LIQUIDSOAP — mixer, pulls from queue file, broadcasts to Icecast
+  # -------------------------------------------------------------------------
+  liquidsoap:
+    image: savonet/liquidsoap:v2.2.5
+    platform: linux/amd64
+    container_name: sub-wave-liquidsoap
+    restart: unless-stopped
+    depends_on:
+      - icecast
+    environment:
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?must be set}
+    volumes:
+      - ../liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
+      - *state-mount
+      - type: bind
+        source: ${STATE_DIR:-/var/lib/subwave}/logs
+        target: /var/log/liquidsoap
+    command: liquidsoap /etc/liquidsoap/radio.liq
+
+  # -------------------------------------------------------------------------
+  # CONTROLLER — AI DJ brain
+  # -------------------------------------------------------------------------
+  controller:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.controller
+    platform: linux/amd64
+    container_name: sub-wave-controller
+    restart: unless-stopped
+    depends_on:
+      - liquidsoap
+    env_file:
+      - ../controller/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - *state-mount
+
+  # -------------------------------------------------------------------------
+  # WEB — Next.js listener UI
+  # -------------------------------------------------------------------------
+  web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    container_name: sub-wave-web
+    restart: unless-stopped
+    depends_on:
+      - controller
+    environment:
+      - NODE_ENV=production
+    # Same-origin is the default baked into the image — Caddy routes /api/*
+    # and /stream.mp3 to the right backend, so nothing extra needs setting.
+
+volumes:
+  caddy-data:
+  caddy-config:

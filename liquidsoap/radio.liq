@@ -93,6 +93,7 @@ radio =
 jingles = playlist(
   id="jingles",
   mode="randomize",
+  reload_mode="watch",
   "/var/sub-wave/jingles.m3u"
 )
 

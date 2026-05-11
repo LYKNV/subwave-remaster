@@ -127,7 +127,7 @@ export async function generateWeatherSegment(weather, time) {
       { role: 'system', content: DJ_SYSTEM },
       { role: 'user', content: prompt },
     ],
-    { temperature: 0.85 }
+    { temperature: 0.85, kind: 'generateWeatherSegment' }
   );
 }
 
@@ -138,7 +138,7 @@ export async function generateStationId() {
       { role: 'system', content: DJ_SYSTEM },
       { role: 'user', content: prompt },
     ],
-    { temperature: 0.9 }
+    { temperature: 0.9, kind: 'generateStationId' }
   );
 }
 
@@ -149,6 +149,6 @@ export async function generateHourlyTime(time, weather) {
       { role: 'system', content: DJ_SYSTEM },
       { role: 'user', content: prompt },
     ],
-    { temperature: 0.85 }
+    { temperature: 0.85, kind: 'generateHourlyTime' }
   );
 }

@@ -6,6 +6,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
 import * as ollama from './ollama.js';
+import * as library from './library.js';
 import { getFullContext } from './context.js';
 import { queue } from './queue.js';
 import { startScheduler } from './scheduler.js';
@@ -122,6 +123,16 @@ app.post('/request', async (req, res) => {
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 
 // ---------------------------------------------------------------------------
+// POST /auto-pick — toggle whether the LLM picks the next track
+// Body: { "on": true | false }
+// ---------------------------------------------------------------------------
+app.post('/auto-pick', express.json(), (req, res) => {
+  if (typeof req.body?.on === 'boolean') queue.autoPick = req.body.on;
+  queue.log('scheduler', `auto-pick ${queue.autoPick ? 'enabled' : 'disabled'}`);
+  res.json({ autoPick: queue.autoPick });
+});
+
+// ---------------------------------------------------------------------------
 // GET /health
 // ---------------------------------------------------------------------------
 app.get('/health', (req, res) => res.json({ status: 'on-air' }));
@@ -146,12 +157,19 @@ app.get('/debug', async (req, res) => {
       artist: queue.current.track.artist,
       album: queue.current.track.album,
       requestedBy: queue.current.requestedBy,
+      source: queue.current.source,
+      intent: queue.current.intent,
       introScript: queue.current.introScript,
     } : null,
-    upcoming: queue.upcoming.map(i => ({ title: i.track.title, artist: i.track.artist, requestedBy: i.requestedBy })),
+    upcoming: queue.upcoming.map(i => ({
+      title: i.track.title, artist: i.track.artist,
+      requestedBy: i.requestedBy, aiPicked: i.aiPicked,
+    })),
     historyCount: queue.history.length,
     djLogCount: queue.djLog.length,
     djLog: queue.djLog.slice(0, 30),
+    autoPick: queue.autoPick,
+    pickerBusy: queue.pickerBusy,
   };
 
   // 3. Icecast status
@@ -208,6 +226,14 @@ app.get('/debug', async (req, res) => {
     model: config.ollama.model,
     recentCalls: ollama.recentCalls,
   };
+
+  // 6b. Library tagging stats
+  try {
+    await library.load();
+    out.library = library.stats();
+  } catch (err) {
+    out.library = { error: err.message };
+  }
 
   // 7. Context snapshot
   try {

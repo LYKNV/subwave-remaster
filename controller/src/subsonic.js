@@ -67,6 +67,36 @@ export async function getStarred() {
   return r.starred2?.song || [];
 }
 
+export async function getAlbumList(offset = 0, size = 500) {
+  const r = await call('getAlbumList2', { type: 'alphabeticalByName', size, offset });
+  return r.albumList2?.album || [];
+}
+
+export async function getAlbum(id) {
+  const r = await call('getAlbum', { id });
+  return r.album?.song || [];
+}
+
+// Async iterator over every song in the library. Walks albums in batches.
+export async function* iterateAllSongs() {
+  let offset = 0;
+  const BATCH = 500;
+  while (true) {
+    const albums = await getAlbumList(offset, BATCH);
+    if (albums.length === 0) break;
+    for (const album of albums) {
+      try {
+        const songs = await getAlbum(album.id);
+        for (const s of songs) yield s;
+      } catch (err) {
+        console.error(`[subsonic] getAlbum(${album.id}) failed: ${err.message}`);
+      }
+    }
+    if (albums.length < BATCH) break;
+    offset += albums.length;
+  }
+}
+
 export async function getPlaylists() {
   const r = await call('getPlaylists');
   return r.playlists?.playlist || [];
@@ -106,6 +136,7 @@ export function getAnnotatedUri(song) {
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
     `album="${escAnnotate(song.album)}"`,
+    `subsonic_id="${escAnnotate(song.id)}"`,
   ];
   if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
   if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);

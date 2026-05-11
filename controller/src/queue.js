@@ -6,6 +6,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
 import { speak } from './piper.js';
+import { pickAndEnqueue } from './picker.js';
 
 class Queue {
   constructor() {
@@ -15,6 +16,8 @@ class Queue {
     this.djLog = [];           // controller-level events for the web UI
     this.lastSeenKey = null;   // for change detection in the watcher
     this.senderBusy = false;   // drain-to-Liquidsoap mutex
+    this.pickerBusy = false;   // prevent concurrent LLM picks
+    this.autoPick = true;      // toggle: should we ask Ollama for next track when idle
   }
 
   log(kind, message, meta = {}) {
@@ -104,18 +107,44 @@ class Queue {
 
     if (idx >= 0) {
       const item = this.upcoming.splice(idx, 1)[0];
-      this.current = { ...item, startedAt: new Date().toISOString(), source: 'request' };
-      this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source: 'request' });
+      const source = item.aiPicked ? 'ai' : 'request';
+      this.current = { ...item, startedAt: new Date().toISOString(), source };
+      this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
     } else {
       // Not a tracked request → auto-playlist or jingle
       this.current = {
-        track: { title: np.title, artist: np.artist, album: np.album },
+        track: {
+          id: np.subsonic_id || null,
+          title: np.title,
+          artist: np.artist,
+          album: np.album,
+        },
         requestedBy: null,
         startedAt: new Date().toISOString(),
         source: 'auto',
       };
       this.log('playing', `${np.title} — ${np.artist}`, { source: 'auto' });
     }
+
+    // Auto-DJ: if nothing is queued, ask the LLM to pick the next track.
+    // Fire-and-forget — by the time the current track ends, the pick should
+    // already be in Liquidsoap's dj_queue, so there's no gap.
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
+      this.pickerBusy = true;
+      pickAndEnqueue(this)
+        .catch(err => this.log('error', `picker failed: ${err.message}`))
+        .finally(() => { this.pickerBusy = false; });
+    }
+  }
+
+  // IDs of tracks played in the last N entries — used by scheduler to avoid repeats
+  recentlyPlayedIds(n = 25) {
+    const ids = [];
+    if (this.current?.track?.id) ids.push(this.current.track.id);
+    for (const h of this.history.slice(0, n)) {
+      if (h.track?.id) ids.push(h.track.id);
+    }
+    return new Set(ids);
   }
 
   // Poll now-playing.json every 1.5s and dispatch track changes

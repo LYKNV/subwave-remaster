@@ -167,6 +167,43 @@ export default function DebugPage() {
               <Files files={data.voiceFiles} />
             </Panel>
 
+            {/* LIBRARY TAGS */}
+            <Panel title={`Library tags · ${data.library?.total ?? 0} tracks`} fullWidth>
+              {!data.library?.total ? (
+                <Empty>not tagged yet — run <code className="text-amber-300">docker exec sub-wave-controller npm run tag</code></Empty>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-amber-500/50">
+                    last updated: {data.library.updatedAt ? new Date(data.library.updatedAt).toLocaleString('en-GB') : '?'}
+                  </div>
+                  <div>
+                    <div className="text-[10px] tracking-widest text-amber-500/60 uppercase mb-1">by mood</div>
+                    <div className="flex flex-wrap gap-1">
+                      {Object.entries(data.library.byMood || {})
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([m, n]) => (
+                          <span key={m} className="border border-amber-900/40 px-2 py-0.5 bg-stone-900/50">
+                            <span className="text-amber-100">{m}</span>{' '}
+                            <span className="text-amber-500/60 tabular-nums">{n}</span>
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] tracking-widest text-amber-500/60 uppercase mb-1">by energy</div>
+                    <div className="flex flex-wrap gap-1">
+                      {Object.entries(data.library.byEnergy || {}).map(([e, n]) => (
+                        <span key={e} className="border border-amber-900/40 px-2 py-0.5 bg-stone-900/50">
+                          <span className="text-amber-100">{e}</span>{' '}
+                          <span className="text-amber-500/60 tabular-nums">{n}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Panel>
+
             {/* CONFIG */}
             <Panel title="Config (redacted)" fullWidth>
               <KV obj={data.config} />

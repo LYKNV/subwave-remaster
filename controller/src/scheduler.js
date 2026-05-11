@@ -9,9 +9,18 @@ import { writeFile } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
 import * as ollama from './ollama.js';
+import * as library from './library.js';
 import { getFullContext } from './context.js';
 import { queue } from './queue.js';
 import { cleanupOldVoices } from './piper.js';
+
+const TARGET_POOL = 30;
+const MOOD_WEIGHT = 15;       // up to this many mood-tagged tracks per pool
+const STARRED_WEIGHT = 8;     // up to this many starred tracks per pool
+
+function shuffle(arr) {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
 
 // ---------------------------------------------------------------------------
 // AUTO-PLAYLIST REFRESH
@@ -20,39 +29,61 @@ import { cleanupOldVoices } from './piper.js';
 
 async function refreshAutoPlaylist() {
   const ctx = await getFullContext();
-  queue.log('scheduler', `Refreshing auto-playlist for mood: ${ctx.dominantMood}`);
+  const mood = ctx.dominantMood;
+  const recent = queue.recentlyPlayedIds(25);
 
-  // Pull tracks tagged with this mood, falling back to random if library
-  // doesn't have enough mood-tagged tracks.
-  let tracks = [];
+  const pool = [];
+  const fromSource = { mood: 0, starred: 0, random: 0 };
 
-  // Try mood-as-genre first (some libraries tag this way)
+  // 1. Mood-tagged tracks from the LLM-built library (only if tagger has run)
+  await library.load();
+  if (mood) {
+    const moodHits = shuffle(library.songsByMood(mood)).filter(t => !recent.has(t.id));
+    for (const t of moodHits.slice(0, MOOD_WEIGHT)) {
+      pool.push({ ...t, _source: 'mood' });
+      fromSource.mood++;
+    }
+  }
+
+  // 2. Starred tracks — leverages what you've curated by hand
   try {
-    if (ctx.dominantMood) {
-      tracks = await subsonic.getSongsByGenre(ctx.dominantMood, { count: 30 });
+    const starred = shuffle(await subsonic.getStarred()).filter(s => !recent.has(s.id));
+    for (const s of starred.slice(0, STARRED_WEIGHT)) {
+      pool.push({ ...s, _source: 'starred' });
+      fromSource.starred++;
     }
   } catch (err) {
-    queue.log('error', `Genre fetch failed: ${err.message}`);
+    queue.log('error', `Starred fetch failed: ${err.message}`);
   }
 
-  // Top up with random
-  if (tracks.length < 20) {
-    const random = await subsonic.getRandomSongs({ size: 30 });
-    tracks = [...tracks, ...random];
+  // 3. Top up to TARGET_POOL with random
+  if (pool.length < TARGET_POOL) {
+    try {
+      const random = (await subsonic.getRandomSongs({ size: TARGET_POOL })).filter(s => !recent.has(s.id));
+      for (const s of random) {
+        if (pool.length >= TARGET_POOL) break;
+        if (pool.find(p => p.id === s.id)) continue;
+        pool.push({ ...s, _source: 'random' });
+        fromSource.random++;
+      }
+    } catch (err) {
+      queue.log('error', `Random fetch failed: ${err.message}`);
+    }
   }
 
-  // De-dup
+  // De-dup just in case
   const seen = new Set();
-  const unique = tracks.filter(t => {
-    if (seen.has(t.id)) return false;
+  const unique = pool.filter(t => {
+    if (!t.id || seen.has(t.id)) return false;
     seen.add(t.id);
     return true;
   });
 
-  // Write M3U — annotate URIs so Liquidsoap sees real metadata up front
   const lines = ['#EXTM3U', ...unique.map(t => subsonic.getAnnotatedUri(t))];
   await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
-  queue.log('scheduler', `Auto-playlist refreshed: ${unique.length} tracks`);
+  queue.log('scheduler',
+    `Auto-playlist refreshed: ${unique.length} tracks ` +
+    `(mood=${fromSource.mood} starred=${fromSource.starred} random=${fromSource.random}, mood=${mood || 'none'})`);
 }
 
 // ---------------------------------------------------------------------------

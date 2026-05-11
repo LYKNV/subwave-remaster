@@ -142,6 +142,52 @@ export async function generateStationId() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// LLM PICKER — choose the next track from a candidate pool
+// ---------------------------------------------------------------------------
+
+const PICKER_SYSTEM = `You are the DJ for SUB/WAVE, a personal internet radio station.
+Pick the single best NEXT track to play, given recent plays, current context, and a candidate pool.
+
+Selection criteria, in order:
+1. FLOW — does it transition naturally from what just played (energy, mood, tempo)?
+2. CONTEXT — does it fit the time of day, weather, and dominant mood?
+3. VARIETY — avoid same artist back-to-back; rotate energy levels; don't be predictable.
+4. INTEREST — prefer something that creates a moment, not the most generic option.
+
+You MUST pick from the candidates only. Output JSON only:
+{ "id": "<exact id from candidates>", "reason": "<one short sentence why this one>" }`;
+
+export async function pickNextTrack({ candidates, recentPlays, context }) {
+  const user = JSON.stringify({
+    now: {
+      time: context.time?.period,
+      vibe: context.time?.vibe,
+      mood: context.dominantMood,
+      weather: context.weather?.condition,
+      festival: context.festival?.name,
+    },
+    recentPlays,
+    candidates,
+  }, null, 2);
+
+  const text = await ollamaChat(
+    [
+      { role: 'system', content: PICKER_SYSTEM },
+      { role: 'user', content: user },
+    ],
+    { format: 'json', temperature: 0.5, kind: 'pickNextTrack' }
+  );
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+    throw new Error(`picker response not JSON: ${text.slice(0, 200)}`);
+  }
+}
+
 export async function generateHourlyTime(time, weather) {
   const prompt = `It's the top of the hour. Time is ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })} in ${weather.location}. ${weather.condition}, ${weather.temp}°C. Brief time check, in character. 1 sentence.`;
   return ollamaChat(

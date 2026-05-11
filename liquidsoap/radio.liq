@@ -125,10 +125,11 @@ def on_meta(m) =
   artist = m["artist"]
   album = m["album"]
   filename = m["filename"]
+  subsonic_id = m["subsonic_id"]
   if title != "" or artist != "" then
-    log("on_meta: title=#{title} | artist=#{artist} | album=#{album}")
+    log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
-    json = '{"title":"#{title}","artist":"#{artist}","album":"#{album}","filename":"#{filename}","timestamp":#{ts}}'
+    json = '{"title":"#{title}","artist":"#{artist}","album":"#{album}","subsonic_id":"#{subsonic_id}","filename":"#{filename}","timestamp":#{ts}}'
     file.write(data=json, "/var/sub-wave/now-playing.json")
   end
 end

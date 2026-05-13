@@ -16,8 +16,12 @@ import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import { useStationFeed } from '../hooks/useStationFeed';
 import { usePlayer } from '../hooks/usePlayer';
+import { relTime } from '../lib/format';
+import { getStoredTheme, setTheme as persistTheme } from '../lib/theme';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+
+const VOICE_KINDS = new Set(['dj-speak', 'station-id', 'link', 'hourly-check', 'weather']);
 
 const DRAWER_TITLES = {
   queue: 'Up next',
@@ -41,6 +45,7 @@ export default function PlayerApp({ contained = false }) {
   const [drawer, setDrawer] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tickerOn, setTickerOn] = useState(true);
+  const [theme, setTheme] = useState('light');
 
   // Hydrate ticker preference from localStorage (avoids SSR hydration mismatch).
   useEffect(() => {
@@ -49,10 +54,24 @@ export default function PlayerApp({ contained = false }) {
       if (v != null) setTickerOn(v === '1');
     } catch {}
   }, []);
-  const toggleTicker = () => {
-    setTickerOn(v => {
-      const next = !v;
-      try { localStorage.setItem('subwave:ticker', next ? '1' : '0'); } catch {}
+
+  // Resolve the *applied* theme for the toggle icon. If the user has never
+  // chosen manually, `getStoredTheme()` returns 'system' and we fall through
+  // to prefers-color-scheme. Persisting via setTheme() commits to a manual
+  // mode (writes to localStorage + sets <html data-theme>).
+  useEffect(() => {
+    const stored = getStoredTheme();
+    if (stored === 'light' || stored === 'dark') {
+      setTheme(stored);
+      return;
+    }
+    const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+    setTheme(prefersDark ? 'dark' : 'light');
+  }, []);
+  const toggleTheme = () => {
+    setTheme(t => {
+      const next = t === 'dark' ? 'light' : 'dark';
+      persistTheme(next);
       return next;
     });
   };
@@ -91,8 +110,8 @@ export default function PlayerApp({ contained = false }) {
         djName={dj?.name}
         listeners={listeners}
         onOpenSettings={() => setSettingsOpen(true)}
-        tickerOn={tickerOn}
-        onToggleTicker={toggleTicker}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       <CenterStage nowPlaying={nowPlaying} elapsed={elapsed} />
@@ -102,8 +121,11 @@ export default function PlayerApp({ contained = false }) {
       <DotRail
         counts={{
           queue: state.upcoming?.length ?? 0,
-          history: state.history?.length ?? 0,
-          booth: state.djLog?.length ?? 0,
+          history: elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m`,
+          booth: (() => {
+            const lastVoice = state.djLog?.find(e => VOICE_KINDS.has(e.kind));
+            return lastVoice ? relTime(lastVoice.t) : '—';
+          })(),
         }}
         active={drawer}
         onSelect={setDrawer}

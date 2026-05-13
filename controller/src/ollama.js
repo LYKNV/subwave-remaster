@@ -151,7 +151,15 @@ export async function matchRequest(userQuery, { listenerName = null, nowPlaying 
 // DJ SCRIPTS — creative spoken segments
 // ---------------------------------------------------------------------------
 
-export async function generateIntro({ track, context, requestedBy = null }) {
+// Append a recent-on-air recap to the user prompt so the DJ stops repeating
+// phrasing across consecutive segments. The recap text is built by
+// queue.getDjRecap() — passing null is a no-op.
+function withRecap(prompt, recap) {
+  if (!recap) return prompt;
+  return `${prompt}\n\nYou said these things on-air recently (do not repeat phrasing or topics):\n${recap}`;
+}
+
+export async function generateIntro({ track, context, requestedBy = null, recap = null }) {
   const ctxLines = [];
   if (context.time) ctxLines.push(`Time: ${context.time.period} (${context.time.vibe})`);
   if (context.weather) ctxLines.push(`Weather in ${context.weather.location}: ${context.weather.condition}, ${context.weather.temp}°C`);
@@ -164,30 +172,30 @@ export async function generateIntro({ track, context, requestedBy = null }) {
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: prompt },
+      { role: 'user', content: withRecap(prompt, recap) },
     ],
     { temperature: 0.85, kind: 'generateIntro' }
   );
 }
 
-export async function generateWeatherSegment(weather, time) {
+export async function generateWeatherSegment(weather, time, { recap = null } = {}) {
   const prompt = `It's ${time.period} in ${weather.location}. Conditions: ${weather.condition}, ${weather.temp}°C. Write a brief weather check, in character. 1-2 sentences.`;
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: prompt },
+      { role: 'user', content: withRecap(prompt, recap) },
     ],
     { temperature: 0.85, kind: 'generateWeatherSegment' }
   );
 }
 
-export async function generateStationId() {
+export async function generateStationId({ recap = null } = {}) {
   const djName = settings.get().dj?.name || 'your host';
   const prompt = `Write a 1-sentence station ident. Format: "You're listening to SUB/WAVE with ${djName}..." or similar. Be brief and a little understated.`;
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: prompt },
+      { role: 'user', content: withRecap(prompt, recap) },
     ],
     { temperature: 0.9, kind: 'generateStationId' }
   );
@@ -239,7 +247,7 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   }
 }
 
-export async function generateLink({ previous, current, context }) {
+export async function generateLink({ previous, current, context, recap = null }) {
   const ctxLines = [];
   if (context?.time) ctxLines.push(`Time: ${context.time.period} (${context.time.vibe})`);
   if (context?.weather) ctxLines.push(`Weather in ${context.weather.location}: ${context.weather.condition}, ${context.weather.temp}°C`);
@@ -252,18 +260,18 @@ export async function generateLink({ previous, current, context }) {
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: prompt },
+      { role: 'user', content: withRecap(prompt, recap) },
     ],
     { temperature: 0.85, kind: 'generateLink' }
   );
 }
 
-export async function generateHourlyTime(time, weather) {
+export async function generateHourlyTime(time, weather, { recap = null } = {}) {
   const prompt = `It's the top of the hour. Time is ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })} in ${weather.location}. ${weather.condition}, ${weather.temp}°C. Brief time check, in character. 1 sentence.`;
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: prompt },
+      { role: 'user', content: withRecap(prompt, recap) },
     ],
     { temperature: 0.85, kind: 'generateHourlyTime' }
   );

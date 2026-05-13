@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { FullDialog } from './ui/dialog';
 import { V3Switch } from './ui/switch';
 import { fmtSize } from '../lib/format';
-import { getStoredTheme, setTheme, THEME_MODES } from '../lib/theme';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -26,21 +25,17 @@ export default function SettingsDialog({ open, onOpenChange, container }) {
   const [form, setForm] = useState(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
-  const [themeMode, setThemeMode] = useState('system');
   // Base64-encoded `user:pass` for Basic auth. Null means we haven't been
   // challenged yet; `needsAuth` flips true when the controller returns 401.
   const [auth, setAuth] = useState(null);
   const [needsAuth, setNeedsAuth] = useState(false);
 
   useEffect(() => {
-    setThemeMode(getStoredTheme());
     try {
       const stored = localStorage.getItem(AUTH_STORAGE_KEY);
       if (stored) setAuth(stored);
     } catch {}
   }, []);
-
-  const pickTheme = (m) => { setTheme(m); setThemeMode(m); };
 
   // Wraps fetch so every admin call carries the Authorization header (when
   // we have credentials) and flips us into the sign-in flow on 401.
@@ -207,18 +202,6 @@ export default function SettingsDialog({ open, onOpenChange, container }) {
 
         {data && !needsAuth && (
           <>
-            <Section title="Appearance">
-              <Row>
-                <div>
-                  <Lead>Theme</Lead>
-                  <Hint>
-                    System follows your OS preference. Manual overrides persist in this browser only.
-                  </Hint>
-                </div>
-                <ThemeSegmented value={themeMode} onChange={pickTheme} />
-              </Row>
-            </Section>
-
             <Section title="Auto-DJ">
               <Row>
                 <div>
@@ -825,36 +808,6 @@ function FrequencySegmented({ value, onChange }) {
             aria-pressed={active}
           >
             {m}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ThemeSegmented({ value, onChange }) {
-  const labels = { system: 'system', light: 'light', dark: 'dark' };
-  return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--ink)' }}>
-      {THEME_MODES.map((m, i) => {
-        const active = value === m;
-        return (
-          <button
-            key={m}
-            type="button"
-            onClick={() => onChange(m)}
-            className="v3-eyebrow v3-focus cursor-pointer"
-            style={{
-              background: active ? 'var(--ink)' : 'transparent',
-              color: active ? 'var(--bg)' : 'var(--ink)',
-              border: 'none',
-              borderLeft: i === 0 ? 'none' : '1px solid var(--ink)',
-              padding: '8px 14px',
-              fontSize: 10,
-            }}
-            aria-pressed={active}
-          >
-            {labels[m]}
           </button>
         );
       })}

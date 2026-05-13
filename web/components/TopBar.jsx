@@ -1,6 +1,6 @@
 'use client';
 
-import { Settings, Radio, Headphones } from 'lucide-react';
+import { Settings, Sun, Moon, Headphones } from 'lucide-react';
 
 // Compact, mood-flavored subtitle for the header: festival > show + vibe + weather.
 // Examples: "late · late hours · 6° clear" · "diwali · festival · 18° clear".
@@ -27,7 +27,7 @@ function buildTagline(context) {
   return parts.length ? parts.join(' · ') : null;
 }
 
-export default function TopBar({ tunedIn, context, djName, listeners, onOpenSettings, tickerOn, onToggleTicker }) {
+export default function TopBar({ tunedIn, context, djName, listeners, onOpenSettings, theme, onToggleTheme }) {
   const tagline = buildTagline(context);
   return (
     <div
@@ -79,15 +79,17 @@ export default function TopBar({ tunedIn, context, djName, listeners, onOpenSett
             {listeners.current}
           </span>
         )}
-        {onToggleTicker && (
+        {onToggleTheme && (
           <button
-            onClick={onToggleTicker}
+            onClick={onToggleTheme}
             className="v3-focus cursor-pointer inline-flex items-center"
-            style={{ color: tickerOn ? 'var(--accent)' : 'var(--muted)' }}
-            aria-label={tickerOn ? 'Hide booth feed ticker' : 'Show booth feed ticker'}
-            title={tickerOn ? 'Hide booth ticker' : 'Show booth ticker'}
+            style={{ color: 'var(--ink)' }}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
           >
-            <Radio className="w-3.5 h-3.5" />
+            {theme === 'dark'
+              ? <Sun className="w-3.5 h-3.5" />
+              : <Moon className="w-3.5 h-3.5" />}
           </button>
         )}
         <button

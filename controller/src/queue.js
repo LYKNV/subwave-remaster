@@ -46,6 +46,33 @@ class Queue {
     console.log(`[${kind}] ${message}`);
   }
 
+  // Compact recap of recent on-air DJ utterances for injection into Ollama
+  // prompts so the DJ stops repeating openers. Returns formatted lines or
+  // null when nothing relevant has aired. Tight defaults by design — keeps
+  // the token cost ~100-150 tokens per call.
+  getDjRecap({ limit = 4, withinMinutes = 30, maxChars = 80 } = {}) {
+    const cutoff = Date.now() - withinMinutes * 60_000;
+    const seenDedupe = new Set();
+    const picked = [];
+    for (const entry of this.djLog) {
+      if (!VOICE_KINDS.has(entry.kind)) continue;
+      if (new Date(entry.t).getTime() < cutoff) break;
+      if (DEDUPE_KINDS.has(entry.kind)) {
+        if (seenDedupe.has(entry.kind)) continue;
+        seenDedupe.add(entry.kind);
+      }
+      picked.push(entry);
+      if (picked.length >= limit) break;
+    }
+    if (picked.length === 0) return null;
+    return picked.map(e => {
+      const ago = formatAgo(Date.now() - new Date(e.t).getTime());
+      const msg = (e.message || '').replace(/\s+/g, ' ').trim();
+      const truncated = msg.length > maxChars ? msg.slice(0, maxChars - 1) + '…' : msg;
+      return `- ${ago} ago [${KIND_LABEL[e.kind] || e.kind}]: "${truncated}"`;
+    }).join('\n');
+  }
+
   // Push a listener request. Adds to upcoming and kicks off the Liquidsoap sender.
   async push({ track, requestedBy = null, intent = null, introScript = null, aiPicked = false }) {
     const item = {
@@ -174,7 +201,7 @@ class Queue {
         (async () => {
           try {
             const ctx = await getFullContext();
-            const script = await ollama.generateLink({ previous, current, context: ctx });
+            const script = await ollama.generateLink({ previous, current, context: ctx, recap: this.getDjRecap() });
             await this.announce(script, 'link');
           } catch (err) {
             this.log('error', `DJ link failed: ${err.message}`);
@@ -248,6 +275,24 @@ class Queue {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'weather']);
+const DEDUPE_KINDS = new Set(['station-id', 'hourly-check', 'weather']);
+const KIND_LABEL = {
+  'dj-speak': 'intro',
+  'link': 'link',
+  'station-id': 'ident',
+  'hourly-check': 'hourly',
+  'weather': 'weather',
+};
+
+function formatAgo(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${Math.max(1, s)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
 
 export const queue = new Queue();

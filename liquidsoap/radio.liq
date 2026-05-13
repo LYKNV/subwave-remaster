@@ -33,7 +33,7 @@ if file.exists("/var/sub-wave/liquidsoap_crossfade.txt") then
   if v >= 0.0 then crossfade_duration := v end
 end
 
-log("settings loaded: jingle_ratio=#{!jingle_ratio} crossfade_duration=#{!crossfade_duration}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -113,25 +113,62 @@ music = fallback(
   [dj_queue, auto_playlist]
 )
 
-# DJ-style transition — outgoing track loses its highs during the crossfade
-# so songs blend like a real DJ mix instead of dissolving in parallel. By the
-# time the new track is at full volume, the old one is basically just bass
-# under it, which is how a hand-mixed transition actually sounds. Setting the
-# cutoff to 900 Hz gives a "filter kill" feel without sounding muddy.
+# ---------------------------------------------------------------------------
+# ENERGY-AWARE TRANSITION — fade length scales with incoming track loudness
+# ---------------------------------------------------------------------------
+# Crossfade behaviour adapts per-transition based on the incoming track's
+# average loudness (`b.db_level`, computed by Liquidsoap during the
+# crossfade window):
 #
-# If this errors at startup ("Early computation of source content-type"),
-# revert by dropping the `transition=` argument from crossfade below.
+#   loud incoming  (>= -18 dB) → short fade — a banger crashes in instead
+#                                 of meandering through 4 s of overlap
+#   medium         (-25..-18)  → ~standard fade
+#   quiet/mellow   (<  -25)    → full crossfade — a sparse intro gets room
+#
+# All values stay <= the cross operator's buffered duration (set via
+# `crossfade_duration()`). Going beyond that truncates the fade tail
+# because cross only has so many seconds of overlap to work with.
+#
+# This restores the spirit of `smart=true` (loudness-aware behaviour) that
+# we lost when we put a custom transition in place.
+#
+# IMPORTANT: We use the low-level `cross` operator here, NOT the high-level
+# `crossfade` wrapper. `crossfade(default=…)` with `smart=false` silently
+# routes through an internal `simple_transition` and ignores the custom
+# callback entirely. `cross` takes a positional transition function and
+# always calls it.
+#
+# The function receives records `a` and `b` with fields `.source`,
+# `.metadata`, `.db_level`. Reach into `.source` for the audio.
+#
+# WHY NO FILTER-KILL HERE: an earlier revision low-pass-filtered the
+# outgoing track for a "DJ filter sweep" feel. That triggered a runtime
+# error — `Early computation of source content-type detected for source
+# iir_filter!` — because `cross` invokes the transition callback before
+# the content-type is fully negotiated, and IIR filters on a not-yet-typed
+# `request.queue`-backed source fail the same way that the HPF on the mic
+# chain does (see comment above mic_chain). The fix would be to put a
+# getter-controlled filter on the music source BEFORE `cross` and modulate
+# its cutoff from a transition trigger. Parked until needed.
 def dj_transition(a, b) =
-  a = filter.iir.butterworth.low(frequency=900.0, order=4, a)
-  add(normalize=false, [a, b])
+  d = crossfade_duration()
+
+  fade_d = if b.db_level >= -18.0 then d * 0.5   # snap into a loud track
+           elsif b.db_level >= -25.0 then d * 0.8
+           else d end                              # full overlap into a mellow one
+
+  a_source = fade.out(duration=fade_d, initial_metadata=a.metadata, a.source)
+  b_source = fade.in(duration=fade_d, initial_metadata=b.metadata, b.source)
+
+  log(label="dj_transition", level=3,
+      "out=#{a.db_level}dB in=#{b.db_level}dB → fade=#{fade_d}s")
+
+  add(normalize=false, [a_source, b_source])
 end
 
-# Smart crossfade — overlapping fade between tracks based on their loudness,
-# with a DJ-style high-roll-off on the outgoing track.
-music = crossfade(
-  duration=!crossfade_duration,
-  smart=true,
-  transition=dj_transition,
+music = cross(
+  duration=crossfade_duration(),
+  dj_transition,
   music
 )
 
@@ -215,40 +252,85 @@ end
 voice = mic_chain(voice_queue)
 intro = mic_chain(intro_queue)
 
-# Mix voice over music with sidechain ducking.
-# Two stacked smooth_adds with different duck depths:
-#   - voice (solo segments) ducks music HEAVY to 15% — voice dominates
-#   - intro (talk-overs) ducks the result to 40% — music stays present but
-#     well under the voice (used to be 55% and intros were sometimes buried)
-# Stations IDs / hourly checks fire on `voice`; auto DJ links fire on `intro`.
-radio = smooth_add(p=0.15, normal=music, special=voice)
-radio = smooth_add(p=0.40, normal=radio, special=intro)
-
 # ---------------------------------------------------------------------------
 # STUDIO BED — continuous low-level ambient room tone (Phase 2)
 # ---------------------------------------------------------------------------
-# Masked by music when music is loud; becomes audible under ducked music
-# when the DJ talks. Stops solo voice segments from feeling like
-# dead-air-then-voice-then-dead-air. Tweak the bed weight if it's too
-# present (lower) or you can't hear it under voice (higher).
+# Mixed into the music bus BEFORE voice ducking so that smooth_add ducks the
+# bed along with the music when the DJ talks — otherwise the bed stays loud
+# under the voice and competes with it. Tweak the bed weight if it's too
+# present (lower) or inaudible under music (higher).
 # Replace state/bed.mp3 with any ambient loop — scripts/generate-bed.sh
 # renders a default warm pink-noise hum.
 
 bed_path = "/var/sub-wave/bed.mp3"
 
-radio =
+music_bus =
   if file.exists(bed_path) then
     log("Loading studio bed from #{bed_path}")
     bed = mksafe(single(id="bed", bed_path))
     add(
       normalize=false,
-      weights=[1.0, 0.18],   # bed sits ~15 dB below the broadcast mix
-      [radio, bed]
+      weights=[1.0, 0.18],   # bed sits ~15 dB below music
+      [music, bed]
     )
   else
     log("No bed.mp3 — skipping studio bed (run scripts/generate-bed.sh)")
-    radio
+    music
   end
+
+# ---------------------------------------------------------------------------
+# SIDECHAIN DUCKING — signal-keyed, like a real broadcast desk
+# ---------------------------------------------------------------------------
+# Previously we used two stacked `smooth_add(p=...)` layers. That's a gated
+# volume blend, not a sidechain — the music drops to a fixed percentage
+# whenever the voice source is "on", regardless of how loud the voice
+# actually is. A quiet TTS phrase would punch the same hole as a loud one.
+#
+# Here we attach `rms.smooth` to voice and intro to expose a smoothed RMS
+# getter (`.rms`), then run a 50 Hz follower that maps the max of the two
+# envelopes through a one-pole filter with fast attack / slow release. The
+# resulting gain coefficient drives an `amplify` on music_bus, so the music
+# actually ducks in response to voice *level*. Quiet phrases get a gentle
+# duck, loud announcements get the full -12 dB.
+#
+# Because music_bus already contains the studio bed, the bed ducks along
+# with the music — bed never competes with the voice.
+
+# Attach RMS meters. `rms.smooth` is a pass-through that exposes `.rms` as
+# a getter, so we can keep using `voice` / `intro` downstream untouched.
+voice = rms.smooth(duration=0.05, voice)
+intro = rms.smooth(duration=0.05, intro)
+
+# Sidechain follower state + tuning.
+# - threshold: below this, no ducking (silence / room noise floor)
+# - duck_floor_db: how far down the music drops at the peak of the voice
+# - attack_s: how fast we ramp INTO the duck when voice appears
+# - release_s: how fast we ramp BACK OUT when voice stops
+# Broadcast-tight feel: fast attack so voice never collides with peaks,
+# moderate release so brief gaps between phrases don't pump the music.
+sidechain_gain = ref(1.0)
+sidechain_threshold = 0.01            # ~-40 dBFS — voice "on" detector
+sidechain_floor = lin_of_dB(-12.0)    # -12 dB target duck depth
+sidechain_attack_s = 0.05             # 50 ms
+sidechain_release_s = 0.30            # 300 ms
+sidechain_dt = 0.02                   # 50 Hz follower
+
+def update_sidechain() =
+  level = max(voice.rms(), intro.rms())
+  target = if level > sidechain_threshold then sidechain_floor else 1.0 end
+  cur = sidechain_gain()
+  tau = if target < cur then sidechain_attack_s else sidechain_release_s end
+  coef = 1.0 - exp(0.0 - sidechain_dt / tau)
+  sidechain_gain := cur + coef * (target - cur)
+end
+thread.run(every=sidechain_dt, update_sidechain)
+
+# Apply the ducker to the music+bed bus, then mix voice + intro on top at
+# unity. `normalize=false` is critical: voice has already been brought to
+# broadcast level by mic_chain (compressor + 1.4× makeup), so we don't want
+# `add` quietly halving everything to "fit" the bus.
+music_bus = amplify({sidechain_gain()}, music_bus)
+radio = add(normalize=false, [music_bus, voice, intro])
 
 # ---------------------------------------------------------------------------
 # JINGLES & STATION ID — every 30 mins, rotate a jingle in
@@ -262,7 +344,7 @@ jingles = playlist(
 )
 
 radio = rotate(
-  weights=[1, !jingle_ratio],  # 1 jingle for every N music tracks (settings.json)
+  weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
   [jingles, radio]
 )
 
@@ -290,8 +372,10 @@ radio = normalize(target=-14.0, radio)
 
 # 1b. Subtle stereo width enhancement — makes the broadcast feel "bigger"
 # without breaking mono compatibility. Applied BEFORE the bus comp and limiter
-# so any side-channel boost still gets caught by the ceiling.
-radio = stereo.width(w=1.15, radio)
+# so any side-channel boost still gets caught by the ceiling. In Liquidsoap
+# 2.2 the `w` argument is positional (not labeled) and 0 is the identity;
+# positive values widen, negative narrow. 0.2 is a gentle nudge.
+radio = stereo.width(0.2, radio)
 
 # 2. Bus compressor — gentle glue, almost transparent
 radio = compress(

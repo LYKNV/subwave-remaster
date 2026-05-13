@@ -118,7 +118,7 @@ async function hourlyCheck() {
   if (!shouldFire('hourly')) return;
   const ctx = await getFullContext();
   try {
-    const script = await ollama.generateHourlyTime(ctx.time, ctx.weather);
+    const script = await ollama.generateHourlyTime(ctx.time, ctx.weather, { recap: queue.getDjRecap() });
     await queue.announce(script, 'hourly-check');
   } catch (err) {
     queue.log('error', `Hourly check failed: ${err.message}`);
@@ -140,7 +140,7 @@ async function maybeWeatherUpdate() {
 
   lastWeatherCondition = ctx.weather.condition;
   try {
-    const script = await ollama.generateWeatherSegment(ctx.weather, ctx.time);
+    const script = await ollama.generateWeatherSegment(ctx.weather, ctx.time, { recap: queue.getDjRecap() });
     await queue.announce(script, 'weather');
   } catch (err) {
     queue.log('error', `Weather update failed: ${err.message}`);
@@ -155,7 +155,7 @@ async function maybeWeatherUpdate() {
 async function stationId() {
   if (!shouldFire('stationId')) return;
   try {
-    const script = await ollama.generateStationId();
+    const script = await ollama.generateStationId({ recap: queue.getDjRecap() });
     await queue.announce(script, 'station-id');
   } catch (err) {
     queue.log('error', `Station ID failed: ${err.message}`);

@@ -45,7 +45,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
   - `say.txt` — controller writes a WAV path; Liquidsoap polls every 0.5s and feeds it through a voice queue that's `smooth_add`ed over music with sidechain ducking.
   - `auto.m3u` — fallback playlist the controller rewrites every 10 minutes for the current mood; Liquidsoap reloads it on file change (`reload_mode="watch"`).
 - **Liquidsoap → Controller / UI**:
-  - `now-playing.json` — written from `music.on_track(on_track_change)`. Hook is on `music` (not the final `radio` source) so metadata is fresh, before crossfade/rotate/fallback layers.
+  - `now-playing.json` — written from `music.on_metadata(on_meta)`. Hook is on `music` (not the final `radio` source) so metadata is fresh, before crossfade/rotate/fallback layers. `on_metadata` is used instead of `on_track` because `on_track` gets swallowed by crossfade transitions and source switches — see comment above the call in `radio.liq`.
 - **Controller → Web UI**: HTTP. Web polls `/now-playing` and `/state` every 5s (`web/app/page.js`).
 - **Browsers → Icecast**: direct `<audio src="…/stream.mp3">`.
 
@@ -98,7 +98,7 @@ The web app uses same-origin defaults (`/api`, `/stream.mp3`) in `web/app/page.j
 ## Working on this codebase
 
 - Touching the queue/playback path: keep the invariant that `queue.serveNext()` is the single writer of `next.txt`/`say.txt`, and that voice file is written ~200 ms before the track URI. Liquidsoap's polling intervals (1.0s for queue, 0.5s for voice) are the upper bound on perceived latency.
-- Touching `radio.liq`: the `on_track_change` hook must stay attached to the `music` source, not to a downstream stage — moving it loses metadata fidelity.
+- Touching `radio.liq`: the `on_metadata` hook must stay attached to the `music` source, not to a downstream stage — moving it loses metadata fidelity. Don't switch it to `on_track` either; `on_track` gets swallowed by crossfades and source switches, which is exactly why the codebase uses `on_metadata`.
 - Touching Subsonic: keep using `getAnnotatedUri` for anything going to Liquidsoap. Raw stream URLs work but lose metadata until ID3 arrives.
 - LLM responses are not retried; `matchRequest` does best-effort `{…}` recovery via regex if JSON parsing fails. Don't add aggressive retry without considering that Ollama on a homelab box may be slow but is reliable.
 - Festivals in `context.js` are a hand-curated general calendar (Western/UK plus a couple of cross-cultural markers like Diwali and Vaisakhi). Fixed-date only — lunar-shifted holidays (Easter, Eid, Lunar New Year) aren't representable in the current schema. Adding/removing entries changes what the autonomous DJ plays around those dates.

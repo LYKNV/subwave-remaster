@@ -5,12 +5,118 @@
 import { config } from './config.js';
 import * as settings from './settings.js';
 
+// Random micro-persona per call so the DJ shifts register across segments.
+// Always includes the user-configured dj.soul so custom personas stay in
+// rotation. Picks a fresh one every call — the named DJ stays constant,
+// only their tone for this line wobbles.
 function djSystem() {
   const s = settings.get();
-  return settings.renderDjPrompt(s.dj, {
+  const pool = [];
+  const userSoul = (s.dj?.soul || '').trim();
+  if (userSoul) pool.push(userSoul);
+  for (const soul of settings.DJ_SOULS) {
+    if (soul !== userSoul) pool.push(soul);
+  }
+  const soul = pool[Math.floor(Math.random() * pool.length)];
+  return settings.renderDjPrompt({ ...s.dj, soul }, {
     station: 'SUB/WAVE',
     location: s.weather?.locationName,
   });
+}
+
+// Narrative angles per call type. One is picked at random and injected into
+// the user prompt as "Tone for this segment:" so consecutive generations
+// don't fall back to the same shape. Add freely — the more variety here,
+// the less the DJ repeats itself.
+const ANGLES = {
+  intro: [
+    'Open with one specific image from right now (weather, time, day, season) and slide into the track.',
+    'Mention the artist in passing — one detail (era, scene, mood) — not a full title-and-artist back-announce.',
+    'Skip the introduction entirely and start mid-thought, as if continuing a conversation.',
+    'React to the request itself — what kind of request it is, what mood it suggests — before mentioning the track.',
+    'Use a short personal observation about the moment (Tuesday energy, the rain holding off, etc.) as the doorway.',
+    'Lean into contrast: how this track sits against what came before, or against the time of day.',
+    'Just say one true sentence and let the music start.',
+  ],
+  link: [
+    'Comment on a contrast or similarity between the two tracks (era, mood, instrumentation, tempo).',
+    'Tie the next track to the time of day, weather, or season — specifically, not generically.',
+    'Mention something small and tactile about right now (the rain, the dark, the smell of coffee, the day of the week).',
+    'Reference the previous artist or song obliquely — one detail, no full back-announce.',
+    'Skip the back-announce entirely and just open a small thought about what is next.',
+    'Acknowledge a listener-shaped moment (commute, late shift, weekend, midweek lull) without naming any listener.',
+    'Make one quiet observation that has nothing to do with either track and let the next song answer it.',
+  ],
+  station_id: [
+    'Plain ident — say the station name and the DJ name, nothing else.',
+    'Anchor the ident to the current moment (a Tuesday afternoon, a foggy evening, the slow part of Sunday).',
+    'Make it a near-aside: like someone reminding themselves where they are.',
+    'Open with the time or weather, then drop the station name in the middle of the sentence.',
+    'A single observation about broadcasting from a homelab, with the station name woven in.',
+  ],
+  weather: [
+    'One concrete sensory detail about the weather, no temperature recital.',
+    'Compare it to what it was earlier, or what it might be tonight — give it a small arc.',
+    'Tie the weather to a recommendation about how to spend the next hour.',
+    'Skip the forecast voice — just say what it actually feels like outside right now.',
+    'Acknowledge weather as a co-conspirator with the music, not as a news item.',
+  ],
+  hourly: [
+    'State the time as a small fact, then anchor it with one observation about the day.',
+    'Treat the hour mark like a quiet check-in, not a bulletin.',
+    'Open with where in the day we are (mid-afternoon lull, evening getting started, etc.) before the actual time.',
+    'Just one short sentence that happens to mention the time.',
+    'Acknowledge what kind of listener might be tuning in at this exact hour, without naming them.',
+  ],
+};
+
+function pickAngle(kind) {
+  const list = ANGLES[kind];
+  if (!list || list.length === 0) return null;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function randomSeed() {
+  return Math.floor(Math.random() * 1_000_000_000);
+}
+
+// Build the shared "right now" context block fed to every generate* call.
+// Pulled out so all five DJ functions show the model the same picture.
+function buildContextLines(context, { recentTracks } = {}) {
+  const lines = [];
+  if (context?.date) {
+    lines.push(`Day: ${context.date.dayLabel}, ${context.date.dayOfMonth} ${context.date.monthLabel} (${context.date.season})`);
+  }
+  if (context?.clock) {
+    const tags = [];
+    if (context.clock.isWeekend) tags.push('weekend');
+    if (context.clock.isLateNight) tags.push('late night');
+    if (context.clock.isCommute) tags.push('commute hour');
+    lines.push(`Local time: ${context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
+  }
+  if (context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
+  if (context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
+    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°C` : ''}`);
+  }
+  if (context?.festival) lines.push(`Festival: ${context.festival.name}`);
+  if (recentTracks && recentTracks.length) {
+    const list = recentTracks.slice(0, 5).map(t => `"${t.title}" by ${t.artist || 'unknown'}`).join('; ');
+    lines.push(`Recently played (do not mention these artists or titles): ${list}`);
+  }
+  return lines;
+}
+
+// Append rotating angle + recap + opener blocklist to the user prompt.
+function decoratePrompt(prompt, { kind, recap, recentOpeners }) {
+  const out = [prompt];
+  const angle = pickAngle(kind);
+  if (angle) out.push(`\nTone for this segment: ${angle}`);
+  if (recap) out.push(`\nYou said these things on-air recently (do not repeat phrasing or topics):\n${recap}`);
+  if (recentOpeners && recentOpeners.length) {
+    const list = recentOpeners.slice(0, 6).map(o => `"${o}…"`).join(', ');
+    out.push(`\nDo not start your line with any of these openers (vary the first words): ${list}`);
+  }
+  return out.join('\n');
 }
 
 // Ring buffer of recent LLM calls for the /debug endpoint
@@ -20,12 +126,23 @@ function record(call) {
   if (recentCalls.length > 30) recentCalls.length = 30;
 }
 
-async function ollamaChat(messages, { format = null, temperature = 0.7, kind = 'chat' } = {}) {
+async function ollamaChat(messages, {
+  format = null,
+  temperature = 0.7,
+  topP = null,
+  repeatPenalty = null,
+  seed = null,
+  kind = 'chat',
+} = {}) {
+  const options = { temperature };
+  if (topP != null) options.top_p = topP;
+  if (repeatPenalty != null) options.repeat_penalty = repeatPenalty;
+  if (seed != null) options.seed = seed;
   const body = {
     model: config.ollama.model,
     messages,
     stream: false,
-    options: { temperature },
+    options,
   };
   if (format === 'json') body.format = 'json';
 
@@ -41,7 +158,8 @@ async function ollamaChat(messages, { format = null, temperature = 0.7, kind = '
     const content = data.message?.content || '';
     record({
       kind, ok: true, ms: Date.now() - started,
-      model: config.ollama.model, temperature,
+      model: config.ollama.model,
+      sampling: { temperature, top_p: options.top_p, repeat_penalty: options.repeat_penalty, seed: options.seed },
       systemPreview: messages.find(m => m.role === 'system')?.content?.slice(0, 200),
       user: messages.find(m => m.role === 'user')?.content,
       response: content,
@@ -151,19 +269,8 @@ export async function matchRequest(userQuery, { listenerName = null, nowPlaying 
 // DJ SCRIPTS — creative spoken segments
 // ---------------------------------------------------------------------------
 
-// Append a recent-on-air recap to the user prompt so the DJ stops repeating
-// phrasing across consecutive segments. The recap text is built by
-// queue.getDjRecap() — passing null is a no-op.
-function withRecap(prompt, recap) {
-  if (!recap) return prompt;
-  return `${prompt}\n\nYou said these things on-air recently (do not repeat phrasing or topics):\n${recap}`;
-}
-
-export async function generateIntro({ track, context, requestedBy = null, recap = null }) {
-  const ctxLines = [];
-  if (context.time) ctxLines.push(`Time: ${context.time.period} (${context.time.vibe})`);
-  if (context.weather) ctxLines.push(`Weather in ${context.weather.location}: ${context.weather.condition}, ${context.weather.temp}°C`);
-  if (context.festival) ctxLines.push(`Festival: ${context.festival.name}`);
+export async function generateIntro({ track, context, requestedBy = null, recap = null, recentTracks = null, recentOpeners = null }) {
+  const ctxLines = buildContextLines(context, { recentTracks });
   if (requestedBy) ctxLines.push(`Requested by: ${requestedBy}`);
   ctxLines.push(`Coming up: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${track.year ? ` (${track.year})` : ''}`);
 
@@ -172,32 +279,37 @@ export async function generateIntro({ track, context, requestedBy = null, recap 
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: withRecap(prompt, recap) },
+      { role: 'user', content: decoratePrompt(prompt, { kind: 'intro', recap, recentOpeners }) },
     ],
-    { temperature: 0.85, kind: 'generateIntro' }
+    { temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(), kind: 'generateIntro' }
   );
 }
 
-export async function generateWeatherSegment(weather, time, { recap = null } = {}) {
-  const prompt = `It's ${time.period} in ${weather.location}. Conditions: ${weather.condition}, ${weather.temp}°C. Write a brief weather check, in character. 1-2 sentences.`;
+export async function generateWeatherSegment(weather, time, { recap = null, context = null, recentOpeners = null } = {}) {
+  const ctx = context || { weather, time };
+  const ctxLines = buildContextLines(ctx);
+  ctxLines.push(`Task: a brief weather check, in character. 1-2 sentences.`);
+  const prompt = ctxLines.join('\n');
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: withRecap(prompt, recap) },
+      { role: 'user', content: decoratePrompt(prompt, { kind: 'weather', recap, recentOpeners }) },
     ],
-    { temperature: 0.85, kind: 'generateWeatherSegment' }
+    { temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(), kind: 'generateWeatherSegment' }
   );
 }
 
-export async function generateStationId({ recap = null } = {}) {
+export async function generateStationId({ recap = null, context = null, recentOpeners = null } = {}) {
   const djName = settings.get().dj?.name || 'your host';
-  const prompt = `Write a 1-sentence station ident. Format: "You're listening to SUB/WAVE with ${djName}..." or similar. Be brief and a little understated.`;
+  const ctxLines = buildContextLines(context);
+  ctxLines.push(`Task: a 1-sentence station ident for SUB/WAVE with ${djName}. Brief, a little understated.`);
+  const prompt = ctxLines.join('\n');
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: withRecap(prompt, recap) },
+      { role: 'user', content: decoratePrompt(prompt, { kind: 'station_id', recap, recentOpeners }) },
     ],
-    { temperature: 0.9, kind: 'generateStationId' }
+    { temperature: 1.0, topP: 0.9, repeatPenalty: 1.25, seed: randomSeed(), kind: 'generateStationId' }
   );
 }
 
@@ -247,11 +359,8 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   }
 }
 
-export async function generateLink({ previous, current, context, recap = null }) {
-  const ctxLines = [];
-  if (context?.time) ctxLines.push(`Time: ${context.time.period} (${context.time.vibe})`);
-  if (context?.weather) ctxLines.push(`Weather in ${context.weather.location}: ${context.weather.condition}, ${context.weather.temp}°C`);
-  if (context?.festival) ctxLines.push(`Festival: ${context.festival.name}`);
+export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }) {
+  const ctxLines = buildContextLines(context, { recentTracks });
   if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
   if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
 
@@ -260,19 +369,22 @@ export async function generateLink({ previous, current, context, recap = null })
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: withRecap(prompt, recap) },
+      { role: 'user', content: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }) },
     ],
-    { temperature: 0.85, kind: 'generateLink' }
+    { temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(), kind: 'generateLink' }
   );
 }
 
-export async function generateHourlyTime(time, weather, { recap = null } = {}) {
-  const prompt = `It's the top of the hour. Time is ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })} in ${weather.location}. ${weather.condition}, ${weather.temp}°C. Brief time check, in character. 1 sentence.`;
+export async function generateHourlyTime(time, weather, { recap = null, context = null, recentOpeners = null } = {}) {
+  const ctx = context || { time, weather };
+  const ctxLines = buildContextLines(ctx);
+  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. 1 sentence.`);
+  const prompt = ctxLines.join('\n');
   return ollamaChat(
     [
       { role: 'system', content: djSystem() },
-      { role: 'user', content: withRecap(prompt, recap) },
+      { role: 'user', content: decoratePrompt(prompt, { kind: 'hourly', recap, recentOpeners }) },
     ],
-    { temperature: 0.85, kind: 'generateHourlyTime' }
+    { temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(), kind: 'generateHourlyTime' }
   );
 }

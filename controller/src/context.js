@@ -107,14 +107,56 @@ function weatherToMood(condition) {
   }
 }
 
+const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June',
+                      'July', 'August', 'September', 'October', 'November', 'December'];
+
+// Northern-hemisphere meteorological seasons — the box is in Wolverhampton.
+function seasonFor(month /* 1-12 */) {
+  if (month === 12 || month <= 2) return 'winter';
+  if (month <= 5) return 'spring';
+  if (month <= 8) return 'summer';
+  return 'autumn';
+}
+
+export function getDateContext(date = new Date()) {
+  const dow = date.getDay();
+  const month = date.getMonth() + 1;
+  return {
+    iso: date.toISOString().slice(0, 10),
+    dayOfWeek: dow,
+    dayLabel: DAY_LABELS[dow],
+    monthLabel: MONTH_LABELS[month - 1],
+    dayOfMonth: date.getDate(),
+    season: seasonFor(month),
+  };
+}
+
+export function getClockContext(date = new Date()) {
+  const h = date.getHours();
+  const m = date.getMinutes();
+  const minutesOfDay = h * 60 + m;
+  const dow = date.getDay();
+  return {
+    hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+    isWeekend: dow === 0 || dow === 6,
+    isLateNight: h < 5,
+    isCommute: (minutesOfDay >= 450 && minutesOfDay < 570) ||  // 07:30-09:30
+               (minutesOfDay >= 1020 && minutesOfDay < 1140),  // 17:00-19:00
+  };
+}
+
 // Combined snapshot — what's the vibe right now?
 export async function getFullContext() {
-  const time = getTimeContext();
+  const now = new Date();
+  const time = getTimeContext(now);
   const weather = await getWeather();
-  const festival = getFestivalContext();
+  const festival = getFestivalContext(now);
+  const date = getDateContext(now);
+  const clock = getClockContext(now);
 
   // Festival > weather > time, in that order of priority for mood selection
   const dominantMood = festival?.mood || weather.mood || time.mood;
 
-  return { time, weather, festival, dominantMood };
+  return { time, weather, festival, dominantMood, date, clock };
 }

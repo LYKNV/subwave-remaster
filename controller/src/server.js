@@ -274,6 +274,8 @@ app.post('/request', async (req, res) => {
         context: ctx,
         requestedBy: requester,
         recap: queue.getDjRecap(),
+        recentTracks: queue.getRecentTracks(),
+        recentOpeners: queue.getRecentOpeners(),
       });
       await queue.push({
         track: pick,
@@ -410,6 +412,8 @@ app.post('/request', async (req, res) => {
       context: ctx,
       requestedBy: requester,
       recap: queue.getDjRecap(),
+      recentTracks: queue.getRecentTracks(),
+      recentOpeners: queue.getRecentOpeners(),
     });
 
     // 4. Add to queue (will trigger Liquidsoap via the queue manager)

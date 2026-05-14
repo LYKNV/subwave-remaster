@@ -48,9 +48,10 @@ class Queue {
 
   // Compact recap of recent on-air DJ utterances for injection into Ollama
   // prompts so the DJ stops repeating openers. Returns formatted lines or
-  // null when nothing relevant has aired. Tight defaults by design — keeps
-  // the token cost ~100-150 tokens per call.
-  getDjRecap({ limit = 4, withinMinutes = 30, maxChars = 80 } = {}) {
+  // null when nothing relevant has aired. Wider window catches slow-firing
+  // kinds (hourly, station ID) so the DJ doesn't echo something it said
+  // an hour ago.
+  getDjRecap({ limit = 10, withinMinutes = 120, maxChars = 140 } = {}) {
     const cutoff = Date.now() - withinMinutes * 60_000;
     const seenDedupe = new Set();
     const picked = [];
@@ -71,6 +72,50 @@ class Queue {
       const truncated = msg.length > maxChars ? msg.slice(0, maxChars - 1) + '…' : msg;
       return `- ${ago} ago [${KIND_LABEL[e.kind] || e.kind}]: "${truncated}"`;
     }).join('\n');
+  }
+
+  // Recently played tracks, newest first. Compact shape for prompts.
+  getRecentTracks(n = 6) {
+    const out = [];
+    for (const h of this.history.slice(0, n)) {
+      const t = h.track;
+      if (!t || !t.title) continue;
+      out.push({ title: t.title, artist: t.artist || null, album: t.album || null, year: t.year || null });
+    }
+    return out;
+  }
+
+  // Deduped recent artist names, newest first.
+  getRecentArtists(n = 6) {
+    const seen = new Set();
+    const out = [];
+    for (const h of this.history) {
+      const a = h.track?.artist;
+      if (!a || seen.has(a)) continue;
+      seen.add(a);
+      out.push(a);
+      if (out.length >= n) break;
+    }
+    return out;
+  }
+
+  // First ~5 words of recent DJ utterances — fed to the prompt as an
+  // explicit "don't open with any of these" list. Catches repeated openers
+  // that the recap text alone glosses over.
+  getRecentOpeners(n = 6) {
+    const seen = new Set();
+    const out = [];
+    for (const entry of this.djLog) {
+      if (!VOICE_KINDS.has(entry.kind)) continue;
+      const msg = (entry.message || '').replace(/^["'\s]+/, '').replace(/\s+/g, ' ').trim();
+      if (!msg) continue;
+      const opener = msg.split(/\s+/).slice(0, 5).join(' ');
+      if (seen.has(opener.toLowerCase())) continue;
+      seen.add(opener.toLowerCase());
+      out.push(opener);
+      if (out.length >= n) break;
+    }
+    return out;
   }
 
   // Push a listener request. Adds to upcoming and kicks off the Liquidsoap sender.
@@ -201,7 +246,14 @@ class Queue {
         (async () => {
           try {
             const ctx = await getFullContext();
-            const script = await ollama.generateLink({ previous, current, context: ctx, recap: this.getDjRecap() });
+            const script = await ollama.generateLink({
+              previous,
+              current,
+              context: ctx,
+              recap: this.getDjRecap(),
+              recentTracks: this.getRecentTracks(),
+              recentOpeners: this.getRecentOpeners(),
+            });
             await this.announce(script, 'link');
           } catch (err) {
             this.log('error', `DJ link failed: ${err.message}`);

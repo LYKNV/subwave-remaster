@@ -75,7 +75,7 @@ export async function GET(_req, { params }) {
                 height: 8,
                 borderRadius: '50%',
                 background: '#d94b2a',
-                display: 'inline-block',
+                display: 'block',
               }}
             />
             <span>LISTENING</span>
@@ -106,7 +106,7 @@ export async function GET(_req, { params }) {
           >
             scanning the dial_
           </div>
-          <div style={{ fontSize: subtitleSize, color: '#8a8278' }}>
+          <div style={{ display: 'flex', fontSize: subtitleSize, color: '#8a8278' }}>
             <span style={{ color: '#ece6dc' }}>Live broadcast</span>
             <span style={{ marginLeft: 14 }}>· homelab radio · always on</span>
           </div>
@@ -142,7 +142,7 @@ export async function GET(_req, { params }) {
                 height: 8,
                 borderRadius: '50%',
                 background: '#d94b2a',
-                display: 'inline-block',
+                display: 'block',
               }}
             />
             TUNE IN

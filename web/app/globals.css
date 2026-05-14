@@ -173,7 +173,7 @@ body::after {
    count fills more horizontal space). Tracking goes to zero — mono cells
    already provide their own rhythm and negative tracking collides glyphs. */
 .v3-title {
-  font-size: clamp(28px, 8vw, 96px);
+  font-size: clamp(22px, 5.5vw, 64px);
   line-height: 0.95;
   letter-spacing: 0;
   font-weight: 800;

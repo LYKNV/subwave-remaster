@@ -47,13 +47,13 @@ fi
 if [ -z "$EDGE" ]; then
   # Dev: hit the controller container directly via its mapped port if any,
   # otherwise via `docker exec`. Simpler path: ask docker for the port.
-  CTRL_PORT=$(docker compose -f "$COMPOSE" port controller 4000 2>/dev/null | awk -F: '{print $NF}' | tr -d '[:space:]')
+  CTRL_PORT=$(docker compose -f "$COMPOSE" port controller 7701 2>/dev/null | awk -F: '{print $NF}' | tr -d '[:space:]')
   if [ -n "$CTRL_PORT" ]; then
     EDGE="http://localhost:$CTRL_PORT"
     API_BASE="$EDGE"            # no /api prefix when hitting controller directly
   else
-    echo "Could not find an exposed edge port (neither caddy:80 nor controller:4000 mapped)."
-    echo "You can still inspect via: docker compose -f $COMPOSE exec controller curl -s localhost:4000/health"
+    echo "Could not find an exposed edge port (neither caddy:80 nor controller:7701 mapped)."
+    echo "You can still inspect via: docker compose -f $COMPOSE exec controller curl -s localhost:7701/health"
     exit 1
   fi
 fi

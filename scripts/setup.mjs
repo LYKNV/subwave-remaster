@@ -88,7 +88,7 @@ async function waitForHealth(timeoutMs = 30000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const r = await fetch('http://localhost:4000/health', { signal: AbortSignal.timeout(1000) });
+      const r = await fetch('http://localhost:7701/health', { signal: AbortSignal.timeout(1000) });
       if (r.ok) {
         const body = await r.json();
         if (body.status === 'on-air') return true;
@@ -201,7 +201,7 @@ export async function main() {
       {
         value: 'dev',
         label: 'Development (local hacking)',
-        hint: 'docker-compose.yml · web on host :3000 · state in ./state',
+        hint: 'docker-compose.yml · web on host :7700 · state in ./state',
       },
       {
         value: 'prod',
@@ -300,21 +300,21 @@ export async function main() {
         `${pc.dim('Health:     ')} http://localhost:4800/api/health`,
       ]
     : [
-        `${pc.dim('Web:        ')} http://localhost:3000`,
-        `${pc.dim('Stream:     ')} http://localhost:8000/stream.mp3`,
-        `${pc.dim('Now playing:')} http://localhost:4000/now-playing`,
-        `${pc.dim('Health:     ')} http://localhost:4000/health`,
+        `${pc.dim('Web:        ')} http://localhost:7700`,
+        `${pc.dim('Stream:     ')} http://localhost:7702/stream.mp3`,
+        `${pc.dim('Now playing:')} http://localhost:7701/now-playing`,
+        `${pc.dim('Health:     ')} http://localhost:7701/health`,
       ];
   note(endpoints.join('\n'), 'Endpoints');
 
   let startWeb = false;
   if (mode === 'dev') {
-    const webBusy = await portInUse(3000);
+    const webBusy = await portInUse(7700);
     if (webBusy) {
-      note('Port 3000 already has a listener — skipping web dev launch.', 'Web');
+      note('Port 7700 already has a listener — skipping web dev launch.', 'Web');
     } else {
       startWeb = guard(await confirm({
-        message: 'Start web dev server on :3000 now (foreground, Ctrl-C to stop)?',
+        message: 'Start web dev server on :7700 now (foreground, Ctrl-C to stop)?',
         initialValue: true,
       }));
     }

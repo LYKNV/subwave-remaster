@@ -29,5 +29,5 @@ COPY controller/src ./src
 # State dir shared with Liquidsoap
 RUN mkdir -p /var/sub-wave/voice && chmod 777 /var/sub-wave
 
-EXPOSE 4000
+EXPOSE 7701
 CMD ["node", "src/server.js"]

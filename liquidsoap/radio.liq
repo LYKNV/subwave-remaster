@@ -427,13 +427,13 @@ music_meta.on_metadata(on_meta)
 output.icecast(
   %mp3(bitrate=192, samplerate=44100, stereo=true),
   host="icecast",
-  port=8000,
+  port=7702,
   password=environment.get("ICECAST_SOURCE_PASSWORD"),
   mount="/stream.mp3",
   name="SUB/WAVE",
   description="Personal frequency from the homelab",
   genre="Various",
-  url="http://ronin.tail.ts.net:3000",
+  url="http://ronin.tail.ts.net:7700",
   radio
 )
 

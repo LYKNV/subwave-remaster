@@ -23,7 +23,7 @@
     <hostname>localhost</hostname>
 
     <listen-socket>
-        <port>8000</port>
+        <port>7702</port>
     </listen-socket>
 
     <fileserve>1</fileserve>

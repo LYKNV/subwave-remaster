@@ -25,7 +25,7 @@
 	# flush_interval -1 disables buffering so the audio stream stays live.
 	# Query strings (e.g. ?t=12345 cache-busters) pass through automatically.
 	handle /stream.mp3 {
-		reverse_proxy icecast:8000 {
+		reverse_proxy icecast:7702 {
 			flush_interval -1
 			transport http {
 				read_buffer 16KB
@@ -41,14 +41,14 @@
 	# handle_path strips the /api prefix before forwarding, so the controller
 	# keeps its existing routes (/now-playing, /state, /request, /skip, /health).
 	handle_path /api/* {
-		reverse_proxy controller:4000
+		reverse_proxy controller:7701
 	}
 
 	# -------------------------------------------------------------------------
 	# Everything else → Next.js web UI
 	# -------------------------------------------------------------------------
 	handle {
-		reverse_proxy web:3000
+		reverse_proxy web:7700
 	}
 
 	encode gzip zstd

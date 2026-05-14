@@ -102,7 +102,7 @@ npm run setup`}</CodeBlock>
                 <strong>Dev</strong> — <code className="bs-code-inline">docker-compose.yml</code>,
                 state in <code className="bs-code-inline">./state</code>, optionally
                 launches <code className="bs-code-inline">next dev</code> on{' '}
-                <code className="bs-code-inline">:3000</code>.
+                <code className="bs-code-inline">:7700</code>.
               </li>
               <li>
                 <strong>Production</strong> —{' '}
@@ -192,7 +192,7 @@ cd subwave
           <CodeBlock>{`npm run setup        # interactive wizard (writes envs, brings the stack up)
 npm run dev          # alias for setup — same wizard
 npm run dev:docker   # docker compose up -d        (radio backend only)
-npm run dev:web      # next dev on :3000           (hot-reloaded UI)
+npm run dev:web      # next dev on :7700           (hot-reloaded UI)
 npm run rebuild      # docker compose up -d --build  (after controller/liquidsoap src changes)
 npm run logs         # tail docker logs
 npm run jingles      # render station idents via Piper
@@ -201,7 +201,7 @@ npm run down         # stop the stack`}</CodeBlock>
           <h3 style={{ marginTop: 24 }}>A typical dev session</h3>
           <CodeBlock>{`# one-time, in two terminals:
 npm run dev:docker   # terminal 1: backend (Icecast, Liquidsoap, Controller)
-npm run dev:web      # terminal 2: Next.js on http://localhost:3000
+npm run dev:web      # terminal 2: Next.js on http://localhost:7700
 
 # editing web/** — saves are hot-reloaded, no docker action needed.
 # editing controller/src/** or liquidsoap/radio.liq:

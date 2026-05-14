@@ -156,7 +156,7 @@ async function getListenerStats() {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch('http://icecast:8000/status-json.xsl', { signal: ctrl.signal });
+    const r = await fetch('http://icecast:7702/status-json.xsl', { signal: ctrl.signal });
     clearTimeout(timer);
     const ic = (await r.json())?.icestats;
     const src = Array.isArray(ic?.source) ? ic.source[0] : ic?.source;
@@ -618,7 +618,7 @@ app.get('/debug', requireAdmin, async (req, res) => {
 
   // 3. Icecast status
   try {
-    const r = await fetch('http://icecast:8000/status-json.xsl');
+    const r = await fetch('http://icecast:7702/status-json.xsl');
     const ic = (await r.json()).icestats;
     const src = Array.isArray(ic.source) ? ic.source[0] : ic.source;
     out.icecast = src ? {

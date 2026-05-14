@@ -68,7 +68,7 @@ Real radio = one stream, synced listeners. That needs a server-side audio mixer.
 - **Ollama** — runs on the host (or any reachable host). Default model is `nemotron-3-super:cloud`; swap to anything that supports the `format: json` chat option (`qwen2.5:7b`, `llama3.1:8b`, …).
 - **Navidrome** — anywhere reachable. Controller talks Subsonic API.
 - **Piper** — baked into the controller image, CPU-only. Voice: `en_GB-alan-medium`.
-- **Web UI** — Next.js dev server on port 3000 (dev) or behind Caddy as part of the prod compose file.
+- **Web UI** — Next.js dev server on port 7700 (dev) or behind Caddy as part of the prod compose file.
 
 ## Directory layout
 
@@ -145,7 +145,7 @@ npm install
 npm run setup
 ```
 
-The wizard prompts for your Navidrome and Ollama details, writes `controller/.env`, runs `scripts/setup.sh` (icecast.xml, emergency.mp3, bed.mp3, docker/.env), brings up the dev docker stack, installs the web dependencies, waits for the controller to report on-air, optionally renders jingles, and optionally launches `next dev` on :3000 in the foreground.
+The wizard prompts for your Navidrome and Ollama details, writes `controller/.env`, runs `scripts/setup.sh` (icecast.xml, emergency.mp3, bed.mp3, docker/.env), brings up the dev docker stack, installs the web dependencies, waits for the controller to report on-air, optionally renders jingles, and optionally launches `next dev` on :7700 in the foreground.
 
 Other npm scripts wrap the common loops:
 
@@ -153,7 +153,7 @@ Other npm scripts wrap the common loops:
 |---|---|
 | `npm run setup` | Run the wizard end-to-end (alias: `npm run dev`) |
 | `npm run dev:docker` | `docker compose up -d` in `docker/` |
-| `npm run dev:web` | `next dev` on :3000 (in `web/`) |
+| `npm run dev:web` | `next dev` on :7700 (in `web/`) |
 | `npm run rebuild` | `docker compose up -d --build` (after controller/liquidsoap source edits) |
 | `npm run down` | Stop the docker stack |
 | `npm run logs` | Tail docker compose logs |
@@ -171,8 +171,8 @@ Other npm scripts wrap the common loops:
 
 # 2. Web dev env (so the Next.js dev server hits the right hosts)
 cat > web/.env.local <<EOF
-NEXT_PUBLIC_API_URL=http://localhost:4000
-NEXT_PUBLIC_STREAM_URL=http://localhost:8000/stream.mp3
+NEXT_PUBLIC_API_URL=http://localhost:7701
+NEXT_PUBLIC_STREAM_URL=http://localhost:7702/stream.mp3
 EOF
 
 # 3. Bring up the stack
@@ -186,10 +186,10 @@ cd ../web && npm install && npm run dev
 ```
 
 Open:
-- **Listener** — http://localhost:3000
-- **Debug** — http://localhost:3000/debug (admin-gated if `ADMIN_USER`/`ADMIN_PASS` are set)
-- **Raw stream** — http://localhost:8000/stream.mp3
-- **Icecast status** — http://localhost:8000/status-json.xsl
+- **Listener** — http://localhost:7700
+- **Debug** — http://localhost:7700/debug (admin-gated if `ADMIN_USER`/`ADMIN_PASS` are set)
+- **Raw stream** — http://localhost:7702/stream.mp3
+- **Icecast status** — http://localhost:7702/status-json.xsl
 
 ### Rebuild ≠ restart
 
@@ -282,7 +282,7 @@ If Ollama is down or returns garbage, the controller logs the error and does not
 Toggle the LLM picker:
 
 ```bash
-curl -X POST http://localhost:4000/auto-pick \
+curl -X POST http://localhost:7701/auto-pick \
   -H 'Content-Type: application/json' \
   -u admin:secret \                          # only if admin auth is on
   -d '{"on": false}'
@@ -307,7 +307,7 @@ Energy: `low | medium | high`. Stats appear on `/debug` once at least one track 
 ## Listener requests
 
 ```bash
-curl -X POST http://localhost:4000/request \
+curl -X POST http://localhost:7701/request \
   -H 'Content-Type: application/json' \
   -d '{"text": "something for late-night driving", "name": "klair"}'
 ```
@@ -334,7 +334,7 @@ Plus randomised DJ links between auto-played tracks — interval scales with fre
 
 All speak through the same `voice_queue`, which ducks the music briefly via `smooth_add(p=0.25)`.
 
-## Endpoints (controller, port 4000)
+## Endpoints (controller, port 7701)
 
 Public:
 
@@ -372,7 +372,7 @@ State (`settings.json`, `moods.json`, voice WAVs, archives) is persisted in `./s
 - **Mood biasing only works after `npm run tag`.** Until then the picker uses starred + random.
 - **Liquidsoap log can grow unbounded.** `state/logs/radio.log` has no rotation configured.
 - **`/skip` endpoint is not implemented** — Liquidsoap controls pacing. Track-end is the only natural transition.
-- **Admin auth uses Basic auth over HTTP** — fine behind Cloudflare/Caddy with TLS, but don't expose port 4000 raw to the internet.
+- **Admin auth uses Basic auth over HTTP** — fine behind Cloudflare/Caddy with TLS, but don't expose port 7701 raw to the internet.
 
 ## Customisation (code-level, beyond Settings)
 

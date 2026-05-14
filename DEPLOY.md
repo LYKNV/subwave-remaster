@@ -7,9 +7,9 @@ liquidsoap).
 
 ```
 Internet ── HTTPS ──▶ Cloudflare ── HTTP ──▶ Ronin :80 (Caddy)
-                                                ├── /          → web:3000
-                                                ├── /api/*     → controller:4000
-                                                └── /stream.mp3 → icecast:8000
+                                                ├── /          → web:7700
+                                                ├── /api/*     → controller:7701
+                                                └── /stream.mp3 → icecast:7702
                                                                   ▲
                                                           liquidsoap (internal)
 ```

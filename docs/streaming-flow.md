@@ -87,12 +87,12 @@ brick-wall limiter at -1 dBFS
 
 ### 7. Out to Icecast
 `output.icecast` encodes the final mix as MP3 (192 kbps, 44.1 kHz stereo) and
-pushes it to the `icecast:8000` container on mount `/stream.mp3`. In parallel,
+pushes it to the `icecast:7702` container on mount `/stream.mp3`. In parallel,
 `output.file` writes hourly archive MP3s to `archive/YYYY-MM-DD/HH-00.mp3`.
 
 ### 8. Caddy hands it to the listener
 The listener's browser requests `/stream.mp3`. Caddy proxies it to
-`icecast:8000` with `flush_interval -1` so audio isn't buffered. Icecast fans
+`icecast:7702` with `flush_interval -1` so audio isn't buffered. Icecast fans
 out the same live stream to every connected listener — everyone hears exactly
 the same thing at the same moment.
 

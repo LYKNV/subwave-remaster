@@ -20,7 +20,7 @@ FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
+ENV PORT=7700
 ENV HOSTNAME=0.0.0.0
 
 RUN groupadd -r next && useradd -r -g next next
@@ -30,5 +30,5 @@ COPY --from=build --chown=next:next /app/.next/standalone ./
 COPY --from=build --chown=next:next /app/.next/static ./.next/static
 
 USER next
-EXPOSE 3000
+EXPOSE 7700
 CMD ["node", "server.js"]

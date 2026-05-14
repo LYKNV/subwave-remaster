@@ -11,7 +11,7 @@ SUB/WAVE is a personal internet radio station: one Icecast stream, all listeners
 ```bash
 # --- dev (Mac smoke test) ---
 cd docker && docker compose up -d        # Icecast + Liquidsoap + Controller only
-cd web && npm install && npm run dev     # web UI on :3000, separate process
+cd web && npm install && npm run dev     # web UI on :7700, separate process
 cd controller && npm install && npm run dev
 
 # --- production (single-host, Caddy edge) ---
@@ -85,9 +85,9 @@ The shared `/var/sub-wave` mount in **both** the Liquidsoap and Controller conta
 
 One origin, three backends:
 
-- `/stream.mp3` → `icecast:8000` with `flush_interval -1` so the audio stream isn't buffered.
-- `/api/*` → `controller:4000`, prefix stripped via `handle_path` so the controller keeps its existing routes (`/now-playing`, `/state`, `/request`, `/skip`, `/health`).
-- everything else → `web:3000`.
+- `/stream.mp3` → `icecast:7702` with `flush_interval -1` so the audio stream isn't buffered.
+- `/api/*` → `controller:7701`, prefix stripped via `handle_path` so the controller keeps its existing routes (`/now-playing`, `/state`, `/request`, `/skip`, `/health`).
+- everything else → `web:7700`.
 
 The web app uses same-origin defaults (`/api`, `/stream.mp3`) in `web/app/page.js`, so the production image needs no `NEXT_PUBLIC_*` env vars. For dev (separate ports), override via `web/.env.local`.
 

@@ -13,7 +13,7 @@ services:
     container_name: sub-wave-icecast
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "7702:7702"
     environment:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-changeme}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-changeme}
@@ -62,7 +62,7 @@ services:
     depends_on:
       - liquidsoap
     ports:
-      - "4000:4000"
+      - "7701:7701"
     env_file:
       - ../controller/.env
     extra_hosts:

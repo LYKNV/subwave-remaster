@@ -35,7 +35,7 @@ export const config = {
     locationName: 'Wolverhampton',
   },
   server: {
-    port: parseInt(process.env.PORT || '4000', 10),
+    port: parseInt(process.env.PORT || '7701', 10),
   },
   show: {
     // Define show clocks — what % of slots are music vs jingles vs DJ talk

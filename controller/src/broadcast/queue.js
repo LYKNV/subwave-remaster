@@ -311,6 +311,8 @@ class Queue {
       upcoming: this.upcoming.map(mapItem),
       history: this.history.map(mapItem),
       djLog: this.djLog.slice(0, 50),
+      autoPick: this.autoPick,
+      autoLink: this.autoLink,
     };
   }
 

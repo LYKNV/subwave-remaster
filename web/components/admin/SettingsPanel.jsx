@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { V3Switch } from '../ui/switch';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 
@@ -169,19 +168,6 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
-  const toggleAutoPick = async () => {
-    if (!data) return;
-    setBusy(true);
-    try {
-      await adminFetch('/auto-pick', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ on: !data.autoPick }),
-      });
-      await refresh();
-    } finally { setBusy(false); }
-  };
-
   const startTagger = async () => {
     setBusy(true);
     try {
@@ -206,16 +192,6 @@ export default function SettingsPanel() {
       {data && (
         <>
           <Section title="Auto-DJ">
-            <Row>
-              <div>
-                <Lead>LLM picks next track</Lead>
-                <Hint>
-                  When listener queue is empty, Ollama chooses from mood-tagged candidates
-                  instead of random shuffle.
-                </Hint>
-              </div>
-              <V3Switch checked={!!data.autoPick} onCheckedChange={toggleAutoPick} disabled={busy} />
-            </Row>
             <Row>
               <div>
                 <Lead>Picker status</Lead>

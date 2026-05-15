@@ -286,6 +286,21 @@ export async function generateStationId({ recap = null, context = null, recentOp
   });
 }
 
+// Operator ad-lib — the command-center "manual voice DJ" in styled mode.
+// Takes a free-text instruction/topic and performs it in character, rather
+// than reading it verbatim (that's what raw mode is for).
+export async function generateAdLib({ instruction, context = null, recap = null, recentOpeners = null }) {
+  const ctxLines = buildContextLines(context);
+  const clipped = String(instruction || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  ctxLines.push(`Task: the station operator wants you to say something on-air. Their instruction: "${clipped}". Deliver it in character as a natural spoken line — don't read the instruction back verbatim, perform it. 1-2 sentences.`);
+  return djText({
+    system: djSystem(),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'adlib', recap, recentOpeners }),
+    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+    kind: 'generateAdLib',
+  });
+}
+
 export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }) {
   const ctxLines = buildContextLines(context, { recentTracks });
   if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);

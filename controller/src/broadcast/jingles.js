@@ -9,7 +9,7 @@ import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { speak } from './tts.js';
+import { speak } from '../audio/tts.js';
 
 const DIR = '/var/sub-wave/jingles';
 const PLAYLIST = '/var/sub-wave/jingles.m3u';

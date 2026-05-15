@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { config } from './config.js';
+import { config } from '../config.js';
 
 await mkdir(config.piper.outDir, { recursive: true });
 

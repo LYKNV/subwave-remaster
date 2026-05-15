@@ -2,7 +2,7 @@
 """
 Kokoro TTS worker — line-protocol child process.
 
-The Node side (controller/src/kokoro.js) spawns this once and keeps it alive,
+The Node side (controller/src/audio/kokoro.js) spawns this once and keeps it alive,
 because loading the ONNX model takes 2-5 seconds and we'd rather not eat that
 on every DJ link. Protocol is one JSON object per line over stdin/stdout.
 

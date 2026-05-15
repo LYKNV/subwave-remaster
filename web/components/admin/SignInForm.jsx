@@ -5,11 +5,20 @@ import { useState } from 'react';
 export default function SignInForm({ onSubmit }) {
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e?.preventDefault?.();
-    if (!user || !pass) return;
-    onSubmit(user, pass);
+    if (!user || !pass || busy) return;
+    setBusy(true);
+    setErr(null);
+    const res = await onSubmit(user, pass);
+    // On success the gate swaps this form out; only handle failure here.
+    if (res && !res.ok) {
+      setErr(res.error || 'sign-in failed');
+      setBusy(false);
+    }
   };
 
   return (
@@ -41,9 +50,12 @@ export default function SignInForm({ onSubmit }) {
           className="w-full v3-focus"
           style={inputStyle}
         />
+        {err && (
+          <div style={{ color: '#c5302a', fontSize: 12, lineHeight: 1.5 }}>{err}</div>
+        )}
         <button
           type="submit"
-          disabled={!user || !pass}
+          disabled={!user || !pass || busy}
           className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             background: 'var(--accent)',
@@ -53,7 +65,7 @@ export default function SignInForm({ onSubmit }) {
             fontSize: 10,
           }}
         >
-          sign in
+          {busy ? 'signing in…' : 'sign in'}
         </button>
       </div>
     </form>

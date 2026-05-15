@@ -2,7 +2,7 @@
 // Uses the proper salt+token auth (not plaintext password).
 
 import crypto from 'node:crypto';
-import { config } from './config.js';
+import { config } from '../config.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');

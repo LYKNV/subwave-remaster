@@ -7,7 +7,7 @@
 // Lives outside scheduler.js so both the scheduler crons and the skill
 // registry can import it without a circular dependency.
 
-import * as settings from './settings.js';
+import * as settings from '../settings.js';
 
 export function shouldFire(kind, now = new Date()) {
   const f = settings.get().dj?.frequency || 'moderate';

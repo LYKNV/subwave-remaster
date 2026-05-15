@@ -3,10 +3,10 @@
 // {moods, energy} classification, persists results in state/moods.json.
 // Resumable — already-tagged tracks are skipped, so you can re-run any time.
 //
-// Run:  docker exec sub-wave-controller node src/tag-library.js
-//   or  docker exec sub-wave-controller node src/tag-library.js --limit 100
+// Run:  docker exec sub-wave-controller node src/music/tag-library.js
+//   or  docker exec sub-wave-controller node src/music/tag-library.js --limit 100
 
-import { config } from './config.js';
+import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 

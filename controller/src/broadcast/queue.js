@@ -3,13 +3,13 @@
 // between upcoming → current → history based on what Liquidsoap reports.
 
 import { writeFile, readFile } from 'node:fs/promises';
-import { config } from './config.js';
-import * as subsonic from './subsonic.js';
-import * as ollama from './ollama.js';
-import { speak } from './tts.js';
-import { pickAndEnqueue } from './picker.js';
-import { getFullContext } from './context.js';
-import * as settings from './settings.js';
+import { config } from '../config.js';
+import * as subsonic from '../music/subsonic.js';
+import * as dj from '../llm/dj.js';
+import { speak } from '../audio/tts.js';
+import { pickAndEnqueue } from '../music/picker.js';
+import { getFullContext } from '../context.js';
+import * as settings from '../settings.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -246,7 +246,7 @@ class Queue {
         (async () => {
           try {
             const ctx = await getFullContext();
-            const script = await ollama.generateLink({
+            const script = await dj.generateLink({
               previous,
               current,
               context: ctx,
@@ -311,6 +311,9 @@ class Queue {
       upcoming: this.upcoming.map(mapItem),
       history: this.history.map(mapItem),
       djLog: this.djLog.slice(0, 50),
+      autoPick: this.autoPick,
+      autoLink: this.autoLink,
+      pickerBusy: this.pickerBusy,
     };
   }
 

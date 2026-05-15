@@ -6,15 +6,15 @@
 
 import cron from 'node-cron';
 import { writeFile } from 'node:fs/promises';
-import { config } from './config.js';
-import * as subsonic from './subsonic.js';
-import * as ollama from './ollama.js';
-import * as library from './library.js';
-import { getFullContext } from './context.js';
+import { config } from '../config.js';
+import * as subsonic from '../music/subsonic.js';
+import * as dj from '../llm/dj.js';
+import * as library from '../music/library.js';
+import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
-import { cleanupOldVoices } from './tts.js';
+import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
-import * as skillRegistry from './skills/_registry.js';
+import * as skillRegistry from '../skills/_registry.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -44,7 +44,7 @@ async function tracksFromAlbums(albums, perAlbum, max) {
 // Writes an M3U with mood-appropriate tracks for Liquidsoap's fallback source.
 // ---------------------------------------------------------------------------
 
-async function refreshAutoPlaylist() {
+export async function refreshAutoPlaylist() {
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
   const recent = queue.recentlyPlayedIds(25);
@@ -135,19 +135,45 @@ async function refreshAutoPlaylist() {
 // At the top of every hour, the DJ checks in.
 // ---------------------------------------------------------------------------
 
+// Gate-free runner — also called directly by the /dj/segment command route as
+// an operator override. The cron wrapper below adds the frequency gate.
+export async function runHourlyCheck() {
+  const ctx = await getFullContext();
+  const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
+    recap: queue.getDjRecap(),
+    context: ctx,
+    recentOpeners: queue.getRecentOpeners(),
+  });
+  await queue.announce(script, 'hourly-check');
+  return script;
+}
+
 async function hourlyCheck() {
   if (!shouldFire('hourly')) return;
-  const ctx = await getFullContext();
   try {
-    const script = await ollama.generateHourlyTime(ctx.time, ctx.weather, {
-      recap: queue.getDjRecap(),
-      context: ctx,
-      recentOpeners: queue.getRecentOpeners(),
-    });
-    await queue.announce(script, 'hourly-check');
+    await runHourlyCheck();
   } catch (err) {
     queue.log('error', `Hourly check failed: ${err.message}`);
   }
+}
+
+// Generate and air a between-track DJ link for whatever is playing now.
+// Gate-free; used by the /dj/segment command route.
+export async function runLink() {
+  const current = queue.current?.track;
+  if (!current) throw new Error('nothing is playing — no track to link from');
+  const previous = queue.history[0]?.track || null;
+  const ctx = await getFullContext();
+  const script = await dj.generateLink({
+    previous,
+    current,
+    context: ctx,
+    recap: queue.getDjRecap(),
+    recentTracks: queue.getRecentTracks(),
+    recentOpeners: queue.getRecentOpeners(),
+  });
+  await queue.announce(script, 'link');
+  return script;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,16 +197,22 @@ async function skillsTick() {
 // Random ident every ~45 mins
 // ---------------------------------------------------------------------------
 
+// Gate-free runner — also called directly by the /dj/segment command route.
+export async function runStationId() {
+  const ctx = await getFullContext();
+  const script = await dj.generateStationId({
+    recap: queue.getDjRecap(),
+    context: ctx,
+    recentOpeners: queue.getRecentOpeners(),
+  });
+  await queue.announce(script, 'station-id');
+  return script;
+}
+
 async function stationId() {
   if (!shouldFire('stationId')) return;
   try {
-    const ctx = await getFullContext();
-    const script = await ollama.generateStationId({
-      recap: queue.getDjRecap(),
-      context: ctx,
-      recentOpeners: queue.getRecentOpeners(),
-    });
-    await queue.announce(script, 'station-id');
+    await runStationId();
   } catch (err) {
     queue.log('error', `Station ID failed: ${err.message}`);
   }

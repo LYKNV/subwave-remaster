@@ -5,7 +5,7 @@ import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 
 export default function DebugPanel() {
-  const { adminFetch, needsAuth } = useAdminAuth();
+  const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [paused, setPaused] = useState(false);
@@ -13,7 +13,9 @@ export default function DebugPanel() {
   const logRef = useRef(null);
 
   useEffect(() => {
-    if (needsAuth) return;
+    // Wait for the auth token to hydrate from localStorage — fetching before
+    // then sends an unauthenticated request that 401s.
+    if (!hydrated || needsAuth) return;
     let cancelled = false;
     const tick = async () => {
       if (paused) return;
@@ -44,7 +46,7 @@ export default function DebugPanel() {
     const id = setInterval(tick, 2000);
     return () => { cancelled = true; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paused, needsAuth]);
+  }, [paused, needsAuth, hydrated]);
 
   useEffect(() => {
     if (autoScroll && logRef.current) {
@@ -149,13 +151,13 @@ export default function DebugPanel() {
             </div>
           </Panel>
 
-          <Panel title={`Ollama recent calls (${data.ollama.recentCalls.length})`} fullWidth>
+          <Panel title={`LLM recent calls (${data.llm.recentCalls.length})`} fullWidth>
             <div className="v3-caption mb-2" style={{ color: 'var(--muted)' }}>
-              {data.ollama.model} @ {data.ollama.url}
+              {data.llm.activeModel} · provider {data.llm.provider}
             </div>
             <div className="space-y-2 v3-scroll" style={{ maxHeight: 384, overflowY: 'auto' }}>
-              {data.ollama.recentCalls.length === 0 && <Empty>no calls yet</Empty>}
-              {data.ollama.recentCalls.map((c, i) => (
+              {data.llm.recentCalls.length === 0 && <Empty>no calls yet</Empty>}
+              {data.llm.recentCalls.map((c, i) => (
                 <details key={i} style={{ border: '1px solid var(--ink)', padding: '4px 8px' }}>
                   <summary className="cursor-pointer flex flex-wrap items-center gap-2">
                     <span style={{ color: c.ok ? 'var(--accent)' : '#c5302a' }}>{c.ok ? '✓' : '✗'}</span>

@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { config } from './config.js';
+import { config } from '../config.js';
 
 const READY_TIMEOUT_MS = 60_000;        // first call may include model load
 // Generous because Kokoro on Apple Silicon runs under Rosetta (linux/amd64 image

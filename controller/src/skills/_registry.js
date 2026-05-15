@@ -18,8 +18,8 @@
 // level via dj-gate.shouldFire(skill.kind), so adding a new skill doesn't
 // need to know how quiet/moderate/aggressive maps to cron minutes.
 
-import { queue } from '../queue.js';
-import { shouldFire as gateAllows } from '../dj-gate.js';
+import { queue } from '../broadcast/queue.js';
+import { shouldFire as gateAllows } from '../broadcast/dj-gate.js';
 
 import weather from './weather.js';
 import news from './news.js';
@@ -94,4 +94,33 @@ export async function tick(ctx) {
 
 export function listSkills() {
   return SKILLS.map(s => s.name);
+}
+
+// Skill metadata for the admin command-center UI.
+export function skillCatalog() {
+  return SKILLS.map(s => ({ name: s.name, kind: s.kind, cooldownMs: s.cooldownMs || 0 }));
+}
+
+// Run a named skill on demand — operator override from the /dj/skill route.
+// Bypasses the frequency gate and the cooldown (`eligible()`), but still
+// records `lastFired` so the autonomous tick doesn't immediately double-fire.
+// Returns the spoken text.
+export async function runSkill(name, ctx) {
+  const skill = SKILLS.find(s => s.name === name);
+  if (!skill) throw new Error(`unknown skill: ${name}`);
+
+  let data = null;
+  if (typeof skill.fetchData === 'function') {
+    data = await skill.fetchData(ctx, state.get(skill.name));
+  }
+  const text = await skill.script(ctx, data, {
+    state: state.get(skill.name),
+    recap: queue.getDjRecap(),
+    recentOpeners: queue.getRecentOpeners(),
+  });
+  if (!text || !text.trim()) throw new Error(`skill "${name}" produced no text`);
+
+  lastFired.set(skill.name, Date.now());
+  await queue.announce(text.trim(), skill.kind);
+  return text.trim();
 }

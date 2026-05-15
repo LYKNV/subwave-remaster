@@ -109,19 +109,17 @@ function runCapture(cmd, args, opts = {}) {
 }
 
 async function preflight() {
+  // ffmpeg is intentionally not checked — emergency.mp3 / bed.mp3 are rendered
+  // by borrowing ffmpeg from the Liquidsoap image, so Docker is the only need.
   const checks = [
     { name: 'node >= 20', ok: Number(process.versions.node.split('.')[0]) >= 20 },
     { name: 'docker on PATH', ok: which('docker') },
     { name: 'docker daemon running', ok: runCapture('docker', ['info']).status === 0 },
-    { name: 'ffmpeg on PATH (for emergency.mp3 / bed.mp3)', ok: which('ffmpeg') },
   ];
   const body = checks.map((c) => `  ${c.ok ? pc.green('✓') : pc.red('✗')} ${c.name}`).join('\n');
   note(body, 'Prerequisites');
-  const fatal = checks.find((c) => !c.ok && c.name !== 'ffmpeg on PATH (for emergency.mp3 / bed.mp3)');
+  const fatal = checks.find((c) => !c.ok);
   if (fatal) bail(`Missing prerequisite: ${fatal.name}`);
-  if (!checks.find((c) => c.name.startsWith('ffmpeg')).ok) {
-    note('ffmpeg not found — emergency.mp3 and bed.mp3 will be skipped. Install it for full fidelity.', 'Warning');
-  }
 }
 
 async function gatherEnv() {

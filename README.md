@@ -185,7 +185,7 @@ sub-wave/
 
 ### Easy way — interactive wizard
 
-Requires Node 20+, Docker, and (optionally) `ffmpeg` on the host.
+Requires Node 20+ and Docker on the host — nothing else.
 
 ```bash
 npm install
@@ -213,7 +213,7 @@ Other npm scripts wrap the common loops:
 ./scripts/setup.sh
 #   → creates state/, generates docker/.env with random Icecast passwords,
 #     seeds controller/.env from .env.example, renders state/icecast.xml,
-#     generates state/emergency.mp3 (needs ffmpeg on host)
+#     generates state/emergency.mp3 (ffmpeg borrowed from the Liquidsoap image)
 # Edit controller/.env: NAVIDROME_URL / USER / PASS, OLLAMA_URL / MODEL
 
 # 2. Web dev env (so the Next.js dev server hits the right hosts)

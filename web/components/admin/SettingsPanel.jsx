@@ -4,13 +4,6 @@ import { useEffect, useState } from 'react';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 
-const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
-const FREQUENCY_HINTS = {
-  quiet:      'Quiet — talks every 8-20 tracks · station ID once an hour · weather hourly on change.',
-  moderate:   'Moderate — talks every 1-9 tracks · station IDs at :15 and :45 · weather every 30 min on change.',
-  aggressive: 'Aggressive — talks every 1-3 tracks · station IDs four times an hour · weather every 15 min on change.',
-};
-
 const TTS_KIND_LABEL = {
   'dj-speak':     'Track intros',
   'link':         'Between-track links',
@@ -66,14 +59,6 @@ export default function SettingsPanel() {
         ...data.values.weather,
         lat: String(data.values.weather.lat),
         lng: String(data.values.weather.lng),
-      },
-      dj: {
-        name: data.values.dj?.name ?? '',
-        soulsText: Array.isArray(data.values.dj?.souls)
-          ? data.values.dj.souls.join('\n')
-          : (data.values.dj?.soul ?? ''),
-        systemPrompt: data.values.dj?.systemPrompt ?? '',
-        frequency: data.values.dj?.frequency ?? 'moderate',
       },
       tts: {
         defaultEngine: data.values.tts?.defaultEngine ?? 'piper',
@@ -191,173 +176,6 @@ export default function SettingsPanel() {
 
       {data && (
         <>
-          <Section title="Auto-DJ">
-            <Row>
-              <div>
-                <Lead>Picker status</Lead>
-                <Hint>
-                  {data.pickerBusy ? 'Asking Ollama for the next track…' : 'Idle — picks fire on each track change.'}
-                </Hint>
-              </div>
-              <span
-                className="v3-caption"
-                style={{ color: data.pickerBusy ? 'var(--accent)' : 'var(--muted)' }}
-              >
-                {data.pickerBusy ? 'thinking' : 'idle'}
-              </span>
-            </Row>
-            <Footnote>picker model: {data.llm?.active ?? `${data.ollama.model} @ ${data.ollama.url}`}</Footnote>
-          </Section>
-
-          {form && (
-            <Section title="DJ persona">
-              <FormRow
-                label="Name"
-                hint="Shown in the TopBar and referenced by the LLM as the DJ's on-air name."
-              >
-                <TextInput
-                  value={form.dj.name}
-                  onChange={e => setForm(f => ({ ...f, dj: { ...f.dj, name: e.target.value } }))}
-                  maxLength={40}
-                  style={{ width: 240 }}
-                />
-              </FormRow>
-
-              <FormRow
-                label="Talk frequency"
-                hint="How often the DJ speaks between tracks and at the top of each hour. Music selection is unaffected."
-              >
-                <FrequencySegmented
-                  value={form.dj.frequency}
-                  onChange={v => setForm(f => ({ ...f, dj: { ...f.dj, frequency: v } }))}
-                />
-              </FormRow>
-              <Footnote>
-                {FREQUENCY_HINTS[form.dj.frequency]}
-              </Footnote>
-
-              <FormRow
-                label="Souls"
-                hint="One short personality per line. The DJ picks one at random per spoken line, so adding 3-6 distinct souls makes back-to-back segments feel different. Each line is injected into the system prompt as {soul}."
-              >
-                <textarea
-                  rows={8}
-                  value={form.dj.soulsText}
-                  onChange={e => setForm(f => ({ ...f, dj: { ...f.dj, soulsText: e.target.value } }))}
-                  className="w-full v3-focus"
-                  style={{
-                    boxSizing: 'border-box',
-                    border: '1px solid var(--ink)',
-                    background: 'transparent',
-                    padding: 10,
-                    fontSize: 13,
-                    fontFamily: 'inherit',
-                    color: 'var(--ink)',
-                    resize: 'vertical',
-                    lineHeight: 1.5,
-                  }}
-                />
-              </FormRow>
-              <div className="flex items-center gap-2 mt-1">
-                <OutlineButton
-                  onClick={() => setForm(f => ({
-                    ...f,
-                    dj: {
-                      ...f.dj,
-                      soulsText: Array.isArray(data.defaults?.dj?.souls)
-                        ? data.defaults.dj.souls.join('\n')
-                        : f.dj.soulsText,
-                    },
-                  }))}
-                  disabled={busy || !Array.isArray(data.defaults?.dj?.souls)}
-                >
-                  reset to defaults
-                </OutlineButton>
-                <Footnote>
-                  {form.dj.soulsText.split('\n').filter(l => l.trim()).length} souls · max 10 lines, 400 chars each
-                </Footnote>
-              </div>
-
-              <details className="mt-3" style={{ border: '1px solid var(--ink)' }}>
-                <summary
-                  className="cursor-pointer v3-caption"
-                  style={{ padding: '8px 12px', color: 'var(--ink)' }}
-                >
-                  System prompt template (advanced)
-                </summary>
-                <div style={{ padding: 12, borderTop: '1px solid var(--ink)' }}>
-                  <Hint>
-                    Placeholders: <code>{'{name}'}</code> · <code>{'{soul}'}</code> ·
-                    {' '}<code>{'{station}'}</code> · <code>{'{location}'}</code>.
-                    {' '}<code>{'{name}'}</code> is required.
-                  </Hint>
-                  <textarea
-                    rows={10}
-                    value={form.dj.systemPrompt}
-                    onChange={e => setForm(f => ({ ...f, dj: { ...f.dj, systemPrompt: e.target.value } }))}
-                    maxLength={4000}
-                    className="w-full v3-focus mt-2"
-                    style={{
-                      boxSizing: 'border-box',
-                      border: '1px solid var(--ink)',
-                      background: 'transparent',
-                      padding: 10,
-                      fontSize: 12,
-                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                      color: 'var(--ink)',
-                      resize: 'vertical',
-                      lineHeight: 1.5,
-                    }}
-                  />
-                  <div className="flex items-center gap-2 mt-2">
-                    <OutlineButton
-                      onClick={() => setForm(f => ({
-                        ...f,
-                        dj: { ...f.dj, systemPrompt: data.defaults?.dj?.systemPrompt || '' },
-                      }))}
-                      disabled={busy || !data.defaults?.dj?.systemPrompt}
-                    >
-                      reset to default
-                    </OutlineButton>
-                    <span style={{ color: 'var(--muted)', fontSize: 11 }}>
-                      {form.dj.systemPrompt.length}/4000 chars
-                    </span>
-                  </div>
-                </div>
-              </details>
-
-              <div
-                className="flex flex-wrap items-center gap-3 pt-3 mt-3"
-                style={{ borderTop: '1px solid var(--separator-strong)' }}
-              >
-                <SolidButton
-                  onClick={() => saveSettings({
-                    dj: {
-                      name: form.dj.name.trim(),
-                      souls: form.dj.soulsText
-                        .split('\n')
-                        .map(l => l.trim())
-                        .filter(Boolean),
-                      systemPrompt: form.dj.systemPrompt.trim(),
-                      frequency: form.dj.frequency,
-                    },
-                  })}
-                  disabled={busy}
-                >
-                  save persona
-                </SolidButton>
-                {saveMsg && (
-                  <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
-                    {saveMsg.text}
-                  </span>
-                )}
-              </div>
-              <Footnote>
-                All persona changes apply live — no mixer restart needed.
-              </Footnote>
-            </Section>
-          )}
-
           {form && data.tts && (
             <Section title="TTS voice">
               <Hint>
@@ -1054,35 +872,6 @@ function EngineSelect({ engines, available, value, onChange, allowDefault, defau
             title={disabled ? `${opt.key} is not installed in this build` : opt.label}
           >
             {opt.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function FrequencySegmented({ value, onChange }) {
-  return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--ink)' }}>
-      {FREQUENCIES.map((m, i) => {
-        const active = value === m;
-        return (
-          <button
-            key={m}
-            type="button"
-            onClick={() => onChange(m)}
-            className="v3-eyebrow v3-focus cursor-pointer"
-            style={{
-              background: active ? 'var(--ink)' : 'transparent',
-              color: active ? 'var(--bg)' : 'var(--ink)',
-              border: 'none',
-              borderLeft: i === 0 ? 'none' : '1px solid var(--ink)',
-              padding: '8px 14px',
-              fontSize: 10,
-            }}
-            aria-pressed={active}
-          >
-            {m}
           </button>
         );
       })}

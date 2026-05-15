@@ -8,6 +8,7 @@ import SignInForm from './SignInForm';
 
 const NAV = [
   { href: '/admin/dash',     label: 'Dash' },
+  { href: '/admin/persona',  label: 'Persona' },
   { href: '/admin/settings', label: 'Settings' },
   { href: '/admin/debug',    label: 'Debug' },
 ];

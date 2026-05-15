@@ -313,6 +313,7 @@ class Queue {
       djLog: this.djLog.slice(0, 50),
       autoPick: this.autoPick,
       autoLink: this.autoLink,
+      pickerBusy: this.pickerBusy,
     };
   }
 

@@ -148,6 +148,9 @@ export default function DashPanel() {
               )}
               <span>auto-pick · {q.autoPick ? 'on' : 'off'}</span>
               <span>auto-link · {q.autoLink ? 'on' : 'off'}</span>
+              <span style={{ color: q.pickerBusy ? 'var(--accent)' : 'var(--muted)' }}>
+                picker · {q.pickerBusy ? 'thinking' : 'idle'}
+              </span>
             </div>
             <div>
               <div className="v3-caption mb-1" style={{ color: 'var(--muted)' }}>

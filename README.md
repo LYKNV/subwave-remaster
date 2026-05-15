@@ -67,7 +67,7 @@ A real internet radio station. Single Icecast stream — every listener hears th
 
 `web/app/page.js` reads the `SUBWAVE_HOMEPAGE` env var at request time:
 
-- `SUBWAVE_HOMEPAGE=landing` → renders the broadsheet landing with the live player embedded inline. This is what `subwave.zeiq.co` serves.
+- `SUBWAVE_HOMEPAGE=landing` → renders the broadsheet landing with the live player embedded inline. Set this on the public marketing host.
 - `SUBWAVE_HOMEPAGE=player` (default) → renders the fullscreen listener UI directly. Use this on private/Tailscale-only instances that don't need marketing.
 
 The landing fetches a public `/api/dj` endpoint for the DJ's name and persona; everything else (now-playing, history, booth log) comes through the same 5-second polling used by the player.
@@ -386,7 +386,7 @@ Energy: `low | medium | high`. Stats appear on `/admin/debug` once at least one 
 ```bash
 curl -X POST http://localhost:7701/request \
   -H 'Content-Type: application/json' \
-  -d '{"text": "something for late-night driving", "name": "klair"}'
+  -d '{"text": "something for late-night driving", "name": "Alex"}'
 ```
 
 Flow: the LLM parses intent → resolves it across several pick strategies (artist+sort like "latest album by X", search-term match, mood library, similar-to-current, dominant-mood, starred) → generates a contextual DJ intro that can weave the listener's own words into the announcement → TTS renders the intro WAV → both pushed to Liquidsoap. The intro plays through the heavy-duck `voice_queue` so the music drops well underneath.

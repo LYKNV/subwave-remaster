@@ -1,6 +1,6 @@
 ---
 name: subwave-deploy
-description: Set up, deploy, or update SUB/WAVE (personal radio station at /home/klair/Projects/subwave). On a fresh checkout, runs scripts/setup.sh, prompts for Navidrome + Ollama credentials, brings the stack up, and generates jingles. On an already-running stack, pulls the latest, rebuilds only the Docker services whose code actually changed, recreates them, and verifies the stream is on-air. Use this skill any time the user wants to install, set up, bootstrap, deploy, update, sync, redeploy, refresh, restart, or "pull and restart" SUB/WAVE — including phrases like "set up subwave", "install subwave", "first boot", "bootstrap the radio", "pull subwave", "update the radio", "deploy subwave", "rebuild controller", "restart sub-wave", "redeploy after pull", "git pull and restart as needed", "check if the stream is healthy", or simply "deploy" / "install" / "set up" while in the subwave repo. Trigger proactively whenever the user is working in /home/klair/Projects/subwave and mentions setting up, installing, deploying, updating, rebuilding, restarting, or checking the running stack — even if they don't name the skill. Free to pull, rebuild, recreate, render Icecast config, generate jingles, and run health probes; confirm before destructive ops like wiping `state/`, removing volumes, full `down -v`, or overwriting an existing controller/.env that already has the operator's Navidrome password.
+description: Set up, deploy, or update SUB/WAVE (a personal internet radio station). On a fresh checkout, runs scripts/setup.sh, prompts for Navidrome + Ollama credentials, brings the stack up, and generates jingles. On an already-running stack, pulls the latest, rebuilds only the Docker services whose code actually changed, recreates them, and verifies the stream is on-air. Use this skill any time the user wants to install, set up, bootstrap, deploy, update, sync, redeploy, refresh, restart, or "pull and restart" SUB/WAVE — including phrases like "set up subwave", "install subwave", "first boot", "bootstrap the radio", "pull subwave", "update the radio", "deploy subwave", "rebuild controller", "restart sub-wave", "redeploy after pull", "git pull and restart as needed", "check if the stream is healthy", or simply "deploy" / "install" / "set up" while in the subwave repo. Trigger proactively whenever the user is working in the subwave repo and mentions setting up, installing, deploying, updating, rebuilding, restarting, or checking the running stack — even if they don't name the skill. Free to pull, rebuild, recreate, render Icecast config, generate jingles, and run health probes; confirm before destructive ops like wiping `state/`, removing volumes, full `down -v`, or overwriting an existing controller/.env that already has the operator's Navidrome password.
 ---
 
 # SUB/WAVE deploy
@@ -26,12 +26,23 @@ The user has authorised free action on this hot path — `scripts/setup.sh`, `gi
 
 ## Workflow
 
+This skill is checked into the SUB/WAVE repo. `$REPO` below is the repo root —
+derive it once, don't hardcode it:
+
+```bash
+REPO=$(git -C "<this skill's base directory>" rev-parse --show-toplevel)
+```
+
+`<this skill's base directory>` is the absolute path shown as "Base directory
+for this skill" when the skill loads. Shell state does not persist between
+commands, so re-derive `$REPO` (or substitute its value) in each block below.
+
 ### Step 0 — Detect the install state
 
 Before anything else, figure out which mode you're in. Three possibilities:
 
 ```bash
-cd /home/klair/Projects/subwave
+cd "$REPO"
 
 # Are containers up?
 RUNNING_PROD=$(docker compose -f docker/docker-compose.prod.yml ps -q 2>/dev/null)
@@ -191,7 +202,7 @@ This is the everyday case. Steps 1 through 6 below are the deploy workflow.
 ### Step 1 — Locate the repo and detect the stack
 
 ```bash
-cd /home/klair/Projects/subwave
+cd "$REPO"
 
 # Which compose file is live? Whichever has containers up.
 docker compose -f docker/docker-compose.prod.yml ps

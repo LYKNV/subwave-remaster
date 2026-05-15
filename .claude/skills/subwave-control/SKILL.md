@@ -1,13 +1,23 @@
 ---
 name: subwave-control
-description: Start or stop the SUB/WAVE radio stack (personal radio station at /Users/klair/Projects/sub-wave) in dev or production mode — no builds, no rebuilds, no config rendering. Use this skill any time the user wants to "start subwave", "stop subwave", "bring up the radio", "shut down the radio", "boot subwave in dev/prod", "turn subwave on/off", "is subwave running?", or otherwise just power the stack up or down. Detects which compose file (dev vs prod) is already running and matches it; if nothing is running, asks dev or prod. Dev mode also launches the Next.js web dev server on :7700 in the background. Always verifies the stream is on-air after a start. Do NOT use this skill for first-time setup, `git pull` + rebuilds, jingle generation, or config changes — that's `subwave-deploy`. If the user asks for any of those, hand off rather than starting.
+description: Start or stop the SUB/WAVE radio stack (a personal internet radio station) in dev or production mode — no builds, no rebuilds, no config rendering. Use this skill any time the user wants to "start subwave", "stop subwave", "bring up the radio", "shut down the radio", "boot subwave in dev/prod", "turn subwave on/off", "is subwave running?", or otherwise just power the stack up or down. Detects which compose file (dev vs prod) is already running and matches it; if nothing is running, asks dev or prod. Dev mode also launches the Next.js web dev server on :7700 in the background. Always verifies the stream is on-air after a start. Do NOT use this skill for first-time setup, `git pull` + rebuilds, jingle generation, or config changes — that's `subwave-deploy`. If the user asks for any of those, hand off rather than starting.
 ---
 
 # SUB/WAVE control
 
 Bring the SUB/WAVE stack up or down. Nothing more. No builds, no pulls, no setup — if any of those are needed, hand off to the `subwave-deploy` skill.
 
-The repo lives at `/Users/klair/Projects/sub-wave`. All `docker compose` invocations run from `docker/` inside that repo.
+This skill is checked into the SUB/WAVE repo. The repo root is the git
+repository that contains this skill — derive it once, don't hardcode it:
+
+```bash
+REPO=$(git -C "<this skill's base directory>" rev-parse --show-toplevel)
+```
+
+`<this skill's base directory>` is the absolute path shown as "Base directory
+for this skill" when the skill loads. All `docker compose` invocations run from
+`docker/` inside `$REPO`. Shell state does not persist between commands, so
+re-derive `$REPO` (or substitute its value) in each command block below.
 
 ## The three things you need to know
 
@@ -24,7 +34,7 @@ The repo lives at `/Users/klair/Projects/sub-wave`. All `docker compose` invocat
 ### Step 0 — Detect what's running
 
 ```bash
-cd /Users/klair/Projects/sub-wave
+cd "$REPO"
 RUNNING_DEV=$(docker compose -f docker/docker-compose.yml ps -q 2>/dev/null)
 RUNNING_PROD=$(docker compose -f docker/docker-compose.prod.yml ps -q 2>/dev/null)
 WEB_DEV_PID=$(lsof -nP -iTCP:7700 -sTCP:LISTEN -t 2>/dev/null | head -1)
@@ -44,13 +54,13 @@ For stop: target whichever is currently up. If nothing is up, say so and stop.
 ### Step 1 — Start (dev)
 
 ```bash
-cd /Users/klair/Projects/sub-wave/docker && docker compose up -d
+cd "$REPO/docker" && docker compose up -d
 ```
 
 Then start the web dev server (run it in the background — do not block waiting for it):
 
 ```bash
-cd /Users/klair/Projects/sub-wave/web && npm run dev
+cd "$REPO/web" && npm run dev
 ```
 
 If `web/node_modules` is missing, run `npm install` first. If `:7700` is already taken by something other than a prior `next dev` (e.g. macOS `ControlCenter` for AirPlay), surface the conflict to the user — do not try to kill ControlCenter.
@@ -58,7 +68,7 @@ If `web/node_modules` is missing, run `npm install` first. If `:7700` is already
 ### Step 1 — Start (prod)
 
 ```bash
-cd /Users/klair/Projects/sub-wave
+cd "$REPO"
 STATE_DIR=${STATE_DIR:-/var/lib/subwave} docker compose -f docker/docker-compose.prod.yml up -d
 ```
 
@@ -84,7 +94,7 @@ If the health probe fails, peek at `docker compose logs --tail=30 controller liq
 # Stop the web dev server first (it holds :7700)
 WEB_DEV_PID=$(lsof -nP -iTCP:7700 -sTCP:LISTEN -t 2>/dev/null | head -1)
 [ -n "$WEB_DEV_PID" ] && kill "$WEB_DEV_PID"
-cd /Users/klair/Projects/sub-wave/docker && docker compose down
+cd "$REPO/docker" && docker compose down
 ```
 
 If `:7700` is held by `ControlCenter` (AirPlay) and not `node`, skip the kill — don't kill ControlCenter. Confirm with `lsof -nP -iTCP:7700 -sTCP:LISTEN` and check the COMMAND column before sending the signal.
@@ -92,7 +102,7 @@ If `:7700` is held by `ControlCenter` (AirPlay) and not `node`, skip the kill �
 ### Step 1 — Stop (prod)
 
 ```bash
-cd /Users/klair/Projects/sub-wave && docker compose -f docker/docker-compose.prod.yml down
+cd "$REPO" && docker compose -f docker/docker-compose.prod.yml down
 ```
 
 Do **not** add `-v` (would wipe the named volumes for Caddy data/config) unless the user explicitly asks. State at `${STATE_DIR}` is a host bind mount and is not affected by `down` either way.

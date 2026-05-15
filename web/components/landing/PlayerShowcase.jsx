@@ -19,7 +19,7 @@ export default function PlayerShowcase() {
         </div>
         <div className="bs-frame-url">
           <span style={{ color: 'var(--muted)' }}>https://</span>
-          <span>subwave.zeiq.co</span>
+          <span>radio.example.com</span>
           <span style={{ color: 'var(--muted)' }}>/listen</span>
         </div>
         <div className="bs-frame-live" aria-hidden="true">

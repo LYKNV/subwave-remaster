@@ -9,7 +9,7 @@ export const config = {
     clientName: 'sub-wave',
   },
   ollama: {
-    url: process.env.OLLAMA_URL || 'http://x1pro.tail.ts.net:11434',
+    url: process.env.OLLAMA_URL || 'http://localhost:11434',
     model: process.env.OLLAMA_MODEL || 'qwen2.5:7b',
   },
   piper: {

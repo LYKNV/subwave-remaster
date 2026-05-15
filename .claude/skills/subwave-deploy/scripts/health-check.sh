@@ -11,8 +11,11 @@
 
 set -u
 
-REPO="/home/klair/Projects/subwave"
-cd "$REPO" || { echo "subwave repo not at $REPO"; exit 2; }
+# Resolve the repo root from this script's own location — it lives at
+# <repo>/.claude/skills/subwave-deploy/scripts/health-check.sh.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || cd "$SCRIPT_DIR/../../../.." && pwd)
+cd "$REPO" || { echo "subwave repo not found at $REPO"; exit 2; }
 
 # --- pick the live compose file ---------------------------------------------
 PROD="docker/docker-compose.prod.yml"

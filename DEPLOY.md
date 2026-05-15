@@ -1,12 +1,12 @@
 # Deploy
 
-Production deploy of SUB/WAVE on a single Linux host (Ronin in the homelab).
+Production deploy of SUB/WAVE on a single Linux host.
 Cloudflare in front terminates TLS; Caddy on the host serves plain HTTP on
 `:80` and routes to the four internal services (web, controller, icecast,
 liquidsoap).
 
 ```
-Internet ── HTTPS ──▶ Cloudflare ── HTTP ──▶ Ronin :80 (Caddy)
+Internet ── HTTPS ──▶ Cloudflare ── HTTP ──▶ host :80 (Caddy)
                                                 ├── /          → web:7700
                                                 ├── /api/*     → controller:7701
                                                 └── /stream.mp3 → icecast:7702
@@ -24,7 +24,7 @@ sudo usermod -aG docker "$USER"
 ```
 
 Outbound network requirements from the host:
-- Ollama: whatever URL is in `controller/.env` (e.g. `http://x1pro.tail.ts.net:11434`)
+- Ollama: whatever URL is in `controller/.env` (e.g. `http://localhost:11434`)
 - Navidrome: same (Subsonic API)
 - Open-Meteo (`api.open-meteo.com`) — public, no auth
 
@@ -113,7 +113,7 @@ picked up live — no restart.
 
 ## 6. Cloudflare
 
-DNS: an `A` record for `subwave.<your-domain>` pointing at Ronin's public
+DNS: an `A` record for `subwave.<your-domain>` pointing at the host's public
 IPv4 (or use Cloudflare Tunnel — see note below). Proxy status: **proxied**
 (orange cloud).
 

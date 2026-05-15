@@ -82,7 +82,7 @@ Source is grouped by domain. `server.js`, `config.js`, `settings.js`, and `conte
 - `broadcast/liquidsoap-control.js` — opens a telnet socket to Liquidsoap on port 1234 and issues the custom `restart` server command, which calls `shutdown()` and lets the container's restart policy bring it back ~3 s later with the new `liquidsoap_*.txt` values applied.
 - `music/library.js` / `music/tag-library.js` — `moods.json` store + standalone tagger (`npm run tag [-- --limit N]`). Resumable, saves every 25 tags.
 - `broadcast/jingles.js` — pre-rendered TTS stinger management. Writes WAVs into `${STATE_DIR}/jingles/`, rewrites `jingles.m3u`, and updates `jingles.json` (metadata). The `default-id` ident is protected from deletion. `broadcast/tagger.js` tracks the background tag-library child process for the `/tag-library` and `/settings` routes.
-- `config.js` — single source of truth for env-derived config. Default URLs point at Tailscale hostnames (`ronin.tail.ts.net`, `x1pro.tail.ts.net`).
+- `config.js` — single source of truth for env-derived config. Defaults point at `localhost`; override every URL via `controller/.env`.
 
 ### Liquidsoap (`liquidsoap/radio.liq`)
 

@@ -50,7 +50,7 @@ claude mcp add subwave \
   --env SUBWAVE_API_URL=http://localhost:7701 \
   --env SUBWAVE_ADMIN_USER=admin \
   --env SUBWAVE_ADMIN_PASS=changeme \
-  -- node /Users/klair/Projects/subwave/web/mcp-subwave/dist/index.js
+  -- node /absolute/path/to/subwave/mcp-subwave/dist/index.js
 ```
 
 ### Claude Desktop (`claude_desktop_config.json`)
@@ -60,7 +60,7 @@ claude mcp add subwave \
   "mcpServers": {
     "subwave": {
       "command": "node",
-      "args": ["/Users/klair/Projects/subwave/web/mcp-subwave/dist/index.js"],
+      "args": ["/absolute/path/to/subwave/mcp-subwave/dist/index.js"],
       "env": {
         "SUBWAVE_API_URL": "http://localhost:7701",
         "SUBWAVE_ADMIN_USER": "admin",

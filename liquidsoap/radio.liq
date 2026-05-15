@@ -408,7 +408,7 @@ output.icecast(
   name="SUB/WAVE",
   description="Personal frequency from the homelab",
   genre="Various",
-  url="http://ronin.tail.ts.net:7700",
+  url="http://localhost:7700",
   radio
 )
 

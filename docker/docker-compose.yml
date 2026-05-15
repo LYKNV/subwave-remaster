@@ -2,7 +2,7 @@
 # Runs: Icecast (broadcast) → Liquidsoap (mixer) → Controller (brain)
 # Web UI runs separately (next.js dev/prod)
 #
-# Navidrome is remote (https://music.klair.co). Ollama runs on the Mac host.
+# Navidrome and Ollama are reached over the network (see controller/.env).
 
 services:
   # -------------------------------------------------------------------------

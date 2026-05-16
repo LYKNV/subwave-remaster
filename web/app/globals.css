@@ -1335,23 +1335,22 @@ body::after {
   --ink-soft: color-mix(in oklab, var(--ink) 6%, transparent);
   --ink-softer: color-mix(in oklab, var(--ink) 3%, transparent);
   --muted-2: color-mix(in oklab, var(--muted) 70%, var(--bg));
-  /* Two-tone surface split, mirroring the design bundle (body #e8e4dc under a
-     lighter #f3efe6 paper). Light mode keeps cards at the bright cream and
-     darkens the page beneath them; dark mode keeps the page at the deep
-     charcoal and lifts the cards — so cards always read as panels instead of
-     dissolving into the page. */
+  /* Two-tone surface split so cards always read as panels instead of
+     dissolving into the page. Light mode keeps cards at the bright cream and
+     darkens the page beneath them; dark mode keeps cards at the deep charcoal
+     and lifts the page around them — cards sit darker than the page. */
   --card-bg: var(--bg);
   --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
 }
 
 :root[data-theme="dark"] .admin-root {
-  --card-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
-  --page-bg: var(--bg);
+  --card-bg: var(--bg);
+  --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .admin-root {
-    --card-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
-    --page-bg: var(--bg);
+    --card-bg: var(--bg);
+    --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
   }
 }
 

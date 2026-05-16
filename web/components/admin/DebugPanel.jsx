@@ -174,6 +174,14 @@ export default function DebugPanel() {
                     <div style={{ padding: '4px 10px 10px', display: 'grid', gap: 4, fontSize: 11 }}>
                       {c.user && <CallField label="user">{c.user}</CallField>}
                       {c.systemPreview && <CallField label="system…">{c.systemPreview}…</CallField>}
+                      {c.system && <CallField label="system">{c.system}</CallField>}
+                      {Array.isArray(c.messages) && c.messages.length > 0 && (
+                        <CallField label="messages">{fmtMessages(c.messages)}</CallField>
+                      )}
+                      {Array.isArray(c.toolCalls) && c.toolCalls.length > 0 && (
+                        <CallField label="tools">{fmtToolCalls(c.toolCalls)}</CallField>
+                      )}
+                      {c.steps != null && <CallField label="steps">{String(c.steps)}</CallField>}
                       {c.response && <CallField label="response">{c.response}</CallField>}
                       {c.error && <CallField label="error" tone="err">{c.error}</CallField>}
                     </div>
@@ -514,6 +522,34 @@ function CallField({ label, children, tone }) {
       </span>
     </div>
   );
+}
+
+// The agent tool-loop trail — one numbered line per call: name, args, and a
+// short result preview so a pick's reasoning path is readable at a glance.
+function fmtToolCalls(calls) {
+  return calls
+    .map((c, i) => {
+      const args = c.args ? JSON.stringify(c.args) : '';
+      let result = '';
+      if (c.result != null) {
+        const r = typeof c.result === 'string' ? c.result : JSON.stringify(c.result);
+        result = `\n   → ${r.length > 240 ? `${r.slice(0, 240)}…` : r}`;
+      }
+      return `${i + 1}. ${c.name}(${args})${result}`;
+    })
+    .join('\n');
+}
+
+// The full messages window sent to the agent — one block per turn.
+function fmtMessages(messages) {
+  return messages
+    .map((m) => {
+      const body = typeof m.content === 'string'
+        ? m.content
+        : JSON.stringify(m.content);
+      return `[${m.role}] ${body}`;
+    })
+    .join('\n\n');
 }
 
 function fmtListeners(icecast) {

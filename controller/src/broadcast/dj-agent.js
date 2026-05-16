@@ -100,7 +100,7 @@ async function pickViaAgent(queue, { wantLink }) {
   const recentIds = queue.recentlyPlayedIds(25);
   const { tools, seen } = buildPickerTools({ recentIds });
 
-  const { object, steps } = await djAgent({
+  const { object, steps, toolCalls } = await djAgent({
     system: pickSystem(wantLink),
     messages: session.windowMessages(),
     tools,
@@ -116,7 +116,10 @@ async function pickViaAgent(queue, { wantLink }) {
   session.appendTurn({
     role: 'dj', kind: 'pick',
     text: object.reason || `Selected "${song.title}".`,
-    meta: { trackId: song.id, title: song.title, artist: song.artist, steps, say: say || null },
+    meta: {
+      trackId: song.id, title: song.title, artist: song.artist,
+      steps, toolCalls, say: say || null,
+    },
   });
   if (wantLink && say) await queue.announce(say, 'link');
 }
@@ -187,7 +190,7 @@ export async function runRequest(queue, ctx, { requester, text }) {
   const recentIds = queue.recentlyPlayedIds(25);
   const { tools, seen } = buildPickerTools({ recentIds });
 
-  const { object } = await djAgent({
+  const { object, toolCalls } = await djAgent({
     system: requestSystem(),
     messages: session.windowMessages(),
     tools,
@@ -208,7 +211,7 @@ export async function runRequest(queue, ctx, { requester, text }) {
   session.appendTurn({
     role: 'dj', kind: 'request',
     text: intro || object.ack || `Queued "${song.title}".`,
-    meta: { trackId: song.id, requester },
+    meta: { trackId: song.id, requester, toolCalls },
   });
 
   return {

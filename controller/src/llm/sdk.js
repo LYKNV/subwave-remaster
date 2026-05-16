@@ -171,7 +171,6 @@ export async function djAgent({
   kind = 'sdk.djAgent',
 }) {
   const started = Date.now();
-  const lastUser = [...(messages || [])].reverse().find(m => m.role === 'user');
   try {
     const agent = new ToolLoopAgent({
       model: languageModel(),
@@ -184,22 +183,38 @@ export async function djAgent({
     const result = await agent.generate({ messages });
     const steps = result.steps?.length ?? 0;
     const object = schema ? result.output : stripThinking(result.text);
+    // Flatten the tool-loop into an ordered trail of {name, args, result} so
+    // the /debug surface shows exactly which library tools the agent called.
+    const toolCalls = (result.steps || []).flatMap((s) => {
+      const results = s.toolResults || [];
+      return (s.toolCalls || []).map((c, i) => ({
+        name: c.toolName,
+        args: c.input ?? c.args ?? null,
+        result: results[i]?.output ?? results[i]?.result ?? null,
+      }));
+    });
     record({
       kind, ok: true, ms: Date.now() - started,
       model: activeModelLabel(),
       sampling: { temperature },
       via: 'ai-sdk:agent',
-      systemPreview: system?.slice(0, 200),
-      user: typeof lastUser?.content === 'string' ? lastUser.content : '',
-      response: `steps=${steps} ${JSON.stringify(object).slice(0, 480)}`,
+      // Full, untruncated — the agent's entire input and trail.
+      system,
+      messages,
+      toolCalls,
+      steps,
+      response: schema
+        ? JSON.stringify(object, null, 2)
+        : String(object ?? ''),
       t: new Date().toISOString(),
     });
-    return { object, steps };
+    return { object, steps, toolCalls };
   } catch (err) {
     record({
       kind, ok: false, ms: Date.now() - started,
       model: activeModelLabel(), via: 'ai-sdk:agent',
-      user: typeof lastUser?.content === 'string' ? lastUser.content : '',
+      system,
+      messages,
       error: err.message, t: new Date().toISOString(),
     });
     throw err;

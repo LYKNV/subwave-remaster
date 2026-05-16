@@ -399,8 +399,13 @@ music_meta.on_metadata(on_meta)
 # OUTPUT — broadcast to Icecast
 # ---------------------------------------------------------------------------
 
+# id="stream" makes Liquidsoap auto-register the telnet commands
+# stream.start / stream.stop / stream.status — the controller drives these
+# to take the station off air (disconnects the mount) without killing the
+# process. State is not persisted: a restart brings the output back on air.
 output.icecast(
   %mp3(bitrate=192, samplerate=44100, stereo=true),
+  id="stream",
   host="icecast",
   port=7702,
   password=environment.get("ICECAST_SOURCE_PASSWORD"),

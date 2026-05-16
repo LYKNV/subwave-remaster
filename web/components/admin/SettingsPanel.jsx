@@ -47,6 +47,7 @@ export default function SettingsPanel() {
   const [pendingRestart, setPendingRestart] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);  // jingle filename, or null
   const [activeSection, setActiveSection] = useState('tts');
 
@@ -136,6 +137,34 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
+  // Take the station off air — stops the Icecast output (confirmed via dialog).
+  const stopStream = async () => {
+    setBusy(true);
+    try {
+      const r = await adminFetch('/stream-stop', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setSaveMsg({ tone: 'ok', text: 'stream stopped — station is off air' });
+      await refresh();
+    } catch (e) {
+      setSaveMsg({ tone: 'err', text: e.message });
+    } finally { setBusy(false); }
+  };
+
+  // Bring the station back on air — non-destructive, no confirm needed.
+  const startStream = async () => {
+    setBusy(true);
+    try {
+      const r = await adminFetch('/stream-start', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setSaveMsg({ tone: 'ok', text: 'stream started — station is on air' });
+      await refresh();
+    } catch (e) {
+      setSaveMsg({ tone: 'err', text: e.message });
+    } finally { setBusy(false); }
+  };
+
   const createJingle = async () => {
     if (!jingleText.trim() || busy) return;
     setBusy(true);
@@ -199,6 +228,26 @@ export default function SettingsPanel() {
 
         <div style={{ marginTop: 16, padding: 12, border: '1px dashed var(--separator-strong)', display: 'grid', gap: 8 }}>
           <span className="caption">danger zone</span>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            <span style={{ color: 'var(--muted)' }}>broadcast</span>
+            <strong style={{ color: data?.streamOnAir === false ? 'var(--danger)' : data?.streamOnAir ? 'var(--accent)' : 'var(--muted)' }}>
+              {data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air'}
+            </strong>
+          </div>
+          {data?.streamOnAir === false ? (
+            <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
+              Start stream
+            </Btn>
+          ) : (
+            <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
+              Stop stream
+            </Btn>
+          )}
+          <div style={{ fontSize: 10, color: 'var(--muted)', lineHeight: 1.4 }}>
+            Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
+          </div>
+
           <Btn sm tone="danger" onClick={() => setConfirmRestart(true)} disabled={busy || !data}>
             Restart mixer
           </Btn>
@@ -267,6 +316,15 @@ export default function SettingsPanel() {
         confirmLabel="restart mixer"
         danger
         onConfirm={restartMixer}
+      />
+      <V3AlertDialog
+        open={confirmStop}
+        onOpenChange={setConfirmStop}
+        title="Stop stream"
+        description="Take the station off air? The Icecast mount disconnects — every current listener is dropped and new listeners get nothing until you start the stream again."
+        confirmLabel="stop stream"
+        danger
+        onConfirm={stopStream}
       />
       <V3AlertDialog
         open={confirmDelete != null}

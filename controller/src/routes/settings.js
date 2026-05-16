@@ -9,7 +9,7 @@ import * as settings from '../settings.js';
 import * as tts from '../audio/tts.js';
 import * as llmProvider from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
-import { restartLiquidsoap } from '../broadcast/liquidsoap-control.js';
+import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { tagger } from '../broadcast/tagger.js';
@@ -26,9 +26,13 @@ router.get('/settings', requireAdmin, async (req, res) => {
     // Redacted view — masks llm.apiKey / tts.cloud.apiKey so secrets never
     // leave the process. The UI shows "set"/"" and round-trips it harmlessly.
     const s = settings.getRedacted();
+    // On-air status — a telnet failure must not 500 the whole settings load.
+    let streamOnAir = null;
+    try { streamOnAir = await streamStatus(); } catch {}
     res.json({
       autoPick: queue.autoPick,
       pickerBusy: queue.pickerBusy,
+      streamOnAir,
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
@@ -103,6 +107,33 @@ router.post('/restart-mixer', requireAdmin, async (req, res) => {
   try {
     await restartLiquidsoap();
     queue.log('scheduler', 'mixer restart requested');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /stream-stop — take the station off air by stopping the Icecast output.
+// The mixer process keeps running; the /stream.mp3 mount disconnects.
+// ---------------------------------------------------------------------------
+router.post('/stream-stop', requireAdmin, async (req, res) => {
+  try {
+    await stopStream();
+    queue.log('scheduler', 'stream stopped — off air');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /stream-start — bring the station back on air (reconnect Icecast output)
+// ---------------------------------------------------------------------------
+router.post('/stream-start', requireAdmin, async (req, res) => {
+  try {
+    await startStream();
+    queue.log('scheduler', 'stream started — on air');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

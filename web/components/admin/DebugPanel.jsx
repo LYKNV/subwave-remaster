@@ -121,15 +121,15 @@ export default function DebugPanel() {
         <>
           {/* ── ROW 1 — NOW PLAYING / ICECAST / DJ CONTEXT ──────────────── */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-            <Card title="Now playing" sub="now-playing.json">
+            <Card title="Now playing" sub="now-playing.json" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <KvTable obj={data.nowPlaying} />
             </Card>
 
-            <Card title="Icecast">
+            <Card title="Icecast" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <KvTable obj={data.icecast} />
             </Card>
 
-            <Card title="DJ context">
+            <Card title="DJ context" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <KvTable obj={data.context} />
             </Card>
           </div>
@@ -139,8 +139,10 @@ export default function DebugPanel() {
             <Card
               title="LLM recent calls"
               sub={`${data.llm?.recentCalls?.length ?? 0} · ${data.llm?.provider || '—'} / ${data.llm?.activeModel || '—'}`}
+              style={{ display: 'flex', flexDirection: 'column' }}
+              bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
             >
-              <div style={{ display: 'grid', gap: 6, maxHeight: 384, overflowY: 'auto' }}>
+              <div style={{ display: 'grid', gap: 6, flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {(data.llm?.recentCalls?.length ?? 0) === 0 && (
                   <span className="field-hint" style={{ fontStyle: 'italic' }}>no calls yet</span>
                 )}
@@ -176,6 +178,8 @@ export default function DebugPanel() {
             <Card
               title="Liquidsoap log"
               sub="last 100 lines"
+              style={{ display: 'flex', flexDirection: 'column' }}
+              bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
               right={
                 <label style={{
                   display: 'flex', alignItems: 'center', gap: 6, fontSize: 10,
@@ -190,7 +194,7 @@ export default function DebugPanel() {
                 </label>
               }
             >
-              <pre ref={logRef} className="term" style={{ maxHeight: 260 }}>
+              <pre ref={logRef} className="term" style={{ flex: 1, minHeight: 0 }}>
                 {data.liquidsoapLog || '— no log —'}
               </pre>
             </Card>
@@ -198,11 +202,11 @@ export default function DebugPanel() {
 
           {/* ── ROW 3 — STATE DIR + VOICE WAVS + LIBRARY ────────────────── */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: 16 }}>
-            <Card title="State dir" sub="/var/sub-wave">
+            <Card title="State dir" sub="/var/sub-wave" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <FilesTable files={data.stateFiles} />
             </Card>
 
-            <Card title="DJ voice WAVs" sub={`${data.voiceFiles?.length ?? 0} files`}>
+            <Card title="DJ voice WAVs" sub={`${data.voiceFiles?.length ?? 0} files`} bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <FilesTable files={data.voiceFiles} />
             </Card>
 
@@ -253,7 +257,7 @@ export default function DebugPanel() {
               )}
             </Card>
 
-            <Card title="Upcoming queue" sub={`${data.queue?.upcoming?.length ?? 0} tracks`}>
+            <Card title="Upcoming queue" sub={`${data.queue?.upcoming?.length ?? 0} tracks`} bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               {(data.queue?.upcoming?.length ?? 0) === 0 ? (
                 <span className="field-hint" style={{ fontStyle: 'italic' }}>queue empty</span>
               ) : (
@@ -292,7 +296,7 @@ export default function DebugPanel() {
           </Card>
 
           {/* ── CONFIG (full width) ─────────────────────────────────────── */}
-          <Card title="Config" sub="redacted">
+          <Card title="Config" sub="redacted" bodyStyle={{ maxHeight: 360, overflowY: 'auto' }}>
             <KvTable obj={data.config} />
           </Card>
         </>

@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
-import { Card, Btn, Pill, Eyebrow, Seg, Toggle, Wave } from './ui';
+import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
 
 const SAY_KINDS = [
   { id: 'dj-speak', label: 'Solo' },
@@ -201,25 +201,9 @@ export default function DashPanel() {
           </div>
         </div>
 
-        {/* waveform band */}
-        <div style={{ padding: '14px 18px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 40px', gap: 12, alignItems: 'flex-end' }}>
-            <span className="mono-num" style={{ fontSize: 10, color: 'var(--muted)' }}>
-              {np?.title ? 'live' : '—'}
-            </span>
-            <div style={{ position: 'relative' }}>
-              <Wave bars={120} seed={(np?.title?.length || 7)} h={48} tone={err ? 'muted' : 'accent'} />
-            </div>
-            <span className="mono-num" style={{ fontSize: 10, color: 'var(--muted)', textAlign: 'right' }}>
-              {q.pickerBusy ? '···' : '—'}
-            </span>
-          </div>
-        </div>
-
         {/* status strip */}
         <div style={{
           display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)',
-          borderTop: '1px solid var(--separator-strong)',
         }}>
           {strip.map((c, i) => (
             <div key={i} style={{
@@ -243,7 +227,7 @@ export default function DashPanel() {
       {/* ── 2-COL OPS ──────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
         {/* LEFT */}
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', gap: 16 }}>
           <Card
             title="Queue"
             sub={`${upcoming.length} upcoming`}
@@ -279,11 +263,13 @@ export default function DashPanel() {
             title="Booth log"
             sub={`${djLog.length} recent`}
             right={<Pill>tail · live</Pill>}
+            style={{ display: 'flex', flexDirection: 'column' }}
+            bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
           >
             {djLog.length === 0 ? (
               <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>nothing logged yet</div>
             ) : (
-              <div ref={logRef} style={{ maxHeight: 320, overflowY: 'auto' }}>
+              <div ref={logRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {djLog.map(e => (
                   <div key={e.id} className={`log ${kindTone(e.kind)}`}>
                     <span className="t">{new Date(e.t).toLocaleTimeString('en-GB', { hour12: false })}</span>

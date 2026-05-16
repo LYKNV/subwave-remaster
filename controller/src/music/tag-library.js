@@ -6,16 +6,22 @@
 // Run:  docker exec sub-wave-controller node src/music/tag-library.js
 //   or  docker exec sub-wave-controller node src/music/tag-library.js --limit 100
 
-import { config } from '../config.js';
+import { z } from 'zod';
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as settings from '../settings.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
+import { djObject } from '../llm/sdk.js';
+import { activeModelLabel } from '../llm/provider.js';
 
-// Resolved in main() from the admin Settings UI (llm.ollamaUrl / llm.model),
-// falling back to the config defaults when those fields are blank.
-let ollamaUrl = config.ollama.url;
-let ollamaModel = config.ollama.model;
+// Tag classification goes through the AI SDK (llm/sdk.js → llm/provider.js)
+// like every other model call, so it follows whatever provider/model the admin
+// Settings UI selects. The result is Zod-validated; moods are filtered against
+// MOOD_VOCAB defensively in case the model drifts off the controlled list.
+const TagSchema = z.object({
+  moods: z.array(z.string()).default([]),
+  energy: z.string().nullable().default(null),
+});
 
 const SYSTEM = `You tag music tracks with mood and energy for a personal radio station.
 
@@ -40,30 +46,13 @@ async function tagOne(song) {
     `Year: ${song.year || '?'}\n` +
     `Genre: ${song.genre || '?'}`;
 
-  const res = await fetch(`${ollamaUrl}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: ollamaModel,
-      messages: [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: userPrompt },
-      ],
-      stream: false,
-      format: 'json',
-      options: { temperature: 0.2 },
-    }),
+  const parsed = await djObject({
+    system: SYSTEM,
+    prompt: userPrompt,
+    schema: TagSchema,
+    temperature: 0.2,
+    kind: 'tag-library',
   });
-  if (!res.ok) throw new Error(`Ollama ${res.status}`);
-  const data = await res.json();
-  const raw = data.message?.content || '{}';
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    const m = raw.match(/\{[\s\S]*\}/);
-    parsed = m ? JSON.parse(m[0]) : {};
-  }
   const moods = Array.isArray(parsed.moods)
     ? parsed.moods.filter(m => MOOD_VOCAB.includes(m)).slice(0, 3)
     : [];
@@ -78,11 +67,8 @@ async function main() {
 
   await library.load();
   await settings.load();
-  const llm = settings.get().llm || {};
-  ollamaUrl = llm.ollamaUrl || config.ollama.url;
-  ollamaModel = llm.model || config.ollama.model;
   console.log(`[tag] starting. ${library.allTaggedIds().length} tracks already tagged.`);
-  console.log(`[tag] model: ${ollamaModel} @ ${ollamaUrl}`);
+  console.log(`[tag] model: ${activeModelLabel()}`);
   if (limit !== Infinity) console.log(`[tag] limit: ${limit} new tracks`);
 
   let processed = 0;

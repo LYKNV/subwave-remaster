@@ -34,6 +34,18 @@ function extractJson(s) {
   return t.slice(start, end + 1);
 }
 
+// Normalise the AI SDK usage block into { input, output, total }. Providers
+// vary in which fields they populate (and a local Ollama box often omits them
+// entirely — token stats then read as 0 for that call). `totalUsage` is the
+// agent-loop sum across steps; prefer it when present.
+function usageOf(result) {
+  const u = result?.totalUsage || result?.usage || {};
+  const input = u.inputTokens ?? u.promptTokens ?? 0;
+  const output = u.outputTokens ?? u.completionTokens ?? 0;
+  const total = u.totalTokens ?? (input + output);
+  return { input, output, total };
+}
+
 // `repeat_penalty` is Ollama-specific and lives under providerOptions.ollama;
 // non-Ollama providers ignore the block entirely, so it's safe to always pass.
 function ollamaOptions(repeatPenalty) {
@@ -71,6 +83,7 @@ export async function djText({
       model: activeModelLabel(),
       sampling: { temperature, top_p: topP, repeat_penalty: repeatPenalty, seed },
       via: 'ai-sdk',
+      usage: usageOf(result),
       // Full, untruncated — the /debug surface shows the whole system prompt.
       system,
       user: prompt,
@@ -113,6 +126,7 @@ export async function djObject({
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       let object;
+      let usage;
       if (attempt === 1) {
         const result = await generateText({
           model: languageModel(),
@@ -123,6 +137,7 @@ export async function djObject({
           providerOptions: ollamaOptions(null),
         });
         object = result.output;
+        usage = usageOf(result);
       } else {
         const result = await generateText({
           model: languageModel(),
@@ -132,12 +147,14 @@ export async function djObject({
           providerOptions: ollamaOptions(null),
         });
         object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+        usage = usageOf(result);
       }
       record({
         kind, ok: true, ms: Date.now() - started,
         model: activeModelLabel(),
         sampling: { temperature },
         via: attempt === 1 ? 'ai-sdk' : 'ai-sdk:recovery',
+        usage,
         // Full, untruncated — the /debug surface shows the whole system prompt.
         system,
         user: prompt,
@@ -200,6 +217,7 @@ export async function djAgent({
       model: activeModelLabel(),
       sampling: { temperature },
       via: 'ai-sdk:agent',
+      usage: usageOf(result),
       // Full, untruncated — the agent's entire input and trail.
       system,
       messages,

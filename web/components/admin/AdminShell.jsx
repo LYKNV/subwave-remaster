@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect } from 'react';
-import { Radio, Disc3, CalendarClock, Drama, Sparkles, SlidersHorizontal, Terminal } from 'lucide-react';
+import { Radio, BarChart3, Disc3, CalendarClock, Drama, Sparkles, SlidersHorizontal, Terminal } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
@@ -30,6 +30,7 @@ const NAV_SECTIONS = [
   {
     label: 'System',
     items: [
+      { href: '/admin/stats',    id: 'stats',    label: 'Stats',    icon: BarChart3 },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug',    id: 'debug',    label: 'Debug',    icon: Terminal },
     ],

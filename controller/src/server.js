@@ -17,6 +17,7 @@ import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
 import { router as debugRoutes } from './routes/debug.js';
+import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
 
 // Fail fast in production if the admin gate isn't configured.
@@ -32,6 +33,7 @@ app.use(requestRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);
 app.use(debugRoutes);
+app.use(statsRoutes);
 app.use(djRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)

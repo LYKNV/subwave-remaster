@@ -8,6 +8,7 @@ import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
 import * as cloud from '../llm/speech.js';
 import * as settings from '../settings.js';
+import { recordTts } from '../stats.js';
 
 export const ENGINES = ['piper', 'kokoro', 'cloud'];
 
@@ -82,16 +83,47 @@ async function speakWith(engine, text, opts, personaTts) {
 // Public entry point. Tries the configured engine; on failure, falls back to
 // a local engine so the DJ never goes silent because a model (or the network)
 // failed. Piper is the universal fallback — local, keyless, fast.
+//
+// Every call is timed and recorded into the TTS ring buffer (stats.js) so the
+// admin Stats page can show per-engine usage, latency, and the fallback rate.
 export async function speak(text, { kind = 'default', outPath } = {}) {
   const personaTts = djPersonaTts(kind);
   const primary = resolveEngine(kind, personaTts);
+  const started = Date.now();
+  const chars = (text || '').length;
   try {
-    return await speakWith(primary, text, { outPath }, personaTts);
+    const result = await speakWith(primary, text, { outPath }, personaTts);
+    recordTts({
+      kind, engine: primary, requested: primary, fellBack: false,
+      ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
+    });
+    return result;
   } catch (err) {
     const fallback = primary === 'piper' ? 'kokoro' : 'piper';
-    if (fallback === 'kokoro' && !kokoro.isAvailable()) throw err;
+    if (fallback === 'kokoro' && !kokoro.isAvailable()) {
+      recordTts({
+        kind, engine: primary, requested: primary, fellBack: false,
+        ok: false, ms: Date.now() - started, chars, error: err.message,
+        t: new Date().toISOString(),
+      });
+      throw err;
+    }
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
-    return speakWith(fallback, text, { outPath }, personaTts);
+    try {
+      const result = await speakWith(fallback, text, { outPath }, personaTts);
+      recordTts({
+        kind, engine: fallback, requested: primary, fellBack: true,
+        ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
+      });
+      return result;
+    } catch (err2) {
+      recordTts({
+        kind, engine: fallback, requested: primary, fellBack: true,
+        ok: false, ms: Date.now() - started, chars, error: err2.message,
+        t: new Date().toISOString(),
+      });
+      throw err2;
+    }
   }
 }
 

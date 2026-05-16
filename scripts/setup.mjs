@@ -204,7 +204,7 @@ export async function main() {
       {
         value: 'prod',
         label: 'Production (server deploy)',
-        hint: 'docker-compose.prod.yml · Caddy on :4800 · state in /var/lib/subwave',
+        hint: 'docker-compose.prod.yml · Caddy on :4800 · state in ./state',
       },
     ],
   }));
@@ -215,8 +215,8 @@ export async function main() {
   if (mode === 'prod') {
     stateDir = guard(await text({
       message: 'STATE_DIR (shared volume for Icecast/Liquidsoap/Controller)',
-      placeholder: '/var/lib/subwave',
-      initialValue: '/var/lib/subwave',
+      placeholder: resolve(ROOT, 'state'),
+      initialValue: resolve(ROOT, 'state'),
     }));
     if (!canWrite(stateDir)) {
       note(

@@ -13,7 +13,7 @@ The user has authorised free action on this hot path — `scripts/setup.sh`, `gi
 
 1. **Two compose files, two shapes.**
    - `docker/docker-compose.yml` — dev variant (Mac smoke-test): Icecast + Liquidsoap + Controller only. Web runs separately via `npm run dev`. State at `../state`.
-   - `docker/docker-compose.prod.yml` — production single-host: adds `web` and `caddy`. **Only Caddy binds a host port.** State at `${STATE_DIR:-/var/lib/subwave}`.
+   - `docker/docker-compose.prod.yml` — production single-host: adds `web` and `caddy`. **Only Caddy binds a host port.** State at `${STATE_DIR:-<repo>/state}` — repo-local by default, same as dev.
    - Detect which is up from `docker compose -f <file> ps`. On this host, prod is the live one and Caddy is mapped to host port `4800` (`0.0.0.0:4800->80/tcp`), not `80` as the README suggests — always read the port from `ps`, never hardcode.
 
 2. **Controller and Liquidsoap COPY source at build time, they do not bind-mount it.** `docker compose restart <svc>` reruns the *same baked-in code* and does nothing for source changes. Source changes need `up -d --build <svc>`. This is the single most common deploy mistake.
@@ -51,7 +51,15 @@ RUNNING_DEV=$(docker compose -f docker/docker-compose.yml      ps -q 2>/dev/null
 # Has setup.sh been run? (it produces docker/.env and a rendered icecast.xml)
 [ -f docker/.env ] && echo "docker/.env present"
 [ -f controller/.env ] && echo "controller/.env present"
-[ -f "${STATE_DIR:-/var/lib/subwave}/icecast.xml" ] && echo "icecast.xml rendered"
+
+# Resolve the real STATE_DIR. State lives in <repo>/state by default; an
+# operator can relocate it via STATE_DIR in docker/.env. docker compose reads
+# docker/.env automatically, but your shell does NOT — so derive it yourself,
+# falling back to the repo-local default. (cwd is $REPO here, so `state` is
+# <repo>/state.) Don't probe a bare /var/lib path — that default no longer exists.
+STATE_DIR=$(grep -E '^STATE_DIR=' docker/.env 2>/dev/null | cut -d= -f2- | tr -d '"')
+STATE_DIR=${STATE_DIR:-state}
+[ -f "$STATE_DIR/icecast.xml" ] && echo "icecast.xml rendered ($STATE_DIR)"
 ```
 
 Three modes:
@@ -129,14 +137,14 @@ If either fails, surface the failure with the URL it tried, and stop. The stack 
 - Renders `state/emergency.mp3` (30s pink-noise fallback) and `state/bed.mp3` (60s studio bed) via ffmpeg
 - Touches `auto.m3u` and `jingles.m3u` so Liquidsoap's `reload_mode="watch"` has something to watch
 
-Production hosts usually want `STATE_DIR=/var/lib/subwave`; dev just uses `<repo>/state`. The script needs to write to `STATE_DIR` — if it's outside `$HOME`, the user will likely need to invoke it with sudo. Surface that; don't run sudo without asking.
+Both dev and prod default `STATE_DIR` to `<repo>/state` — repo-local, no sudo needed. An operator can still point it elsewhere (e.g. a dedicated data disk) by exporting `STATE_DIR`; if that target is outside `$HOME` the script will need sudo to write it — surface that, don't run sudo without asking.
 
 ```bash
-# Dev / repo-local:
+# Default (dev or prod) — state in <repo>/state:
 ./scripts/setup.sh
 
-# Prod / system path:
-sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh
+# Only if relocating state to a path outside $HOME:
+sudo STATE_DIR=/srv/subwave ./scripts/setup.sh
 ```
 
 #### F5 — Boot the stack and generate jingles
@@ -170,7 +178,10 @@ The state and env files exist (a previous setup ran, the operator brought the st
 ```bash
 docker info >/dev/null  # daemon up?
 [ -f docker/.env ] && [ -f controller/.env ]
-[ -f "${STATE_DIR:-/var/lib/subwave}/icecast.xml" ]
+# Derive STATE_DIR from docker/.env, not the bare compose fallback (see Step 0).
+STATE_DIR=$(grep -E '^STATE_DIR=' docker/.env 2>/dev/null | cut -d= -f2- | tr -d '"')
+STATE_DIR=${STATE_DIR:-state}
+[ -f "$STATE_DIR/icecast.xml" ]
 ```
 
 If any of those are missing, fall back to the initial-setup path — something was wiped.
@@ -186,7 +197,10 @@ docker compose -f docker/docker-compose.prod.yml up -d --build
 #### B3 — Jingles
 
 ```bash
-[ -s "${STATE_DIR:-/var/lib/subwave}/jingles.m3u" ] || ./scripts/generate-jingles.sh
+# STATE_DIR derived from docker/.env (see Step 0).
+STATE_DIR=$(grep -E '^STATE_DIR=' docker/.env 2>/dev/null | cut -d= -f2- | tr -d '"')
+STATE_DIR=${STATE_DIR:-state}
+[ -s "$STATE_DIR/jingles.m3u" ] || ./scripts/generate-jingles.sh
 ```
 
 Only re-render if the M3U is empty. Re-rendering when it isn't is harmless but slow.
@@ -274,7 +288,7 @@ docker compose -f docker/docker-compose.prod.yml restart caddy
 docker compose -f docker/docker-compose.prod.yml up -d
 
 # Icecast template edited - re-render, then force-recreate icecast
-sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh
+./scripts/setup.sh
 docker compose -f docker/docker-compose.prod.yml up -d --force-recreate icecast
 ```
 

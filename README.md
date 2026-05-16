@@ -255,7 +255,7 @@ Note: `restart` keeps the existing container's env vars from creation time. For 
 ## Production (single host, Caddy edge)
 
 ```bash
-sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh
+./scripts/setup.sh    # state defaults to <repo>/state (override with STATE_DIR)
 docker compose -f docker/docker-compose.prod.yml up -d
 ./scripts/generate-jingles.sh
 ./scripts/update.sh   # git pull + rebuild + rolling recreate
@@ -447,7 +447,7 @@ npm run down
 cd docker && docker compose down
 ```
 
-State (`settings.json`, `moods.json`, voice WAVs, archives) is persisted in `./state/` (dev) or `${STATE_DIR:-/var/lib/subwave}` (prod). Restart anytime with `npm run dev:docker` (or `docker compose up -d`).
+State (`settings.json`, `moods.json`, voice WAVs, archives) is persisted in `./state/` by default, in both dev and prod (override prod with `${STATE_DIR}`). Restart anytime with `npm run dev:docker` (or `docker compose up -d`).
 
 ## Known caveats
 

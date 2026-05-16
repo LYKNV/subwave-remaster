@@ -23,7 +23,7 @@ re-derive `$REPO` (or substitute its value) in each command block below.
 
 1. **Two compose files = two modes.**
    - **Dev** — `docker/docker-compose.yml`: Icecast + Liquidsoap + Controller only. Web runs separately as `npm run dev` on the host (port `7700`).
-   - **Prod** — `docker/docker-compose.prod.yml`: adds `web` (built image) and `caddy` (edge router). Only Caddy binds a host port. Needs `STATE_DIR` env (default `/var/lib/subwave`).
+   - **Prod** — `docker/docker-compose.prod.yml`: adds `web` (built image) and `caddy` (edge router). Only Caddy binds a host port. State defaults to `<repo>/state` (override with the `STATE_DIR` env).
 
 2. **Service ports (post-renumber):** Web `7700`, Controller `7701`, Icecast `7702`. The controller's `/health` endpoint returns `{"status":"on-air"}` once Liquidsoap is connected to Icecast — that's the canonical "is it up?" check.
 
@@ -69,8 +69,10 @@ If `web/node_modules` is missing, run `npm install` first. If `:7700` is already
 
 ```bash
 cd "$REPO"
-STATE_DIR=${STATE_DIR:-/var/lib/subwave} docker compose -f docker/docker-compose.prod.yml up -d
+docker compose -f docker/docker-compose.prod.yml up -d
 ```
+
+State goes to `<repo>/state` unless `docker/.env` (or the environment) sets `STATE_DIR` — compose picks that up on its own, no need to pass it.
 
 No host-side web dev server in prod — Caddy serves the built `web` container.
 

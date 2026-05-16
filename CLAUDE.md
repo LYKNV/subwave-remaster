@@ -15,7 +15,7 @@ cd web && npm install && npm run dev     # web UI on :7700, separate process
 cd controller && npm install && npm run dev
 
 # --- production (single-host, Caddy edge) ---
-sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh
+./scripts/setup.sh                       # state defaults to <repo>/state
 docker compose -f docker/docker-compose.prod.yml up -d
 ./scripts/generate-jingles.sh            # render Piper station idents
 ./scripts/update.sh                      # git pull + rebuild + rolling recreate
@@ -119,7 +119,7 @@ Polling: `useStationFeed` hits `/now-playing` + `/state` every 5s. Stream URL an
 Two compose files, two deployment shapes:
 
 - **`docker/docker-compose.yml`** — "Mac local smoke-test variant". Icecast + Liquidsoap + Controller only. Web UI runs separately via `npm run dev`. State is `../state` (repo-local bind mount). Used for local development.
-- **`docker/docker-compose.prod.yml`** — production single-host deploy. Adds `web` (built from `web/Dockerfile`, Next.js standalone output) and `caddy` (edge router). **Only Caddy binds a host port (`4800:80`)** — Icecast, Controller, Liquidsoap, and Web are internal-only and reachable via the proxy. State path is `${STATE_DIR:-/var/lib/subwave}`. Cloudflare is expected to terminate TLS in front; Caddy has `auto_https off`. The `controller` service is forced into `NODE_ENV=production`, which makes the admin auth gate mandatory — the container will exit on boot if `ADMIN_USER`/`ADMIN_PASS` aren't in `controller/.env`.
+- **`docker/docker-compose.prod.yml`** — production single-host deploy. Adds `web` (built from `web/Dockerfile`, Next.js standalone output) and `caddy` (edge router). **Only Caddy binds a host port (`4800:80`)** — Icecast, Controller, Liquidsoap, and Web are internal-only and reachable via the proxy. State path is `${STATE_DIR:-<repo>/state}` — repo-local by default, same as the dev stack; override with `STATE_DIR` to relocate it. Cloudflare is expected to terminate TLS in front; Caddy has `auto_https off`. The `controller` service is forced into `NODE_ENV=production`, which makes the admin auth gate mandatory — the container will exit on boot if `ADMIN_USER`/`ADMIN_PASS` aren't in `controller/.env`.
 
 The shared `/var/sub-wave` mount in **both** the Liquidsoap and Controller containers is what makes the file-based IPC work — they must always be mounted to the same host path.
 

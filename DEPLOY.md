@@ -35,16 +35,18 @@ Inbound: only `:80` from Cloudflare's IP ranges (and SSH for you).
 ```bash
 git clone git@github.com:perminder-klair/subwave.git
 cd subwave
-sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh
+./scripts/setup.sh
 ```
 
-This creates `/var/lib/subwave/{voice,archive,jingles,logs}`, touches `auto.m3u`
+This creates `state/{voice,archive,jingles,logs}`, touches `auto.m3u`
 and `jingles.m3u`, and renders `emergency.mp3` (30s of low pink noise — the
 last-resort fallback when every other source dies).
 
-State lives **outside** the repo on purpose. `git clean -fdx`, `docker compose
-down -v`, or a fresh clone cannot wipe it. Back up `/var/lib/subwave/` to
-preserve archives and idents.
+State lives in `<repo>/state` by default. `docker compose down -v` won't touch
+it — it's a bind mount, not a named volume — but `git clean -fdx` **will**, so
+keep it clear of destructive clean runs and back it up to preserve archives and
+idents. To keep state on a separate disk, export `STATE_DIR=/path/to/state`
+before running `setup.sh` (it records the value into `docker/.env`).
 
 ## 3. Secrets
 
@@ -69,7 +71,7 @@ cat > docker/.env <<EOF
 ICECAST_SOURCE_PASSWORD=$(openssl rand -hex 16)
 ICECAST_ADMIN_PASSWORD=$(openssl rand -hex 16)
 ICECAST_RELAY_PASSWORD=$(openssl rand -hex 16)
-STATE_DIR=/var/lib/subwave
+# STATE_DIR=/srv/subwave   # optional — defaults to <repo>/state if omitted
 EOF
 ```
 
@@ -180,16 +182,16 @@ curl -X POST http://localhost/api/skip
 curl -s http://localhost/api/state | jq
 
 # Disk usage of archives + voice renders
-du -sh /var/lib/subwave/*
+du -sh state/*
 ```
 
-Logs Liquidsoap writes go to `/var/lib/subwave/logs/radio.log`.
-Hourly stream archives go to `/var/lib/subwave/archive/YYYY-MM-DD/HH-00.mp3`
+Logs Liquidsoap writes go to `state/logs/radio.log`.
+Hourly stream archives go to `state/archive/YYYY-MM-DD/HH-00.mp3`
 — prune these on a cron if you don't want unbounded growth.
 
 ## 9. Backup
 
-The only stateful path is `/var/lib/subwave/`. Two things really matter:
+The only stateful path is `state/` (under the repo). Two things really matter:
 
 - `archive/` — your show recordings. Big. Back up or rotate.
 - `jingles/` + `jingles.m3u` — re-derivable from `scripts/generate-jingles.sh`,
@@ -198,5 +200,5 @@ The only stateful path is `/var/lib/subwave/`. Two things really matter:
 Everything else (`voice/`, `auto.m3u`, `now-playing.json`, the queue files)
 is ephemeral and regenerates within minutes of a fresh boot.
 
-A nightly tar of `/var/lib/subwave/archive/` to an external box is
+A nightly tar of `state/archive/` to an external box is
 sufficient.

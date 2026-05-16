@@ -3,13 +3,11 @@
 # Icecast, Liquidsoap, Controller, and Web are all internal-only and reachable
 # via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
 #
-# State persists at ${STATE_DIR:-/var/lib/subwave} on the host so container
-# rebuilds, repo cleans, and `docker compose down -v` cannot wipe it.
+# State persists in <repo>/state by default (override with STATE_DIR). It is a
+# bind mount, so `docker compose down -v` (named-volume wipe) won't touch it —
+# but it lives inside the repo, so keep it clear of `git clean -dffx`.
 
-x-state: &state-mount
-  type: bind
-  source: ${STATE_DIR:-/var/lib/subwave}
-  target: /var/sub-wave
+x-state: &state-mount ${STATE_DIR:-../state}:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
@@ -45,7 +43,7 @@ services:
     volumes:
       # Rendered by scripts/setup.sh from icecast.xml.template — keeps secrets
       # out of the repo and lets the moul/icecast entrypoint's sed run cleanly.
-      - ${STATE_DIR:-/var/lib/subwave}/icecast.xml:/etc/icecast2/icecast.xml:ro
+      - ${STATE_DIR:-../state}/icecast.xml:/etc/icecast2/icecast.xml:ro
 
   # -------------------------------------------------------------------------
   # LIQUIDSOAP — mixer, pulls from queue file, broadcasts to Icecast
@@ -69,9 +67,7 @@ services:
     volumes:
       - ../liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
       - *state-mount
-      - type: bind
-        source: ${STATE_DIR:-/var/lib/subwave}/logs
-        target: /var/log/liquidsoap
+      - ${STATE_DIR:-../state}/logs:/var/log/liquidsoap
     command: liquidsoap /etc/liquidsoap/radio.liq
 
   # -------------------------------------------------------------------------

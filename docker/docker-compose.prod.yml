@@ -94,6 +94,10 @@ services:
       # and fires shows an hour early during BST, out of sync with the admin UI
       # (which computes the on-air slot in the browser's timezone).
       - TZ=${TZ:-Europe/London}
+      # In-container path of the *state-mount below. The controller derives
+      # every state file path from this. Note this is distinct from the
+      # host-side STATE_DIR used to interpolate the mount source above.
+      - STATE_DIR=/var/sub-wave
     env_file:
       - ../controller/.env
     extra_hosts:

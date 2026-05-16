@@ -1,14 +1,15 @@
 // Durable settings — overrides for values that have static defaults in code.
-// Stored at /var/sub-wave/settings.json. Some apply live (weather location,
+// Stored at <stateDir>/settings.json. Some apply live (weather location,
 // DJ personas, shows); others require a Liquidsoap restart (jingle frequency,
 // crossfade duration).
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { STATE_DIR } from './config.js';
 
-const SETTINGS_PATH = '/var/sub-wave/settings.json';
-const LIQ_SETTINGS_PATH = '/var/sub-wave/liquidsoap_settings.json';
+const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
+const LIQ_SETTINGS_PATH = `${STATE_DIR}/liquidsoap_settings.json`;
 
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
@@ -759,8 +760,8 @@ export function renderDjPrompt(persona, ctx = {}) {
 }
 
 // Liquidsoap reads two tiny text files instead of JSON.
-const LIQ_JINGLE_RATIO_PATH = '/var/sub-wave/liquidsoap_jingle_ratio.txt';
-const LIQ_CROSSFADE_PATH = '/var/sub-wave/liquidsoap_crossfade.txt';
+const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
+const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));

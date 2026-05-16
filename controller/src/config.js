@@ -1,6 +1,20 @@
 // Centralised config — reads from env, with sensible defaults
 
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+// The shared state directory — every file-based IPC channel lives under here.
+// In Docker the compose files mount <repo>/state → /var/sub-wave and pass
+// STATE_DIR=/var/sub-wave. Native dev (`npm run dev` from controller/) has no
+// such mount, so it falls back to the repo-local state/ dir resolved relative
+// to this file (controller/src/config.js → ../../state).
+export const STATE_DIR = process.env.STATE_DIR
+  || resolve(dirname(fileURLToPath(import.meta.url)), '../../state');
+
 export const config = {
+  // Absolute path to the shared state dir — modules build their own file
+  // paths from this rather than hardcoding /var/sub-wave.
+  stateDir: STATE_DIR,
   navidrome: {
     url: process.env.NAVIDROME_URL || 'http://navidrome:4533',
     user: process.env.NAVIDROME_USER || '',
@@ -19,7 +33,7 @@ export const config = {
     binary: process.env.PIPER_BIN || '/usr/local/bin/piper',
     voice: process.env.PIPER_VOICE || '/opt/piper/voices/en_GB-alan-medium.onnx',
     voiceConfig: process.env.PIPER_VOICE_CONFIG || '/opt/piper/voices/en_GB-alan-medium.onnx.json',
-    outDir: process.env.PIPER_OUT || '/var/sub-wave/voice',
+    outDir: process.env.PIPER_OUT || `${STATE_DIR}/voice`,
   },
   kokoro: {
     python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',
@@ -31,20 +45,20 @@ export const config = {
     speed: parseFloat(process.env.KOKORO_SPEED || '1.0'),
   },
   liquidsoap: {
-    queueFile: '/var/sub-wave/next.txt',
-    sayFile: '/var/sub-wave/say.txt',
+    queueFile: `${STATE_DIR}/next.txt`,
+    sayFile: `${STATE_DIR}/say.txt`,
     // Separate channel for talk-over voice (auto-links, anything that should
     // play OVER a track that's already started with light ducking instead of
     // heavy ducking the music to 25%). Read by a second poll thread in radio.liq.
-    introFile: '/var/sub-wave/intro.txt',
-    autoPlaylist: '/var/sub-wave/auto.m3u',
-    nowPlayingFile: '/var/sub-wave/now-playing.json',
+    introFile: `${STATE_DIR}/intro.txt`,
+    autoPlaylist: `${STATE_DIR}/auto.m3u`,
+    nowPlayingFile: `${STATE_DIR}/now-playing.json`,
   },
   session: {
     // The live DJ session — a chat-history JSON the controller rewrites as
     // tracks play and the DJ talks. Archived sessions land in `dir` on roll.
-    currentFile: '/var/sub-wave/session.json',
-    dir: '/var/sub-wave/sessions',
+    currentFile: `${STATE_DIR}/session.json`,
+    dir: `${STATE_DIR}/sessions`,
   },
   weather: {
     // Wolverhampton — your home location

@@ -6,6 +6,7 @@
 // layer (dj.js) can record without an import cycle.
 
 import { appendFile } from 'node:fs/promises';
+import { STATE_DIR } from '../config.js';
 
 const MAX_CALLS = 120;
 export const recentCalls = [];
@@ -19,7 +20,7 @@ export function record(call) {
 // above is lost on restart; this tab-separated file in the shared state volume
 // survives, so repeated-pick patterns stay reviewable after the fact.
 // Best-effort: a write failure must never break a pick.
-const PICKS_LOG = '/var/sub-wave/logs/picks.log';
+const PICKS_LOG = `${STATE_DIR}/logs/picks.log`;
 
 export function recordPick({ song, reason, source }) {
   const line = [

@@ -127,7 +127,13 @@ export default function PlayerApp({ contained = false }) {
         onToggleTheme={toggleTheme}
       />
 
-      <CenterStage nowPlaying={nowPlaying} elapsed={elapsed} />
+      <CenterStage
+        nowPlaying={nowPlaying}
+        elapsed={elapsed}
+        feed={boothFeed}
+        djLineOn={tickerOn}
+        onOpenBooth={() => setDrawer('booth')}
+      />
 
       <Waveform audioRef={audioRef} tunedIn={tunedIn} progress={progress} />
 
@@ -149,8 +155,7 @@ export default function PlayerApp({ contained = false }) {
         setVolume={setVolume}
         nowPlaying={nowPlaying}
         elapsed={elapsed}
-        feed={boothFeed}
-        tickerOn={tickerOn}
+        context={context}
       />
 
       <Sheet

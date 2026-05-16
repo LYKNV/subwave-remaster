@@ -126,18 +126,6 @@ body::after {
   50%, 100% { opacity: 0; }
 }
 
-/* Ticker marquee — the rendered row contains three copies of the feed, so
-   shifting by -33.333% lands the second copy exactly where the first started,
-   producing a seamless loop. v3-ticker-right just reverses the offset. */
-@keyframes v3-ticker-left {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-33.333%); }
-}
-@keyframes v3-ticker-right {
-  from { transform: translateX(-33.333%); }
-  to   { transform: translateX(0); }
-}
-
 @keyframes v3-modal-pop {
   from { transform: translate(-50%, -50%) scale(0.97); opacity: 0; }
   to   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
@@ -169,9 +157,6 @@ body::after {
   .v3-blink {
     animation: none !important;
   }
-  [style*="v3-ticker-"] {
-    animation: none !important;
-  }
 }
 
 /* Mono title block — JetBrains Mono advance width is ~60% em, so the title
@@ -179,7 +164,7 @@ body::after {
    count fills more horizontal space). Tracking goes to zero — mono cells
    already provide their own rhythm and negative tracking collides glyphs. */
 .v3-title {
-  font-size: clamp(22px, 5.5vw, 64px);
+  font-size: clamp(20px, 4.5vw, 52px);
   line-height: 0.95;
   letter-spacing: 0;
   font-weight: 800;

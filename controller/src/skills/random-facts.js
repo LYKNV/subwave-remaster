@@ -12,10 +12,6 @@ export default {
   kind: 'random-facts',
   cooldownMs: 60 * 60 * 1000,
 
-  shouldFire() {
-    return true;
-  },
-
   async script(ctx, _data, { recap, recentOpeners }) {
     const lines = buildContextLines(ctx);
     lines.push(`Task: one small "did you know" — concrete and oddly specific, not Wikipedia-rote. If a fact about ${ctx.date?.season || 'now'} or ${ctx.time?.period || 'this hour'} lands naturally, take it; otherwise drop a cold fact. One sentence. Never say "fun fact" or "interestingly".`);

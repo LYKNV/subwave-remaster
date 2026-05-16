@@ -1,6 +1,6 @@
 'use client';
 
-import BroadcastTicker from './BroadcastTicker';
+import { buildTagline } from '../lib/tagline';
 
 export default function TransportBar({
   tunedIn,
@@ -10,18 +10,17 @@ export default function TransportBar({
   setVolume,
   nowPlaying,
   elapsed,
-  feed,
-  tickerOn,
+  context,
 }) {
   const duration = nowPlaying?.duration ?? 0;
   const progress = duration > 0 ? Math.min(1, elapsed / duration) : 0;
   const cells = 12;
   const lit = Math.round(volume * cells);
 
-  const showTicker = tickerOn && feed?.length > 0;
-  const songLine = nowPlaying?.title
-    ? `${nowPlaying.title}${nowPlaying.artist ? ' · ' + nowPlaying.artist : ''}`
-    : null;
+  // Track info lives in the CenterStage on desktop, so the footer's centre
+  // slot stays empty there. On mobile it carries the context tagline (the
+  // vibe/weather line the header hides below md).
+  const tagline = buildTagline(context);
 
   return (
     <div
@@ -42,15 +41,6 @@ export default function TransportBar({
           }}
           aria-hidden="true"
         />
-      )}
-
-      {/* Mobile-only ticker row above the controls. Marquee gets its own
-          full-width strip so it never collides with the Tune Out button.
-          On sm: and up the ticker renders inline in the controls row below. */}
-      {showTicker && (
-        <div className="sm:hidden flex items-center px-2 py-0">
-          <BroadcastTicker items={feed} enabled={true} />
-        </div>
       )}
 
       <div
@@ -88,24 +78,13 @@ export default function TransportBar({
           {offline ? 'Stream Offline' : tunedIn ? 'Tune Out' : 'Tune In'}
         </button>
 
-        {/* Desktop ticker (mobile gets it as the strip above). Otherwise the
-            song line takes the centre slot on both. */}
-        {showTicker && (
-          <div className="hidden sm:flex flex-1 min-w-0">
-            <BroadcastTicker items={feed} enabled={true} />
-          </div>
-        )}
+        {/* Centre slot — empty spacer on desktop, context tagline on mobile. */}
         <div
-          className={`flex-1 min-w-0 v3-caption truncate items-center ${showTicker ? 'flex sm:hidden' : 'flex'}`}
+          className="flex flex-1 min-w-0 v3-caption truncate items-center"
           style={{ color: 'var(--muted)' }}
-          title={songLine ?? ''}
+          title={tagline ?? ''}
         >
-          {songLine && (
-            <>
-              <span style={{ color: 'var(--ink)' }}>{nowPlaying.title}</span>
-              {nowPlaying.artist && <span>&nbsp;·&nbsp;{nowPlaying.artist}</span>}
-            </>
-          )}
+          {tagline && <span className="sm:hidden truncate">{tagline}</span>}
         </div>
 
         <div className="flex items-center gap-2 sm:gap-[10px] shrink-0">

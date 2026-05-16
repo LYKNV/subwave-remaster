@@ -1,31 +1,7 @@
 'use client';
 
 import { Sun, Moon, Headphones } from 'lucide-react';
-
-// Compact, mood-flavored subtitle for the header: festival > show + vibe + weather.
-// Examples: "late · late hours · 6° clear" · "diwali · festival · 18° clear".
-function buildTagline(context) {
-  if (!context) return null;
-  const parts = [];
-
-  if (context.festival?.name) {
-    parts.push(context.festival.name.toLowerCase());
-    if (context.festival.mood) parts.push(context.festival.mood);
-  } else {
-    if (context.time?.show) parts.push(context.time.show);
-    if (context.time?.vibe && context.time.vibe !== context.time?.show) {
-      parts.push(context.time.vibe);
-    }
-  }
-
-  if (context.weather && context.weather.condition && context.weather.condition !== 'unknown') {
-    const t = context.weather.temp;
-    const cond = context.weather.condition;
-    parts.push(Number.isFinite(t) ? `${t}° ${cond}` : cond);
-  }
-
-  return parts.length ? parts.join(' · ') : null;
-}
+import { buildTagline } from '../lib/tagline';
 
 export default function TopBar({ tunedIn, context, djName, activeShow, listeners, theme, onToggleTheme }) {
   const tagline = buildTagline(context);

@@ -2,10 +2,9 @@
 // artist currently on air, then asks the DJ to work one detail into a
 // between-track line.
 //
-// Needs a Tavily key (SEARCH_API_KEY). Without it the skill is inert:
-// `shouldFire` returns false so the registry never picks it. It also won't
-// re-search the same artist twice in a row (state.lastArtist gate), so a long
-// run of one artist doesn't produce repeated segments.
+// Needs a Tavily key (SEARCH_API_KEY); the segment-director agent only offers
+// this capability — and the searchArtistNews tool only works — when the key
+// is set. This module backs the /dj/skill manual-override route.
 
 import { config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
@@ -14,7 +13,7 @@ import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 
-async function tavilySearch(query) {
+export async function tavilySearch(query) {
   const res = await fetch(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -45,15 +44,7 @@ export default {
   requiresKey: 'SEARCH_API_KEY',
   ready() { return !!config.search.apiKey; },
 
-  // No key, no artist, or the same artist we last searched → don't fire.
-  shouldFire(_ctx, state) {
-    if (!config.search.apiKey) return false;
-    const artist = queue.current?.track?.artist;
-    if (!artist || /^unknown/i.test(artist)) return false;
-    return artist !== state.lastArtist;
-  },
-
-  async fetchData(_ctx, state) {
+  async fetchData() {
     const artist = queue.current?.track?.artist;
     if (!artist) return null;
 
@@ -61,10 +52,8 @@ export default {
     try {
       data = await tavilySearch(`${artist} musician latest news`);
     } catch {
-      // Leave state.lastArtist unset so the next tick retries this artist.
       return null;
     }
-    state.lastArtist = artist;
 
     const answer = (data.answer || '').trim();
     const top = (data.results || [])

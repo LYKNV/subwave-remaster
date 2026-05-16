@@ -2,7 +2,7 @@
 //   - refreshes the auto-playlist file Liquidsoap falls back to
 //   - hourly time check (top of every hour, in character)
 //   - station IDs (every ~45 min, varied by frequency setting)
-//   - skill registry tick (weather, news, traffic, random facts) every 5 min
+//   - agentic segment tick (weather, news, traffic, facts, web search) every 5 min
 
 import cron from 'node-cron';
 import { writeFile } from 'node:fs/promises';
@@ -16,6 +16,7 @@ import * as session from './session.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import * as skillRegistry from '../skills/_registry.js';
+import { agenticTick } from '../skills/_agent.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -186,18 +187,20 @@ export async function runLink() {
 }
 
 // ---------------------------------------------------------------------------
-// SKILLS TICK
-// Walks the controller/src/skills/ registry. The registry handles per-skill
-// cooldowns, the frequency-setting gate, and picks at most one skill to fire
-// per tick. Weather lives here now (was scheduler.maybeWeatherUpdate).
+// SEGMENT TICK
+// Hands a snapshot of the moment and a set of real-world data tools to the
+// segment-director agent (skills/_agent.js), which decides whether to air one
+// between-track segment (weather / news / traffic / fact / artist news) or to
+// stay silent. Replaces the registry's filter-and-random-pick tick; the skill
+// modules still back the tools and the /dj/skill manual-override route.
 // ---------------------------------------------------------------------------
 
 async function skillsTick() {
   try {
     const ctx = await getFullContext();
-    await skillRegistry.tick(ctx);
+    await agenticTick(ctx);
   } catch (err) {
-    queue.log('error', `Skills tick failed: ${err.message}`);
+    queue.log('error', `Segment tick failed: ${err.message}`);
   }
 }
 
@@ -253,8 +256,8 @@ export function startScheduler() {
   // Top of every hour
   cron.schedule('0 * * * *', hourlyCheck);
 
-  // Skills tick every 5 minutes — registry handles per-skill cooldowns
-  // and the frequency-setting gate.
+  // Segment tick every 5 minutes — the segment-director agent decides whether
+  // to air a segment; per-kind cooldowns and the frequency floor live in it.
   cron.schedule('*/5 * * * *', skillsTick);
 
   // Station ID candidate ticks at :00, :15, :30, :45 — handler gates by frequency

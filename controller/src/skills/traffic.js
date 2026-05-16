@@ -14,10 +14,6 @@ export default {
   kind: 'traffic',
   cooldownMs: 90 * 60 * 1000,
 
-  shouldFire(ctx) {
-    return !!ctx.clock?.isCommute;
-  },
-
   async script(ctx, _data, { recap, recentOpeners }) {
     const lines = buildContextLines(ctx);
     lines.push('Task: a tongue-in-cheek "traffic update for the SUB/WAVE listening area" — one sentence, absurd and small-scale (cat on the cable, queue at the kettle, slow buffering somewhere on the M6). Never a real road incident.');

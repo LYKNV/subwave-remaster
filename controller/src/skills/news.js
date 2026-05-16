@@ -26,13 +26,13 @@ function stripHtml(s) {
     .trim();
 }
 
-function hashHeadline(title) {
+export function hashHeadline(title) {
   let h = 0;
   for (let i = 0; i < title.length; i++) h = ((h << 5) - h + title.charCodeAt(i)) | 0;
   return h.toString(36);
 }
 
-async function fetchHeadlines() {
+export async function fetchHeadlines() {
   const res = await fetch(config.news.feedUrl);
   if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
   const xml = await res.text();
@@ -54,10 +54,6 @@ export default {
   description: 'Reads one top headline from the configured RSS feed, in character.',
   kind: 'news',
   cooldownMs: 45 * 60 * 1000,
-
-  shouldFire() {
-    return true;
-  },
 
   async fetchData(_ctx, state) {
     const items = await fetchHeadlines();

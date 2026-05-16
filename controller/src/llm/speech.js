@@ -49,7 +49,12 @@ export async function speak(text, { outPath } = {}) {
     model: speechModel(c),
     text,
     voice: c.voice || undefined,
-    outputFormat: 'wav',   // providers that can't honour this warn and fall back
+    // ElevenLabs gates 44.1 kHz PCM/WAV behind paid tiers — a free/lower-tier
+    // key 403s ("Forbidden") on pcm_44100. mp3 is allowed on every tier and
+    // OpenAI honours it too, so it's the safe cross-provider request.
+    // Liquidsoap decodes whatever lands in say.txt/intro.txt regardless, and
+    // `result.audio.format` below drives the actual file extension.
+    outputFormat: c.provider === 'elevenlabs' ? 'mp3' : 'wav',
   });
 
   const fmt = result.audio.format || 'mp3';

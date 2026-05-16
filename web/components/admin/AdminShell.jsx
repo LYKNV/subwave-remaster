@@ -3,21 +3,40 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect } from 'react';
+import { Radio, Disc3, CalendarClock, Drama, Sparkles, SlidersHorizontal, Terminal } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import ThemeToggle from './ThemeToggle';
 import { Toaster } from '../ui/toaster';
 
-const NAV = [
-  { href: '/admin/dash',     id: 'dash',     label: 'Dash' },
-  { href: '/admin/library',  id: 'library',  label: 'Library' },
-  { href: '/admin/personas', id: 'personas', label: 'Personas' },
-  { href: '/admin/skills',   id: 'skills',   label: 'Skills' },
-  { href: '/admin/shows',    id: 'shows',    label: 'Shows' },
-  { href: '/admin/settings', id: 'settings', label: 'Settings' },
-  { href: '/admin/debug',    id: 'debug',    label: 'Debug' },
+// Nav is grouped: what's happening now → what the station plays → the box itself.
+const NAV_SECTIONS = [
+  {
+    label: 'Monitor',
+    items: [
+      { href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' },
+    ],
+  },
+  {
+    label: 'Programming',
+    items: [
+      { href: '/admin/library',  id: 'library',  label: 'Library',  icon: Disc3 },
+      { href: '/admin/shows',    id: 'shows',    label: 'Shows',    icon: CalendarClock },
+      { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
+      { href: '/admin/skills',   id: 'skills',   label: 'Skills',   icon: Sparkles },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
+      { href: '/admin/debug',    id: 'debug',    label: 'Debug',    icon: Terminal },
+    ],
+  },
 ];
+
+const NAV = NAV_SECTIONS.flatMap(s => s.items);
 
 // Wraps every page under /admin. Renders the newsprint shell + sign-in gate.
 // Children are admin panels that re-call useAdminAuth themselves to avoid
@@ -71,15 +90,22 @@ export default function AdminShell({ children }) {
       <ShellHeader pathname={pathname} signedIn onSignOut={signOut} />
       <div className="shell-body">
         <nav className="shell-nav">
-          {NAV.map(n => {
-            const active = pathname?.startsWith(n.href);
-            return (
-              <Link key={n.id} href={n.href} className={`nav-item ${active ? 'active' : ''}`}>
-                <span>{n.label}</span>
-                {n.id === 'dash' && <span className="pill">live</span>}
-              </Link>
-            );
-          })}
+          {NAV_SECTIONS.map(section => (
+            <div key={section.label} className="nav-section">
+              <span className="nav-section-label">{section.label}</span>
+              {section.items.map(n => {
+                const active = pathname?.startsWith(n.href);
+                const Icon = n.icon;
+                return (
+                  <Link key={n.id} href={n.href} className={`nav-item ${active ? 'active' : ''}`}>
+                    <Icon className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+                    <span className="nav-label">{n.label}</span>
+                    {n.pill && <span className="pill">{n.pill}</span>}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
           <div className="nav-foot">
             sub / wave<br />
             admin console<br />

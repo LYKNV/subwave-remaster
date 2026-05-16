@@ -60,6 +60,11 @@ export const config = {
     currentFile: `${STATE_DIR}/session.json`,
     dir: `${STATE_DIR}/sessions`,
   },
+  queue: {
+    // The playback queue (upcoming/current/history) snapshotted to disk so a
+    // controller restart doesn't lose tracks already handed to Liquidsoap.
+    file: `${STATE_DIR}/queue.json`,
+  },
   weather: {
     // Wolverhampton — your home location
     lat: 52.5862,

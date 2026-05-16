@@ -65,6 +65,10 @@ app.listen(config.server.port, async () => {
     console.error('[session] init failed:', err.message);
   }
 
+  // Reload the persisted queue before the watcher starts so tracks already
+  // handed to Liquidsoap stay tracked across a controller restart.
+  queue.recover();
+
   queue.startWatcher();
   startScheduler();
   jingles.ensureDefaultIdent().catch(err => console.error('[jingles] ident generation failed:', err.message));

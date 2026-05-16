@@ -3,6 +3,7 @@
 // between upcoming → current → history based on what Liquidsoap reports.
 
 import { writeFile, readFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import { speak } from '../audio/tts.js';
@@ -36,6 +37,59 @@ class Queue {
     this.autoPick = true;      // toggle: should we ask Ollama for next track when idle
     this.autoLink = true;      // toggle: random DJ links between auto tracks
     this.tracksUntilLink = pickLinkInterval();
+    this._persistTimer = null; // debounce for the queue.json snapshot
+    this._autoMisses = 0;      // consecutive untracked plays — see onTrackStarted
+  }
+
+  // Snapshot upcoming/current/history to disk. The queue is otherwise purely
+  // in-memory, so a controller restart (every `--build controller` rebuild)
+  // would drop tracks already handed to Liquidsoap's dj_queue — they'd still
+  // play but reappear as untracked `auto` plays. Debounced so a burst of
+  // mutations writes once.
+  persist() {
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(async () => {
+      this._persistTimer = null;
+      try {
+        await writeFile(config.queue.file, JSON.stringify({
+          upcoming: this.upcoming,
+          current: this.current,
+          history: this.history,
+          savedAt: new Date().toISOString(),
+        }, null, 2));
+      } catch (err) {
+        console.error('[queue] persist failed:', err.message);
+      }
+    }, 500);
+  }
+
+  // Boot recovery — reload the persisted queue so requests/picks already sent
+  // to Liquidsoap stay tracked across a controller restart. `lastSeenKey` is
+  // primed from the restored `current` so the watcher doesn't re-fire for the
+  // track that's still on air; if the track changed during the downtime the
+  // key differs and the watcher reconciles normally (see onTrackStarted, which
+  // drops any upcoming items Liquidsoap consumed while the controller was down).
+  recover() {
+    if (!existsSync(config.queue.file)) return;
+    try {
+      const stored = JSON.parse(readFileSync(config.queue.file, 'utf8'));
+      // Drop anything queued long enough ago that Liquidsoap has certainly
+      // played past it — guards against a stale snapshot from a long downtime
+      // resurrecting tracks as permanent "Up next" zombies.
+      const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+      this.upcoming = (Array.isArray(stored.upcoming) ? stored.upcoming : [])
+        .filter(i => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
+      this.current = stored.current || null;
+      this.history = Array.isArray(stored.history) ? stored.history : [];
+      if (this.current?.track) {
+        const t = this.current.track;
+        this.lastSeenKey = `${t.id || ''}|${t.title}|${t.artist || ''}`;
+      }
+      this.log('scheduler',
+        `Queue recovered: ${this.upcoming.length} upcoming, ${this.history.length} played`);
+    } catch (err) {
+      console.error('[queue] recover failed:', err.message);
+    }
   }
 
   log(kind, message, meta = {}) {
@@ -126,6 +180,7 @@ class Queue {
     };
     this.upcoming.push(item);
     this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
+    this.persist();
     this.drainToLiquidsoap();  // fire-and-forget
     return this.upcoming.length;
   }
@@ -154,6 +209,7 @@ class Queue {
         const uri = subsonic.getAnnotatedUri(item.track);
         await writeFile(config.liquidsoap.queueFile, uri);
         item.sent = true;
+        this.persist();  // record the sent flag — these are now live in dj_queue
 
         // Give Liquidsoap's 1s poll a chance to read + delete the file
         // before we overwrite it with the next item.
@@ -213,12 +269,34 @@ class Queue {
     }
 
     if (idx >= 0) {
-      const item = this.upcoming.splice(idx, 1)[0];
+      // Drop everything ahead of the match too: the queue is strictly FIFO, so
+      // `idx > 0` means Liquidsoap already consumed those items — only possible
+      // after a controller restart that missed their transitions. Splicing them
+      // here keeps recovered zombies from lingering in "Up next" forever.
+      const consumed = this.upcoming.splice(0, idx + 1);
+      if (idx > 0) {
+        this.log('scheduler',
+          `Dropped ${idx} queue item(s) Liquidsoap played during the downtime`);
+      }
+      const item = consumed[consumed.length - 1];
       const source = item.aiPicked ? 'ai' : 'request';
       this.current = { ...item, startedAt: new Date().toISOString(), source };
       this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
+      this._autoMisses = 0;
     } else {
-      // Not a tracked request → auto-playlist or jingle
+      // Not a tracked request → auto-playlist or jingle.
+      // If we keep seeing untracked plays while `upcoming` is non-empty, those
+      // queued items aren't actually in Liquidsoap's dj_queue — the usual cause
+      // is a full-stack restart that wiped dj_queue while the controller
+      // recovered a stale queue.json. Drop the stale items so the auto-DJ
+      // (gated on `upcoming.length === 0`) starts picking again. The threshold
+      // tolerates an interleaved jingle without clearing a genuine pending pick.
+      this._autoMisses++;
+      if (this._autoMisses >= 3 && this.upcoming.length > 0) {
+        this.log('scheduler',
+          `Cleared ${this.upcoming.length} stale queue item(s) — not in Liquidsoap's dj_queue`);
+        this.upcoming = [];
+      }
       this.current = {
         track: {
           id: np.subsonic_id || null,
@@ -239,6 +317,8 @@ class Queue {
       text: `▶ "${this.current.track.title}" by ${this.current.track.artist || 'unknown'}`,
       meta: { source: this.current.source, requestedBy: this.current.requestedBy || null },
     });
+
+    this.persist();  // upcoming/current/history all just changed
 
     // Auto-DJ: when nothing is queued, hand a "track started" event to the
     // session DJ agent — it picks the next track and, on the link cadence,

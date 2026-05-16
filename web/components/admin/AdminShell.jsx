@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useCallback, useEffect } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import SignInForm from './SignInForm';
 import { Toaster } from '../ui/toaster';
@@ -20,7 +20,16 @@ const NAV = [
 // hook — they re-call useAdminAuth themselves to avoid prop-drilling.
 export default function AdminShell({ children }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
+
+  // After a successful sign-in, land the operator on the dashboard regardless
+  // of which admin URL surfaced the gate.
+  const handleSignIn = useCallback(async (user, pass) => {
+    const res = await signIn(user, pass);
+    if (res?.ok && pathname !== '/admin/dash') router.push('/admin/dash');
+    return res;
+  }, [signIn, pathname, router]);
 
   // On first paint after hydration, probe an admin endpoint so we surface
   // the sign-in form proactively if the cached token has been revoked.
@@ -54,7 +63,7 @@ export default function AdminShell({ children }) {
       <div className="min-h-screen" style={{ background: 'var(--bg)', color: 'var(--ink)' }}>
         <Header pathname={pathname} onSignOut={null} />
         <div className="max-w-7xl mx-auto px-4 lg:px-6 py-12">
-          <SignInForm onSubmit={signIn} />
+          <SignInForm onSubmit={handleSignIn} />
         </div>
       </div>
     );

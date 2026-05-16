@@ -36,7 +36,6 @@ export default function SettingsPanel() {
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [jingleText, setJingleText] = useState('');
-  const [taggerLimit, setTaggerLimit] = useState('50');
   const [form, setForm] = useState(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
@@ -155,22 +154,6 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refresh();
     } catch (e) { toast.error(`Delete failed: ${e.message}`); }
-    finally { setBusy(false); }
-  };
-
-  const startTagger = async () => {
-    setBusy(true);
-    try {
-      const limit = parseInt(taggerLimit, 10);
-      const r = await adminFetch('/tag-library', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refresh();
-    } catch (e) { toast.error(`Tagger start failed: ${e.message}`); }
     finally { setBusy(false); }
   };
 
@@ -511,96 +494,6 @@ export default function SettingsPanel() {
             </Section>
           )}
 
-          <Section title="Library mood tags">
-            <Row>
-              <div>
-                <Lead>
-                  {data.libraryStats?.total ?? 0} tracks tagged
-                  {data.libraryStats?.updatedAt && (
-                    <span style={{ color: 'var(--muted)', marginLeft: 8, fontSize: 12 }}>
-                      · last update {new Date(data.libraryStats.updatedAt).toLocaleString('en-GB')}
-                    </span>
-                  )}
-                </Lead>
-                <Hint>
-                  Walks your Navidrome library album-by-album, classifies each track via Ollama.
-                  Resumable — already-tagged tracks are skipped.
-                </Hint>
-              </div>
-            </Row>
-
-            <div className="flex items-center gap-2 mt-3">
-              <span className="v3-caption" style={{ color: 'var(--muted)' }}>limit</span>
-              <NumInput
-                value={taggerLimit}
-                onChange={e => setTaggerLimit(e.target.value)}
-                disabled={data.tagger.running}
-                style={{ width: 96 }}
-              />
-              <SolidButton
-                onClick={startTagger}
-                disabled={busy || data.tagger.running}
-              >
-                {data.tagger.running ? 'running…' : 'start tagging'}
-              </SolidButton>
-              {data.tagger.running && data.tagger.startedAt && (
-                <span style={{ color: 'var(--muted)', fontSize: 11 }}>
-                  pid {data.tagger.pid} · started {new Date(data.tagger.startedAt).toLocaleTimeString('en-GB')}
-                </span>
-              )}
-            </div>
-
-            {data.libraryStats?.total > 0 && (
-              <div className="mt-4">
-                <div className="v3-caption mb-2" style={{ color: 'var(--muted)' }}>by mood</div>
-                <div className="flex flex-wrap gap-1">
-                  {Object.entries(data.libraryStats.byMood || {})
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([m, n]) => (
-                      <span
-                        key={m}
-                        style={{
-                          border: '1px solid var(--ink)',
-                          padding: '2px 8px',
-                          fontSize: 12,
-                        }}
-                      >
-                        <span style={{ color: 'var(--ink)' }}>{m}</span>{' '}
-                        <span className="v3-tab-num" style={{ color: 'var(--muted)' }}>{n}</span>
-                      </span>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {data.tagger.lastLog?.length > 0 && (
-              <details className="mt-4" style={{ border: '1px solid var(--ink)' }}>
-                <summary
-                  className="cursor-pointer v3-caption"
-                  style={{ padding: '8px 12px', color: 'var(--ink)' }}
-                >
-                  tagger log ({data.tagger.lastLog.length} lines)
-                </summary>
-                <pre
-                  className="v3-scroll"
-                  style={{
-                    fontSize: 11,
-                    lineHeight: 1.4,
-                    maxHeight: 280,
-                    overflowY: 'auto',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-all',
-                    padding: 12,
-                    color: 'var(--ink)',
-                    borderTop: '1px solid var(--ink)',
-                  }}
-                >
-                  {data.tagger.lastLog.join('\n')}
-                </pre>
-              </details>
-            )}
-          </Section>
-
           <Section title={`Jingles · ${data.jingles.length}`}>
             <Hint>
               Pre-recorded TTS stingers. A default station ident is generated on first boot;
@@ -727,9 +620,6 @@ function Section({ title, children }) {
     </section>
   );
 }
-function Row({ children }) {
-  return <div className="flex items-start justify-between gap-4 py-2">{children}</div>;
-}
 function FormRow({ label, hint, requiresRestart, children }) {
   return (
     <div className="space-y-1.5">
@@ -748,9 +638,6 @@ function FormRow({ label, hint, requiresRestart, children }) {
       <div className="flex items-center flex-wrap">{children}</div>
     </div>
   );
-}
-function Lead({ children }) {
-  return <div style={{ color: 'var(--ink)', fontSize: 14, fontWeight: 600 }}>{children}</div>;
 }
 function Hint({ children }) {
   return <div style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.5, marginTop: 4 }}>{children}</div>;

@@ -179,13 +179,10 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 // Returns { ack, track } on success, or null when the conversational agent is
 // disabled (the caller then runs its own stateless matcher cascade). Throws if
 // the agent runs but fails — the caller catches and falls back the same way.
+// The caller (routes/request.js) owns the request `event` turn — it posts one
+// for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue, ctx, { requester, text }) {
   if (!settings.get().llm?.pickerAgent) return null;
-
-  const current = queue.current?.track || null;
-  const eventText = `Listener "${requester}" requests: "${text}"`
-    + (current ? ` (currently playing "${current.title}" by ${current.artist})` : '');
-  session.appendTurn({ role: 'event', kind: 'request', text: eventText });
 
   const recentIds = queue.recentlyPlayedIds(25);
   const { tools, seen } = buildPickerTools({ recentIds });

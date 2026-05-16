@@ -15,6 +15,15 @@ const SECTIONS = [
   { id: 'jingles', label: 'Jingles', hint: 'stingers' },
 ];
 
+// Each non-Ollama LLM provider reads its key from this controller env var.
+const LLM_ENV_VARS = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  gateway: 'AI_GATEWAY_API_KEY',
+};
+
 export default function SettingsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState(null);
@@ -59,15 +68,11 @@ export default function SettingsPanel() {
           provider: data.values.tts?.cloud?.provider ?? 'openai',
           model: data.values.tts?.cloud?.model ?? '',
           voice: data.values.tts?.cloud?.voice ?? '',
-          apiKey: '',                                            // never prefill a secret
-          apiKeySet: data.values.tts?.cloud?.apiKey === 'set',
         },
       },
       llm: {
         provider: data.values.llm?.provider ?? 'ollama',
         model: data.values.llm?.model ?? '',
-        apiKey: '',                                              // never prefill a secret
-        apiKeySet: data.values.llm?.apiKey === 'set',
         pickerAgent: !!data.values.llm?.pickerAgent,
       },
     });
@@ -361,6 +366,42 @@ function SaveBar({ note, busy, saveMsg, onSave, saveLabel, extra }) {
   );
 }
 
+/* API-key status banner. The key itself is never entered in the admin UI —
+   it's read from the controller's environment. This just reports whether the
+   relevant env var is present, and tells the operator how to set it if not. */
+function KeyStatus({ envVar, present }) {
+  const tone = present ? 'var(--accent)' : 'var(--danger)';
+  return (
+    <div
+      className="field"
+      style={{
+        marginTop: 14,
+        padding: 12,
+        border: `1px solid ${tone}`,
+        background: 'var(--ink-softer)',
+        display: 'flex', alignItems: 'flex-start', gap: 10,
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: '50%', marginTop: 5, flex: 'none', background: tone }} />
+      <div style={{ display: 'grid', gap: 3 }}>
+        <span style={{ fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 700, color: tone }}>
+          {present ? 'API key found in environment' : 'API key missing'}
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.5 }}>
+          {present ? (
+            <>The controller has <code>{envVar}</code> set — this provider is ready to use.</>
+          ) : (
+            <>
+              Set <code>{envVar}</code> in <code>controller/.env</code> and restart the controller.
+              API keys are configured through the environment, not the admin UI.
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /* Segmented engine picker built on the shared Seg primitive.
    value is an engine name, or null when allowDefault and "use default". */
 function EngineSeg({ engines, available, value, onChange, allowDefault, defaultEngine }) {
@@ -408,9 +449,8 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
         provider: form.tts.cloud.provider,
         model: form.tts.cloud.model,
         voice: form.tts.cloud.voice,
-        // Only send the key when the operator typed one — an empty string
-        // would otherwise clear the stored key.
-        ...(form.tts.cloud.apiKey ? { apiKey: form.tts.cloud.apiKey } : {}),
+        // The API key is never set from the UI — it comes from the
+        // controller's environment (OPENAI_API_KEY / ELEVENLABS_API_KEY).
       },
     },
   });
@@ -549,25 +589,10 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
                   );
                 })()}
               </div>
-              <div className="field" style={{ marginTop: 14 }}>
-                <label className="field-label">API key</label>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    className="input"
-                    type="password"
-                    value={form.tts.cloud.apiKey}
-                    onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, apiKey: e.target.value } } }))}
-                    placeholder={form.tts.cloud.apiKeySet ? '•••••••• (set)' : 'paste key'}
-                    style={{ flex: 1, minWidth: 240, maxWidth: 360 }}
-                  />
-                  {form.tts.cloud.apiKeySet && <Pill tone="accent" dot>set</Pill>}
-                </div>
-                <div className="field-hint">
-                  {form.tts.cloud.apiKeySet
-                    ? 'A key is set. Leave blank to keep it; type to replace.'
-                    : 'Or set OPENAI_API_KEY / ELEVENLABS_API_KEY in the environment.'}
-                </div>
-              </div>
+              <KeyStatus
+                envVar={form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY'}
+                present={!!data.env?.[form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY']}
+              />
             </>
           )}
         </Card>
@@ -592,8 +617,8 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
       provider: form.llm.provider,
       model: form.llm.model,
       pickerAgent: form.llm.pickerAgent,
-      // Only send the key when the operator typed one.
-      ...(form.llm.apiKey ? { apiKey: form.llm.apiKey } : {}),
+      // The API key is never set from the UI — it comes from the controller's
+      // environment (ANTHROPIC_API_KEY / OPENAI_API_KEY / AI_GATEWAY_API_KEY).
     },
   });
 
@@ -641,25 +666,10 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
           </div>
 
           {form.llm.provider !== 'ollama' && (
-            <div className="field">
-              <label className="field-label">API key</label>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  className="input"
-                  type="password"
-                  value={form.llm.apiKey}
-                  onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, apiKey: e.target.value } }))}
-                  placeholder={form.llm.apiKeySet ? '•••••••• (set)' : 'paste key'}
-                  style={{ flex: 1, minWidth: 240, maxWidth: 360 }}
-                />
-                {form.llm.apiKeySet && <Pill tone="accent" dot>set</Pill>}
-              </div>
-              <div className="field-hint">
-                {form.llm.apiKeySet
-                  ? 'A key is set. Leave blank to keep it; type to replace.'
-                  : 'Or set the provider env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY).'}
-              </div>
-            </div>
+            <KeyStatus
+              envVar={LLM_ENV_VARS[form.llm.provider]}
+              present={!!data.env?.[LLM_ENV_VARS[form.llm.provider]]}
+            />
           )}
         </div>
       </Card>

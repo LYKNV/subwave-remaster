@@ -69,6 +69,17 @@ router.get('/settings', requireAdmin, async (req, res) => {
         providers: settings.LLM_PROVIDERS,
         active: llmProvider.activeModelLabel(),
       },
+      // Which provider API keys are present in the controller's environment.
+      // The UI keys its "key missing" alerts off this — keys are configured
+      // via controller/.env, never typed into the admin surface.
+      env: {
+        OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
+        ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
+        ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+        GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+        OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
+        AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
+      },
       // Skill catalogue — consumed by the Skills page and by Personas for the
       // per-persona skill-assignment checklist.
       skills: { catalog: skillCatalog() },

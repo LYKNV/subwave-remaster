@@ -10,8 +10,7 @@ import TransportBar from './TransportBar';
 import DotRail from './DotRail';
 import { Sheet } from './ui/sheet';
 import { Toaster } from './ui/toaster';
-import QueueDrawer from './drawers/QueueDrawer';
-import HistoryDrawer from './drawers/HistoryDrawer';
+import TimelineDrawer from './drawers/TimelineDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import { useStationFeed } from '../hooks/useStationFeed';
@@ -22,8 +21,7 @@ import { getStoredTheme, setTheme as persistTheme } from '../lib/theme';
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 const DRAWER_TITLES = {
-  queue: 'Up next',
-  history: 'Played',
+  timeline: 'Timeline',
   booth: 'Booth feed',
   request: 'Make a request',
 };
@@ -139,8 +137,9 @@ export default function PlayerApp({ contained = false }) {
 
       <DotRail
         counts={{
-          queue: state.upcoming?.length ?? 0,
-          history: <History size={18} strokeWidth={1.5} />,
+          timeline: state.upcoming?.length
+            ? state.upcoming.length
+            : <History size={18} strokeWidth={1.5} />,
           booth: <Mic size={18} strokeWidth={1.5} />,
         }}
         active={drawer}
@@ -164,8 +163,9 @@ export default function PlayerApp({ contained = false }) {
         title={drawer ? DRAWER_TITLES[drawer] : ''}
         container={portalNode}
       >
-        {drawer === 'queue'   && <QueueDrawer items={state.upcoming} />}
-        {drawer === 'history' && <HistoryDrawer items={state.history} />}
+        {drawer === 'timeline' && (
+          <TimelineDrawer upcoming={state.upcoming} history={state.history} />
+        )}
         {drawer === 'booth'   && <BoothDrawer items={boothFeed} />}
         {drawer === 'request' && (
           <RequestDrawer

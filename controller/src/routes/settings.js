@@ -13,7 +13,7 @@ import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../bro
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { tagger } from '../broadcast/tagger.js';
-import { skillCatalog } from '../skills/_registry.js';
+import { skillCatalog } from '../skills/_agent.js';
 
 export const router = express.Router();
 

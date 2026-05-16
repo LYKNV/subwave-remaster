@@ -301,7 +301,7 @@ music_bus =
 # duration = fade time into/out of the duck. p is a getter (curly braces).
 ducked = smooth_add(
   duration=0.5,
-  p={0.25},         # music drops to 25% (~-12 dB) while voice plays
+  p={0.15},         # music drops to 15% (~-16 dB) while voice plays
   normal=music_bus,
   special=voice
 )
@@ -310,7 +310,7 @@ ducked = smooth_add(
 # audible under the DJ's voice.
 radio = smooth_add(
   duration=0.5,
-  p={0.40},         # music drops to 40% (~-8 dB) while intro plays
+  p={0.30},         # music drops to 30% (~-10 dB) while intro plays
   normal=ducked,
   special=intro
 )

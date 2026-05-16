@@ -3,10 +3,9 @@
 import { isValidElement } from 'react';
 
 const ITEMS = [
-  { k: 'queue',   l: 'Queue' },
-  { k: 'history', l: 'Played' },
-  { k: 'booth',   l: 'Booth' },
-  { k: 'request', l: 'Request' },
+  { k: 'timeline', l: 'Timeline' },
+  { k: 'booth',    l: 'Booth' },
+  { k: 'request',  l: 'Request' },
 ];
 
 export default function DotRail({ counts, active, onSelect }) {

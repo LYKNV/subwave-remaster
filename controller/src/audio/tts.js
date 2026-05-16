@@ -18,10 +18,10 @@ export const VOICE_KINDS = [
   'link',           // between-track auto links (light-duck channel)
   'station-id',     // :15/:45 idents
   'hourly-check',   // top-of-hour time/weather mention
-  'weather',        // weather change announcements (skills/weather.js)
-  'news',           // headline read (skills/news.js)
-  'traffic',        // tongue-in-cheek traffic filler (skills/traffic.js)
-  'random-facts',   // "did you know" filler (skills/random-facts.js)
+  'weather',        // weather change announcements (segment capability)
+  'news',           // headline read (segment capability)
+  'traffic',        // tongue-in-cheek traffic filler (segment capability)
+  'random-facts',   // "did you know" filler (segment capability)
   'jingle',         // pre-rendered station idents (offline path)
   'default',        // fallback when a kind isn't explicitly mapped
 ];

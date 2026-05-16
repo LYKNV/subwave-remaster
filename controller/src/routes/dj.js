@@ -10,7 +10,7 @@ import * as dj from '../llm/dj.js';
 import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
-import { skillCatalog, runSkill } from '../skills/_registry.js';
+import { skillCatalog, runCapability } from '../skills/_agent.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
@@ -94,7 +94,7 @@ router.post('/dj/skill', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'name is required' });
   }
   try {
-    const spoken = await runSkill(name, await getFullContext());
+    const spoken = await runCapability(name, await getFullContext());
     res.json({ ok: true, name, spoken });
   } catch (err) {
     queue.log('error', `/dj/skill ${name} failed: ${err.message}`);

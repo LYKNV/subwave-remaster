@@ -71,7 +71,8 @@ export async function djText({
       model: activeModelLabel(),
       sampling: { temperature, top_p: topP, repeat_penalty: repeatPenalty, seed },
       via: 'ai-sdk',
-      systemPreview: system?.slice(0, 200),
+      // Full, untruncated — the /debug surface shows the whole system prompt.
+      system,
       user: prompt,
       response: out,
       t: new Date().toISOString(),
@@ -137,7 +138,8 @@ export async function djObject({
         model: activeModelLabel(),
         sampling: { temperature },
         via: attempt === 1 ? 'ai-sdk' : 'ai-sdk:recovery',
-        systemPreview: system?.slice(0, 200),
+        // Full, untruncated — the /debug surface shows the whole system prompt.
+        system,
         user: prompt,
         response: JSON.stringify(object).slice(0, 500),
         t: new Date().toISOString(),

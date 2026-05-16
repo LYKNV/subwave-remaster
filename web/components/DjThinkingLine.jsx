@@ -84,10 +84,7 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }) {
       </span>
       <span
         style={{
-          display: "-webkit-box",
-          WebkitBoxOrient: "vertical",
-          WebkitLineClamp: 3,
-          overflow: "hidden",
+          overflowWrap: "anywhere",
         }}
       >
         {shown}

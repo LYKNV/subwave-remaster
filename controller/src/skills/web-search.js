@@ -1,15 +1,13 @@
-// Web search skill — queries the Tavily API for something recent about the
-// artist currently on air, then asks the DJ to work one detail into a
-// between-track line.
+// Web search helper — queries the Tavily API. Backs the `searchArtistNews`
+// segment tool (llm/segment-tools.js); there is no standalone "web-search
+// skill" object — the segment-director agent (skills/_agent.js) decides when
+// artist news airs.
 //
-// Needs a Tavily key (SEARCH_API_KEY); the segment-director agent only offers
-// this capability — and the searchArtistNews tool only works — when the key
-// is set. This module backs the /dj/skill manual-override route.
+// Needs a Tavily key (SEARCH_API_KEY). The agent only offers the web-search
+// capability — and only builds the searchArtistNews tool — when the key is
+// set (see CAPABILITIES.ready in skills/_agent.js).
 
 import { config } from '../config.js';
-import { queue } from '../broadcast/queue.js';
-import { djText } from '../llm/sdk.js';
-import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 
@@ -31,54 +29,3 @@ export async function tavilySearch(query) {
   if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`);
   return res.json();
 }
-
-export default {
-  name: 'web-search',
-  label: 'Web search',
-  description: 'Searches the web for something recent about the artist on air and works one detail into a between-track line. Needs a Tavily API key (SEARCH_API_KEY).',
-  kind: 'web-search',
-  cooldownMs: 60 * 60 * 1000,
-
-  // Env key this skill needs. `ready()` is surfaced in the skill catalogue so
-  // the admin UI can warn when the key is missing. `keyUrl` lets the admin UI
-  // link the operator straight to where the key is issued.
-  requiresKey: 'SEARCH_API_KEY',
-  keyUrl: 'https://app.tavily.com/home',
-  ready() { return !!config.search.apiKey; },
-
-  async fetchData() {
-    const artist = queue.current?.track?.artist;
-    if (!artist) return null;
-
-    let data;
-    try {
-      data = await tavilySearch(`${artist} musician latest news`);
-    } catch {
-      return null;
-    }
-
-    const answer = (data.answer || '').trim();
-    const top = (data.results || [])
-      .slice(0, 3)
-      .map(r => `${r.title}: ${(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 240)}`);
-    if (!answer && top.length === 0) return null;
-    return { artist, answer, top };
-  },
-
-  async script(ctx, data, { recap, recentOpeners }) {
-    if (!data) return null;
-    const lines = buildContextLines(ctx);
-    lines.push(`Artist on air: ${data.artist}`);
-    if (data.answer) lines.push(`What the web says: ${data.answer}`);
-    if (data.top.length) lines.push(`Sources:\n${data.top.map(t => `- ${t}`).join('\n')}`);
-    lines.push(`Task: work ONE genuine, current detail about ${data.artist} into a single spoken line — conversational, BBC 6 Music tone. No "I read online", no URLs, no list. If nothing above is worth saying, say nothing.`);
-    return djText({
-      system: djSystem(),
-      prompt: decoratePrompt(lines.join('\n'), { kind: 'web_search', recap, recentOpeners }),
-      temperature: 0.85,
-      topP: 0.95,
-      repeatPenalty: 1.2,
-      kind: 'skill.web-search',
-    });
-  },
-};

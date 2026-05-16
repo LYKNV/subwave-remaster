@@ -15,8 +15,7 @@ import { queue } from './queue.js';
 import * as session from './session.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
-import * as skillRegistry from '../skills/_registry.js';
-import { agenticTick } from '../skills/_agent.js';
+import { agenticTick, skillCatalog } from '../skills/_agent.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -191,8 +190,8 @@ export async function runLink() {
 // Hands a snapshot of the moment and a set of real-world data tools to the
 // segment-director agent (skills/_agent.js), which decides whether to air one
 // between-track segment (weather / news / traffic / fact / artist news) or to
-// stay silent. Replaces the registry's filter-and-random-pick tick; the skill
-// modules still back the tools and the /dj/skill manual-override route.
+// stay silent. The same agent also backs the /dj/skill manual-override route
+// (runCapability), forced to one capability.
 // ---------------------------------------------------------------------------
 
 async function skillsTick() {
@@ -266,5 +265,5 @@ export function startScheduler() {
   // Cleanup every hour
   cron.schedule('0 * * * *', cleanup);
 
-  queue.log('scheduler', `Scheduler started · skills: ${skillRegistry.listSkills().join(', ')}`);
+  queue.log('scheduler', `Scheduler started · skills: ${skillCatalog().map(s => s.name).join(', ')}`);
 }

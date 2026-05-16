@@ -1395,23 +1395,44 @@ body::after {
 }
 .admin-root .shell-nav {
   border-right: 1px solid var(--separator-strong); padding-right: 18px;
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.admin-root .shell-nav .nav-section {
+  display: flex; flex-direction: column; gap: 3px;
+}
+.admin-root .shell-nav .nav-section-label {
+  font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--muted); padding: 0 2px 5px; margin-bottom: 1px;
 }
 .admin-root .shell-nav .nav-item {
-  border: 1px solid var(--ink); background: transparent; color: var(--ink);
-  padding: 9px 12px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
-  text-align: left; display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; text-decoration: none; cursor: pointer;
+  border: 1px solid var(--separator-strong); background: transparent; color: var(--ink);
+  padding: 8px 10px; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+  text-align: left; display: flex; align-items: center;
+  gap: 9px; text-decoration: none; cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-.admin-root .shell-nav .nav-item:hover { background: var(--ink-soft); }
-.admin-root .shell-nav .nav-item.active { background: var(--ink); color: var(--bg); }
+.admin-root .shell-nav .nav-item .nav-icon {
+  flex: 0 0 auto; opacity: 0.55; transition: opacity 0.12s ease;
+}
+.admin-root .shell-nav .nav-item .nav-label { flex: 1 1 auto; }
+.admin-root .shell-nav .nav-item:hover {
+  background: var(--ink-soft); border-color: var(--ink);
+}
+.admin-root .shell-nav .nav-item:hover .nav-icon { opacity: 0.9; }
+.admin-root .shell-nav .nav-item.active {
+  background: var(--ink); color: var(--bg); border-color: var(--ink);
+}
 .admin-root .shell-nav .nav-item.active:hover { background: var(--ink); }
+.admin-root .shell-nav .nav-item.active .nav-icon { opacity: 1; }
 .admin-root .shell-nav .nav-item .pill {
-  font-size: 9px; letter-spacing: 0.18em; padding: 1px 6px;
+  font-size: 9px; letter-spacing: 0.16em; padding: 1px 6px;
   border: 1px solid currentColor; opacity: 0.7;
 }
+.admin-root .shell-nav .nav-item.active .pill {
+  background: var(--accent); border-color: var(--accent); color: #fff; opacity: 1;
+}
 .admin-root .shell-nav .nav-foot {
-  margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--separator-strong);
+  margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--separator-strong);
   font-size: 10px; letter-spacing: 0.18em; color: var(--muted);
   text-transform: uppercase; line-height: 1.7;
 }
@@ -1419,8 +1440,12 @@ body::after {
 @media (max-width: 860px) {
   .admin-root .shell-body { grid-template-columns: 1fr; gap: 18px; padding: 18px; }
   .admin-root .shell-nav {
-    border-right: none; padding-right: 0; flex-direction: row; flex-wrap: wrap;
+    border-right: none; padding-right: 0; flex-direction: row; flex-wrap: wrap; gap: 6px;
   }
+  .admin-root .shell-nav .nav-section {
+    flex-direction: row; flex-wrap: wrap; gap: 6px; flex: 1 1 auto;
+  }
+  .admin-root .shell-nav .nav-section-label { display: none; }
   .admin-root .shell-nav .nav-item { flex: 1 1 auto; }
   .admin-root .shell-nav .nav-foot { display: none; }
 }

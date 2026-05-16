@@ -1,5 +1,7 @@
-// News skill — fetches BBC News RSS (configurable via NEWS_FEED_URL), picks
-// the top unseen headline, and asks the DJ to read it in character.
+// News feed helpers — fetch BBC News RSS (configurable via NEWS_FEED_URL) and
+// hash headlines for dedup. These back the `getHeadlines` segment tool
+// (llm/segment-tools.js); there is no standalone "news skill" object — the
+// segment-director agent (skills/_agent.js) decides when a headline airs.
 //
 // Dependency-free RSS parsing: the BBC feed is RSS 2.0 with shallow <item>
 // blocks containing <title> and <description>. We regex-extract those two
@@ -7,8 +9,6 @@
 // fast-xml-parser as a follow-up.
 
 import { config } from '../config.js';
-import { djText } from '../llm/sdk.js';
-import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 const ITEM_RE = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
 const TITLE_RE = /<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i;
@@ -47,41 +47,3 @@ export async function fetchHeadlines() {
   }
   return items;
 }
-
-export default {
-  name: 'news',
-  label: 'News headlines',
-  description: 'Reads one top headline from the configured RSS feed, in character.',
-  kind: 'news',
-  cooldownMs: 45 * 60 * 1000,
-
-  async fetchData(_ctx, state) {
-    const items = await fetchHeadlines();
-    if (!items.length) return null;
-    if (!state.seen) state.seen = new Set();
-    const fresh = items.find(it => !state.seen.has(hashHeadline(it.title)));
-    if (!fresh) return null;
-    state.seen.add(hashHeadline(fresh.title));
-    if (state.seen.size > 80) {
-      // Trim memory — keep the most recent ~40 hashes
-      state.seen = new Set(Array.from(state.seen).slice(-40));
-    }
-    return fresh;
-  },
-
-  async script(ctx, item, { recap, recentOpeners }) {
-    if (!item) return null;
-    const lines = buildContextLines(ctx);
-    lines.push(`Headline: ${item.title}`);
-    if (item.description) lines.push(`Detail: ${item.description}`);
-    lines.push('Task: read this in 1 sentence, BBC 6 Music tone — no editorialising, no anchor voice, no "in other news". Then let the music answer.');
-    return djText({
-      system: djSystem(),
-      prompt: decoratePrompt(lines.join('\n'), { kind: 'news', recap, recentOpeners }),
-      temperature: 0.85,
-      topP: 0.95,
-      repeatPenalty: 1.2,
-      kind: 'skill.news',
-    });
-  },
-};

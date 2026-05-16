@@ -4,8 +4,9 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { STATE_DIR } from '../config.js';
 
-const PATH = '/var/sub-wave/moods.json';
+const PATH = `${STATE_DIR}/moods.json`;
 
 let store = { tracks: {}, updatedAt: null };
 let loaded = false;

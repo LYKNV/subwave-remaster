@@ -64,6 +64,10 @@ services:
       # Without TZ the container runs in UTC; schedule slots (day-of-week +
       # hour) would then resolve an hour off from the admin UI during BST.
       - TZ=${TZ:-Europe/London}
+      # In-container path of the shared state mount below. The controller
+      # derives every state file path from this; native dev (npm run dev)
+      # has no STATE_DIR and falls back to the repo-local state/ dir.
+      - STATE_DIR=/var/sub-wave
     depends_on:
       - liquidsoap
     ports:

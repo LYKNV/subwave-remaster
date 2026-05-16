@@ -1,8 +1,8 @@
 // Jingles — pre-recorded TTS stingers that rotate into the broadcast at
 // 1-per-30-track intervals (see liquidsoap/radio.liq).
 //
-// Files live at /var/sub-wave/jingles/<hash>.wav and are referenced from
-// /var/sub-wave/jingles.m3u (one path per line). A sidecar /var/sub-wave/
+// Files live at <stateDir>/jingles/<hash>.wav and are referenced from
+// <stateDir>/jingles.m3u (one path per line). A sidecar <stateDir>/
 // jingles.json maps filename → { text, createdAt, builtin }.
 
 import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
@@ -10,10 +10,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { speak } from '../audio/tts.js';
+import { STATE_DIR } from '../config.js';
 
-const DIR = '/var/sub-wave/jingles';
-const PLAYLIST = '/var/sub-wave/jingles.m3u';
-const META = '/var/sub-wave/jingles.json';
+const DIR = `${STATE_DIR}/jingles`;
+const PLAYLIST = `${STATE_DIR}/jingles.m3u`;
+const META = `${STATE_DIR}/jingles.json`;
 
 const DEFAULT_IDENT = {
   filename: 'station_ident_default.wav',

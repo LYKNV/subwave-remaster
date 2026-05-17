@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import { speak } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
+import * as sfx from './sfx.js';
 import * as session from './session.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
@@ -240,6 +241,27 @@ class Queue {
       session.appendTurn({ role: 'segment', kind, text });
     } catch (err) {
       this.log('error', `Announce failed: ${err.message}`);
+    }
+  }
+
+  // Play a pre-rendered sound effect from the library UNDER the DJ voice.
+  // Writes the effect's file path straight to sfx.txt — no TTS, the audio is
+  // already rendered. Liquidsoap's sfx_queue mixes it beneath the voice
+  // channels (see liquidsoap/radio.liq). Used by the segment-director agent
+  // to garnish a spoken line.
+  async playSfx(name) {
+    if (!name) return;
+    try {
+      const path = await sfx.getPath(name);
+      if (!path) {
+        this.log('error', `Unknown sound effect: ${name}`);
+        return;
+      }
+      await writeFile(config.liquidsoap.sfxFile, path);
+      this.log('sfx', name);
+      session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
+    } catch (err) {
+      this.log('error', `playSfx failed: ${err.message}`);
     }
   }
 

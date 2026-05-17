@@ -19,6 +19,7 @@ const SECTIONS = [
   { id: 'llm',     label: 'LLM provider', hint: 'model routing' },
   { id: 'mixer',   label: 'Mixer', hint: 'crossfade · weather' },
   { id: 'jingles', label: 'Jingles', hint: 'stingers' },
+  { id: 'sfx',     label: 'Sound FX', hint: 'agent stingers' },
 ];
 
 // Each non-Ollama LLM provider reads its key from this controller env var.
@@ -44,6 +45,9 @@ export default function SettingsPanel() {
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);  // jingle filename, or null
   const [activeSection, setActiveSection] = useState('tts');
+  const [sfxData, setSfxData] = useState(null);              // GET /sfx response
+  const [sfxForm, setSfxForm] = useState({ name: '', description: '', prompt: '', durationSec: '' });
+  const [confirmDeleteSfx, setConfirmDeleteSfx] = useState(null);  // sfx name, or null
 
   // Refresh only updates the read-only `data` view — never touches `form`.
   // The form is hydrated exactly once via the effect below; otherwise the 3s
@@ -55,6 +59,15 @@ export default function SettingsPanel() {
       const j = await r.json();
       setData(j); setErr(null);
     } catch (e) { setErr(e.message); }
+  };
+
+  // Sound-effects library lives behind its own /sfx endpoint, not /settings.
+  const refreshSfx = async () => {
+    try {
+      const r = await adminFetch('/sfx');
+      if (!r.ok) return;
+      setSfxData(await r.json());
+    } catch { /* non-fatal — the section just shows loading */ }
   };
 
   useEffect(() => {
@@ -91,7 +104,8 @@ export default function SettingsPanel() {
     // then sends an unauthenticated request that 401s.
     if (!hydrated || needsAuth) return;
     refresh();
-    const id = setInterval(refresh, 3000);
+    refreshSfx();
+    const id = setInterval(() => { refresh(); refreshSfx(); }, 3000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, needsAuth]);
@@ -185,6 +199,40 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
+  const createSfx = async () => {
+    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return;
+    setBusy(true);
+    try {
+      const r = await adminFetch('/sfx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: sfxForm.name.trim(),
+          description: sfxForm.description.trim(),
+          prompt: sfxForm.prompt.trim(),
+          durationSec: sfxForm.durationSec ? parseFloat(sfxForm.durationSec) : undefined,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setSfxForm({ name: '', description: '', prompt: '', durationSec: '' });
+      await refreshSfx();
+    } catch (e) { toast.error(`Sound effect creation failed: ${e.message}`); }
+    finally { setBusy(false); }
+  };
+
+  // Confirmed via the dialog before this runs.
+  const deleteSfx = async (name) => {
+    setBusy(true);
+    try {
+      const r = await adminFetch(`/sfx/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await refreshSfx();
+    } catch (e) { toast.error(`Delete failed: ${e.message}`); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24, alignItems: 'flex-start' }}>
       {/* Section rail */}
@@ -211,7 +259,11 @@ export default function SettingsPanel() {
                 {s.label}
               </span>
               <span style={{ fontSize: 9, letterSpacing: '0.18em', textTransform: 'uppercase', opacity: 0.7 }}>
-                {s.id === 'jingles' && data ? `${data.jingles.length} file${data.jingles.length === 1 ? '' : 's'}` : s.hint}
+                {s.id === 'jingles' && data
+                  ? `${data.jingles.length} file${data.jingles.length === 1 ? '' : 's'}`
+                  : s.id === 'sfx' && sfxData
+                    ? `${sfxData.sfx.length} effect${sfxData.sfx.length === 1 ? '' : 's'}`
+                    : s.hint}
               </span>
             </button>
           );
@@ -297,6 +349,12 @@ export default function SettingsPanel() {
             )}
           </>
         )}
+        {activeSection === 'sfx' && (
+          <SfxSection
+            sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
+            busy={busy} createSfx={createSfx} onDelete={setConfirmDeleteSfx}
+          />
+        )}
       </div>
 
       <V3AlertDialog
@@ -325,6 +383,15 @@ export default function SettingsPanel() {
         confirmLabel="delete"
         danger
         onConfirm={() => { if (confirmDelete) deleteJingle(confirmDelete); setConfirmDelete(null); }}
+      />
+      <V3AlertDialog
+        open={confirmDeleteSfx != null}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteSfx(null); }}
+        title="Delete sound effect"
+        description={confirmDeleteSfx ? `Delete the sound effect "${confirmDeleteSfx}"? This removes the rendered audio file permanently.` : ''}
+        confirmLabel="delete"
+        danger
+        onConfirm={() => { if (confirmDeleteSfx) deleteSfx(confirmDeleteSfx); setConfirmDeleteSfx(null); }}
       />
     </div>
   );
@@ -935,6 +1002,142 @@ function JinglesSection({ data, form, setForm, busy, jingleText, setJingleText, 
               onClick={() => onDelete(j.filename)}
               disabled={busy || j.builtin}
               title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
+            >
+              Delete
+            </Btn>
+          </div>
+        ))}
+      </Card>
+    </>
+  );
+}
+
+/* ── Sound effects ───────────────────────────────────────────────────── */
+
+function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete }) {
+  if (!sfxData) {
+    return <div style={{ color: 'var(--muted)', fontStyle: 'italic', fontSize: 13 }}>loading…</div>;
+  }
+  const list = sfxData.sfx || [];
+  const ready = !!sfxData.generatorReady;
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="sound effects"
+        title="Stingers the DJ agent plays under its voice."
+        sub="The segment-director agent can garnish a spoken break with one of these effects, mixed beneath the voice. Each effect is generated by ElevenLabs from a text prompt; built-in effects can’t be deleted."
+        metrics={[{ n: String(list.length), l: 'effects', accent: true }]}
+      />
+
+      {!ready && (
+        <div className="card" style={{ borderColor: 'var(--danger)' }}>
+          <div className="card-body" style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+            <strong style={{ letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--danger)' }}>
+              ElevenLabs key missing
+            </strong>
+            <div style={{ marginTop: 4 }}>
+              Sound-effect generation needs an ElevenLabs API key. Set <code>ELEVENLABS_API_KEY</code> in{' '}
+              <code>controller/.env</code> (or set the cloud TTS provider to ElevenLabs with a key entered),
+              then restart the controller.
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Card title="Create sound effect" sub="rendered via ElevenLabs">
+        <div className="field">
+          <Label>Name</Label>
+          <Input
+            value={sfxForm.name}
+            maxLength={60}
+            onChange={e => setSfxForm(f => ({ ...f, name: e.target.value }))}
+            placeholder="e.g. record-scratch"
+            style={{ maxWidth: 280 }}
+          />
+          <div className="field-hint">A short slug the agent references — letters, numbers and dashes.</div>
+        </div>
+        <div className="field" style={{ marginTop: 14 }}>
+          <Label>Description</Label>
+          <Input
+            value={sfxForm.description}
+            maxLength={200}
+            onChange={e => setSfxForm(f => ({ ...f, description: e.target.value }))}
+            placeholder="when the agent should reach for this effect"
+          />
+          <div className="field-hint">The agent reads this to decide when the effect fits a line.</div>
+        </div>
+        <div className="field" style={{ marginTop: 14 }}>
+          <Label>Generation prompt</Label>
+          <Textarea
+            rows={2}
+            value={sfxForm.prompt}
+            onChange={e => setSfxForm(f => ({ ...f, prompt: e.target.value }))}
+            placeholder='e.g. "abrupt vinyl record scratch, short and sharp"'
+          />
+          <div className="field-hint">{sfxForm.prompt.length}/500 chars — describe the sound for ElevenLabs.</div>
+        </div>
+        <div className="field" style={{ marginTop: 14 }}>
+          <Label>Duration (optional)</Label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Input
+              className="mono-num"
+              type="number"
+              step={0.5}
+              min={0.5}
+              max={22}
+              value={sfxForm.durationSec}
+              onChange={e => setSfxForm(f => ({ ...f, durationSec: e.target.value }))}
+              placeholder="auto"
+              style={{ width: 112 }}
+            />
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>sec · 0.5–22, blank lets the model decide</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          <Btn
+            tone="accent"
+            onClick={createSfx}
+            disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
+          >
+            {busy ? 'Generating…' : 'Create sound effect'}
+          </Btn>
+        </div>
+      </Card>
+
+      <Card title="Sound effects" sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}>
+        {list.length === 0 && (
+          <div style={{ color: 'var(--muted)', fontStyle: 'italic', fontSize: 12, padding: '8px 0' }}>
+            none yet
+          </div>
+        )}
+        {list.map(s => (
+          <div
+            key={s.name}
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 0',
+              borderBottom: '1px dashed var(--separator-strong)',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: 'var(--ink)', fontSize: 13, fontWeight: 700 }}>{s.name}</div>
+              {s.description && (
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2, wordBreak: 'break-word' }}>
+                  {s.description}
+                </div>
+              )}
+              <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <span className="caption">{fmtSize(s.size)}</span>
+                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
+                {s.builtin && <Pill tone="accent">builtin</Pill>}
+              </div>
+            </div>
+            <Btn
+              sm
+              tone="danger"
+              onClick={() => onDelete(s.name)}
+              disabled={busy || s.builtin}
+              title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
             >
               Delete
             </Btn>

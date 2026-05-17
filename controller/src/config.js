@@ -59,6 +59,10 @@ export const config = {
     // play OVER a track that's already started with light ducking instead of
     // heavy ducking the music to 25%). Read by a second poll thread in radio.liq.
     introFile: `${STATE_DIR}/intro.txt`,
+    // On-demand sound-effect channel. The controller writes the path of a
+    // pre-rendered SFX clip here; radio.liq's sfx_queue mixes it UNDER the
+    // DJ voice (see broadcast/sfx.js + broadcast/queue.js playSfx).
+    sfxFile: `${STATE_DIR}/sfx.txt`,
     autoPlaylist: `${STATE_DIR}/auto.m3u`,
     nowPlayingFile: `${STATE_DIR}/now-playing.json`,
   },

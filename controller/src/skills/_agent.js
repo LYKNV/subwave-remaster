@@ -37,6 +37,7 @@ import * as settings from '../settings.js';
 import { djAgent } from '../llm/sdk.js';
 import { buildContextLines } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
+import * as sfx from '../broadcast/sfx.js';
 
 // Capability table — the single source of truth for the DJ's between-track
 // segment capabilities. Each entry carries:
@@ -87,6 +88,7 @@ const SEGMENT_SCHEMA = z.object({
   segment: z.object({
     kind: z.enum(['weather', 'news', 'traffic', 'random-facts', 'web-search']),
     text: z.string().describe('the spoken line — one sentence, in the DJ voice'),
+    sfx: z.string().nullable().describe('the exact name of one sound effect to play under this line, or null for none'),
   }).nullable().describe('the segment to air, or null to stay silent'),
   reason: z.string().describe('one short internal sentence on the decision'),
 });
@@ -95,7 +97,20 @@ const SEGMENT_SCHEMA = z.object({
 // known, so the agent only returns the spoken line.
 const FORCED_SCHEMA = z.object({
   text: z.string().describe('the spoken line — one sentence, in the DJ voice'),
+  sfx: z.string().nullable().describe('the exact name of one sound effect to play under the line, or null for none'),
 });
+
+// The optional sound-effects block appended to the agent's system prompt.
+// Returns '' when the library is empty — the feature stays invisible to the
+// agent and nothing in the schema can be satisfied.
+function sfxBlock(sfxCatalog) {
+  if (!sfxCatalog || !sfxCatalog.length) return '';
+  const list = sfxCatalog.map(s => `- ${s.name}: ${s.description}`).join('\n');
+  return `
+
+SOUND EFFECTS: you may optionally play ONE sound effect underneath your voice for this segment. Use one only when it genuinely sharpens the line — most segments need none, and an effect on every break gets old fast. Set "sfx" to the exact name of an effect below, or null:
+${list}`;
+}
 
 let tickBusy = false;
 const lastFired = new Map(); // kind → ms timestamp of last aired segment
@@ -134,7 +149,7 @@ function availableCapabilities(ctx, now) {
   return out;
 }
 
-function directorSystem(persona, caps, freq) {
+function directorSystem(persona, caps, freq, sfxCatalog) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const capList = caps.map(c => `- ${c.kind}: ${c.desc}`).join('\n');
@@ -153,10 +168,10 @@ Staying silent is a perfectly good — often the best — answer. Only speak whe
 Capabilities available to you this tick (you may air at most ONE):
 ${capList}
 
-Use the tools to look at the real data before you decide. If the data is dull, stale, unchanged, or you have nothing fresh to add, return null and stay silent. ${tone}
+Use the tools to look at the real data before you decide. If the data is dull, stale, unchanged, or you have nothing fresh to add, return null and stay silent. ${tone}${sfxBlock(sfxCatalog)}
 
 Respond with a JSON object only — no prose, no markdown:
-{ "segment": { "kind": "<one of: ${caps.map(c => c.kind).join(', ')}>", "text": "<one spoken sentence in your voice>" } or null, "reason": "<one short internal sentence about the SEGMENT decision — not about music>" }`;
+{ "segment": { "kind": "<one of: ${caps.map(c => c.kind).join(', ')}>", "text": "<one spoken sentence in your voice>", "sfx": "<an effect name from the list, or null>" } or null, "reason": "<one short internal sentence about the SEGMENT decision — not about music>" }`;
 }
 
 // The concrete situation handed to the agent as its single user turn. Built
@@ -203,8 +218,9 @@ export async function agenticTick(ctx) {
   tickBusy = true;
   try {
     const tools = buildSegmentTools(ctx, segmentState, caps);
+    const sfxCatalog = await sfx.catalog();
     const { object } = await djAgent({
-      system: directorSystem(persona, caps, freq),
+      system: directorSystem(persona, caps, freq, sfxCatalog),
       messages: [{ role: 'user', content: buildSituation(ctx) }],
       tools,
       schema: SEGMENT_SCHEMA,
@@ -232,6 +248,17 @@ export async function agenticTick(ctx) {
 
     // queue.announce appends the segment turn into the live session.
     await queue.announce(seg.text.trim(), seg.kind);
+
+    // Optional sound effect mixed under the voice. Only honour a name the
+    // agent was actually offered — anything else is dropped, like an
+    // unoffered kind.
+    if (seg.sfx) {
+      if (sfxCatalog.some(s => s.name === seg.sfx)) {
+        await queue.playSfx(seg.sfx);
+      } else {
+        queue.log('error', `Segment agent picked unknown sfx "${seg.sfx}" — dropping`);
+      }
+    }
   } catch (err) {
     queue.log('error', `Segment agent failed: ${err.message}`);
   } finally {
@@ -241,7 +268,7 @@ export async function agenticTick(ctx) {
 
 // Operator-override variant of directorSystem: exactly one capability, and the
 // segment is mandatory — the agent does not get the option to stay silent.
-function forcedSystem(persona, cap) {
+function forcedSystem(persona, cap, sfxCatalog) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
 
@@ -252,10 +279,10 @@ The operator has asked you to air ONE ${cap.kind} segment right now. You are NOT
 What this segment is:
 ${cap.desc}
 
-Use any tools available to you to look at the real data first, then write the line. You MUST produce a segment — staying silent is not an option here. If the data is thin, do the best you can with what you have.
+Use any tools available to you to look at the real data first, then write the line. You MUST produce a segment — staying silent is not an option here. If the data is thin, do the best you can with what you have.${sfxBlock(sfxCatalog)}
 
 Respond with a JSON object only — no prose, no markdown:
-{ "text": "<one spoken sentence in your voice>" }`;
+{ "text": "<one spoken sentence in your voice>", "sfx": "<an effect name from the list, or null>" }`;
 }
 
 // Operator override — fire one capability on demand, bypassing cooldowns, the
@@ -271,8 +298,9 @@ export async function runCapability(which, ctx) {
 
   const persona = settings.getEffectivePersona(new Date());
   const tools = buildSegmentTools(ctx, segmentState, [cap]);
+  const sfxCatalog = await sfx.catalog();
   const { object } = await djAgent({
-    system: forcedSystem(persona, cap),
+    system: forcedSystem(persona, cap, sfxCatalog),
     messages: [{ role: 'user', content: buildSituation(ctx, { forced: true }) }],
     tools,
     schema: FORCED_SCHEMA,
@@ -291,6 +319,16 @@ export async function runCapability(which, ctx) {
   }
 
   await queue.announce(text, cap.kind);
+
+  // Optional sound effect under the voice — only a name the agent was offered.
+  const pick = object?.sfx;
+  if (pick) {
+    if (sfxCatalog.some(s => s.name === pick)) {
+      await queue.playSfx(pick);
+    } else {
+      queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
+    }
+  }
   return text;
 }
 

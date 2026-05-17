@@ -181,6 +181,12 @@ music = cross(
 voice_queue = request.queue(id="voice_queue")
 intro_queue = request.queue(id="intro_queue")
 
+# Sound-effects channel — short pre-rendered stingers the DJ agent plays
+# UNDER its voice. The controller writes a clip path into /var/sub-wave/sfx.txt
+# (see broadcast/sfx.js + queue.playSfx). Not mic-chained — the audio is
+# already produced — and mixed in below (its own light `smooth_add` layer).
+sfx_queue = request.queue(id="sfx_queue")
+
 # Silent lead-in clip. Pushed into a voice channel immediately before the
 # actual speech file so smooth_add starts ducking the music while this silence
 # plays — the dip completes BEFORE the DJ's first word, then ramps back up
@@ -224,6 +230,20 @@ def poll_intro() =
   end
 end
 thread.run(every=0.5, poll_intro)
+
+def poll_sfx() =
+  if file.exists("/var/sub-wave/sfx.txt") then
+    contents = file.contents("/var/sub-wave/sfx.txt")
+    file.remove("/var/sub-wave/sfx.txt")
+    if contents != "" then
+      log("DJ sound effect: #{contents}")
+      # No lead-in: an SFX clip is already-rendered audio, and it is meant to
+      # start promptly so it lands under the voice.
+      ignore(sfx_queue.push(request.create(contents)))
+    end
+  end
+end
+thread.run(every=0.5, poll_sfx)
 
 # ---------------------------------------------------------------------------
 # MIC CHAIN — make Piper TTS sound like it's in a broadcast studio
@@ -336,6 +356,19 @@ radio = smooth_add(
   p={0.30},         # music drops to 30% (~-10 dB) while intro plays
   normal=ducked,
   special=intro
+)
+
+# SFX layer on top — short stingers the DJ agent plays under its voice.
+# Same gated `smooth_add` pattern as the two voice layers, but only a slight
+# duck: the effect is meant to ride BENEATH the DJ (and the music), not
+# replace either. `amplify` sets the stinger's level under the voice — both
+# the duck depth (p) and this gain are tuning knobs.
+sfx_bed = amplify(0.7, sfx_queue)
+radio = smooth_add(
+  duration=0.3,     # snappier than voice — stingers are short, no lead-in clip
+  p={0.7},          # music dips only to 70% (~-3 dB) while an effect plays
+  normal=radio,
+  special=sfx_bed
 )
 
 # ---------------------------------------------------------------------------

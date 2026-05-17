@@ -30,7 +30,7 @@ export default function TopBar({ tunedIn, context, djName, activeShow, listeners
         />
         <span className="v3-eyebrow shrink-0">SUB/WAVE</span>
         {showName && (
-          <span className="v3-caption truncate shrink-0" style={{ color: 'var(--ink)' }} title={showName}>
+          <span className="v3-caption truncate min-w-0" style={{ color: 'var(--ink)' }} title={showName}>
             ▸ {showName}
           </span>
         )}

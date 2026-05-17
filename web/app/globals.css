@@ -360,6 +360,38 @@ body::after {
     z-index: 1;
 }
 
+/* Masthead head row — 3-column grid keeps the wordmark optically centred
+   between the VOL dateline and the ON AIR status. Below 560px the side
+   blocks share one row and the wordmark drops to its own centred line, so
+   it never wraps awkwardly against the side blocks. */
+.bs-masthead-head {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: end;
+    gap: 24px;
+    padding: 24px 0 16px;
+}
+.bs-masthead-meta {
+    min-width: 0;
+}
+.bs-masthead-mark {
+    text-align: center;
+}
+.bs-masthead-status {
+    justify-content: flex-end;
+}
+@media (max-width: 560px) {
+    .bs-masthead-head {
+        grid-template-columns: 1fr 1fr;
+        align-items: center;
+        gap: 12px 24px;
+    }
+    .bs-masthead-mark {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+}
+
 /* Masthead wordmark — outsized mono, extreme weight, tight tracking. */
 .bs-wordmark {
     font-size: clamp(48px, 9vw, 128px);

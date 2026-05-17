@@ -20,13 +20,10 @@ export default function Masthead() {
     <header className="bs-paper" style={{ paddingTop: 28, paddingBottom: 0 }}>
       <div className="bs-rule-double" />
 
-      <div
-        className="flex flex-wrap items-end justify-between"
-        style={{ padding: '24px 0 16px', gap: 24 }}
-      >
+      <div className="bs-masthead-head">
         <div
-          className="bs-caption flex items-center"
-          style={{ color: 'var(--muted)', minWidth: 120, gap: 10 }}
+          className="bs-caption bs-masthead-meta flex items-center"
+          style={{ color: 'var(--muted)', gap: 10 }}
         >
           <span style={{ fontSize: 10, letterSpacing: '0.3em', textTransform: 'uppercase' }}>
             VOL. I &nbsp;·&nbsp; NO.&nbsp;{now ? issueNo(now) : '—'}
@@ -37,21 +34,19 @@ export default function Masthead() {
         <Link
           href="/"
           aria-label="SUB/WAVE home"
-          className="bs-wordmark"
-          style={{ flex: '1 1 auto', textAlign: 'center', textDecoration: 'none', color: 'var(--ink)' }}
+          className="bs-wordmark bs-masthead-mark"
+          style={{ textDecoration: 'none', color: 'var(--ink)' }}
         >
           SUB/WAVE
         </Link>
 
         <div
-          className="flex items-center gap-2"
+          className="bs-masthead-status flex items-center gap-2"
           style={{
             fontSize: 11,
             letterSpacing: '0.3em',
             textTransform: 'uppercase',
             fontWeight: 700,
-            minWidth: 120,
-            justifyContent: 'flex-end',
           }}
         >
           <span className="bs-live-dot" aria-hidden="true" />

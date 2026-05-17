@@ -62,6 +62,8 @@ export default function Masthead() {
       >
         <Link href="/listen" className="bs-masthead-link">Listen</Link>
         <span aria-hidden="true" className="bs-masthead-sep">·</span>
+        <Link href="/manual" className="bs-masthead-link">Manual</Link>
+        <span aria-hidden="true" className="bs-masthead-sep">·</span>
         <Link href="/setup" className="bs-masthead-link">Setup</Link>
         <span aria-hidden="true" className="bs-masthead-sep">·</span>
         <a

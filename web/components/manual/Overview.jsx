@@ -1,0 +1,73 @@
+import Link from 'next/link';
+import ManualPage from './ManualPage';
+
+const GUIDE = [
+  {
+    href: '/manual/getting-started',
+    label: 'Getting Started',
+    blurb: 'What SUB/WAVE is, how to tune in, and what every part of the player does.',
+  },
+  {
+    href: '/manual/requests',
+    label: 'Making Requests',
+    blurb: 'Ask the DJ for a track, an artist, or just a mood — and what happens after you do.',
+  },
+  {
+    href: '/manual/dj',
+    label: 'How the DJ Works',
+    blurb: 'The AI behind the desk: how it picks songs, when it talks, and who it sounds like.',
+  },
+  {
+    href: '/manual/admin',
+    label: 'Admin & Settings',
+    blurb: 'For the operator — signing in, tuning the DJ, scheduling shows, and managing jingles.',
+  },
+];
+
+export default function Overview() {
+  return (
+    <ManualPage
+      eyebrow="SUB/WAVE MANUAL"
+      title="How to use SUB/WAVE."
+      intro="SUB/WAVE is a personal internet radio station — one live stream that every listener hears at the same moment, with an AI DJ picking the tracks and talking between them. This manual covers both sides of the dial: tuning in as a listener, and running the station as its operator."
+      current="/manual"
+    >
+      <section className="bs-section">
+        <p className="bs-eyebrow">WHAT'S INSIDE</p>
+        <h2>Four short guides.</h2>
+        <p>
+          Start at the top if you're new. Each page links to the next, so you can read
+          straight through, or jump to whatever you need from the contents on the left.
+        </p>
+
+        <ul className="bs-list">
+          {GUIDE.map((g) => (
+            <li key={g.href}>
+              <Link href={g.href} className="bs-link">
+                <strong>{g.label}</strong>
+              </Link>{' '}
+              — {g.blurb}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">THE ONE THING TO KNOW</p>
+        <h2>It's a broadcast, not a playlist.</h2>
+        <p>
+          Streaming apps give everyone a private channel — shuffled for you, paused the
+          second you look away. SUB/WAVE goes the other way. There is one Icecast stream,
+          and everyone hears whatever is on the air <em>right now</em>. There is no
+          &ldquo;for you,&rdquo; and there is no skip button. You can ask for a song, but
+          it joins the broadcast for every listener — it doesn't jump the current track.
+        </p>
+        <p>
+          Want to run your own station instead of just listening?{' '}
+          <Link href="/setup" className="bs-link">The setup guide</Link> walks through
+          pointing SUB/WAVE at your own music library and LLM.
+        </p>
+      </section>
+    </ManualPage>
+  );
+}

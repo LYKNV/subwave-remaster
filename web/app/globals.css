@@ -48,6 +48,10 @@
     /* hover wash — promoted to :root so shadcn Button hover works app-wide,
      not just inside .admin-root (which re-declares it identically below). */
     --ink-soft: color-mix(in oklab, var(--ink) 6%, transparent);
+    /* form-field fill — nudged off --bg so inputs read as inset against the
+     card they sit on: darker on light, lighter on dark. Auto-flips because
+     both --bg and --ink flip in dark mode. */
+    --field: color-mix(in oklab, var(--bg) 92%, var(--ink));
 }
 
 /* Dark palette — applied either by manual override (data-theme="dark") or
@@ -225,6 +229,22 @@ body::after {
     animation: v3-tunein-pulse 2s ease-out infinite;
 }
 
+/* Connecting state — the transport-bar status dot breathes while the stream
+   buffers. A plain opacity pulse so it reads on the dark Tune In button,
+   where the expanding-ring v3-tunein-pulse would be ink-on-ink. */
+@keyframes v3-connecting-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.25;
+    }
+}
+.v3-connecting-pulse {
+    animation: v3-connecting-pulse 1s ease-in-out infinite;
+}
+
 /* Sonner toast styling — sharp ink-bordered cream cards. */
 .v3-toast {
     background: var(--bg);
@@ -248,7 +268,8 @@ body::after {
     .v3-drawer-content,
     .v3-drawer-overlay,
     .v3-blink,
-    .v3-tunein-pulse {
+    .v3-tunein-pulse,
+    .v3-connecting-pulse {
         animation: none !important;
     }
 }
@@ -906,6 +927,40 @@ body::after {
     border-radius: 50%;
     transform: translate(-50%, -50%);
     border: 1px solid var(--ink);
+}
+
+/* Miniature spinning record for the player header — same vocabulary as
+   .bs-dj-glyph on the landing page, sized for an inline wordmark. Spins
+   only while tuned in, so the mark doubles as a play indicator. */
+.player-mark {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    align-self: center;
+    border-radius: 50%;
+    border: 1px solid var(--ink);
+    background: repeating-conic-gradient(
+        from 0deg,
+        var(--ink) 0deg 9deg,
+        transparent 9deg 18deg
+    );
+    position: relative;
+}
+.player-mark::after {
+    content: "";
+    position: absolute;
+    inset: 33%;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--bg);
+}
+.player-mark[data-spinning='true'] {
+    animation: bs-dj-spin 6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .player-mark[data-spinning='true'] {
+        animation: none;
+    }
 }
 
 .bs-dj-handle {

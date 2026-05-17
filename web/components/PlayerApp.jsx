@@ -33,7 +33,7 @@ const DRAWER_TITLES = {
 export default function PlayerApp({ contained = false }) {
   const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, elapsed, progress } = useStationFeed();
   const boothFeed = session.messages;
-  const { audioRef, tunedIn, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer();
+  const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer();
 
   // streamOnline is null until the first poll resolves — only treat an
   // explicit false as offline so the player never flashes "offline" on load.
@@ -207,6 +207,7 @@ export default function PlayerApp({ contained = false }) {
 
       <TransportBar
         tunedIn={tunedIn}
+        status={status}
         onTune={tune}
         offline={offline}
         volume={volume}

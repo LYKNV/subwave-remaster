@@ -5,6 +5,7 @@ import { Slider } from './ui/slider';
 
 export default function TransportBar({
   tunedIn,
+  status = 'idle',
   onTune,
   offline = false,
   volume,
@@ -13,6 +14,9 @@ export default function TransportBar({
   elapsed,
   context,
 }) {
+  // The window between the tune-in gesture and the first audible frame —
+  // surfaced on the button so the player doesn't claim to play while silent.
+  const connecting = status === 'connecting';
   const duration = nowPlaying?.duration ?? 0;
   const progress = duration > 0 ? Math.min(1, elapsed / duration) : 0;
   const cells = 12;
@@ -68,6 +72,7 @@ export default function TransportBar({
           }}
         >
           <span
+            className={connecting ? 'v3-connecting-pulse' : undefined}
             style={{
               width: 8,
               height: 8,
@@ -76,7 +81,7 @@ export default function TransportBar({
               display: 'inline-block',
             }}
           />
-          {offline ? 'Stream Offline' : tunedIn ? 'Tune Out' : 'Tune In'}
+          {offline ? 'Stream Offline' : connecting ? 'Connecting…' : tunedIn ? 'Tune Out' : 'Tune In'}
         </button>
 
         {/* Centre slot — empty spacer on desktop, context tagline on mobile. */}

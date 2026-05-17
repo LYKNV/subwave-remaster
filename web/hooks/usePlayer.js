@@ -10,6 +10,10 @@ const STREAM_URL = process.env.NEXT_PUBLIC_STREAM_URL || '/stream.mp3';
 export function usePlayer({ initialVolume = 1 } = {}) {
   const audioRef = useRef(null);
   const [tunedIn, setTunedIn] = useState(false);
+  // 'idle' | 'connecting' | 'playing'. 'connecting' covers the unavoidable
+  // gap between the tune-in gesture and the first audible MP3 frames — surfaced
+  // in the UI so the player doesn't claim to be playing while still silent.
+  const [status, setStatus] = useState('idle');
   const [volume, setVolume] = useState(initialVolume);
   const preMuteVolume = useRef(initialVolume || 1);
 
@@ -25,6 +29,28 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
+  // Drive `status` from the <audio> element's own events: 'playing' fires when
+  // audio is actually audible; 'waiting'/'stalled' mean a rebuffer; 'error'
+  // means the connection failed. tune()/stop() set 'connecting'/'idle' eagerly;
+  // these listeners settle it to the truth.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onPlaying = () => setStatus('playing');
+    const onWaiting = () => setStatus(s => (s === 'playing' ? 'connecting' : s));
+    const onError = () => setStatus('idle');
+    el.addEventListener('playing', onPlaying);
+    el.addEventListener('waiting', onWaiting);
+    el.addEventListener('stalled', onWaiting);
+    el.addEventListener('error', onError);
+    return () => {
+      el.removeEventListener('playing', onPlaying);
+      el.removeEventListener('waiting', onWaiting);
+      el.removeEventListener('stalled', onWaiting);
+      el.removeEventListener('error', onError);
+    };
+  }, []);
+
   // Tear down playback. Used by the Tune Out button and by PlayerApp when the
   // station goes off air, so the <audio> element isn't left retrying a dead
   // mount.
@@ -33,6 +59,7 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     const el = audioRef.current;
     const myGen = ++gen.current;
     setTunedIn(false);
+    setStatus('idle');
     // Let any in-flight play() settle before pausing, then bail if a later
     // tune() has already superseded this teardown.
     Promise.resolve(playPromise.current)
@@ -55,6 +82,7 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     el.src = `${STREAM_URL}?t=${Date.now()}`;
     el.volume = volume;
     setTunedIn(true);
+    setStatus('connecting');
     const p = el.play();
     playPromise.current = p;
     Promise.resolve(p).catch(err => {
@@ -76,5 +104,5 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     }
   };
 
-  return { audioRef, tunedIn, volume, setVolume, tune, stop, toggleMute, muted: volume === 0 };
+  return { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0 };
 }

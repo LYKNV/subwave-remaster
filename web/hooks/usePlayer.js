@@ -11,6 +11,7 @@ export function usePlayer({ initialVolume = 1 } = {}) {
   const audioRef = useRef(null);
   const [tunedIn, setTunedIn] = useState(false);
   const [volume, setVolume] = useState(initialVolume);
+  const preMuteVolume = useRef(initialVolume || 1);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
@@ -38,5 +39,16 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     }
   };
 
-  return { audioRef, tunedIn, volume, setVolume, tune, stop };
+  // Mute is just volume 0; toggling restores the last non-zero level so the
+  // keyboard 'M' shortcut and the command palette have a sensible round-trip.
+  const toggleMute = () => {
+    if (volume > 0) {
+      preMuteVolume.current = volume;
+      setVolume(0);
+    } else {
+      setVolume(preMuteVolume.current || 1);
+    }
+  };
+
+  return { audioRef, tunedIn, volume, setVolume, tune, stop, toggleMute, muted: volume === 0 };
 }

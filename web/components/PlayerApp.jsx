@@ -9,6 +9,8 @@ import Waveform from './Waveform';
 import TransportBar from './TransportBar';
 import TuneInOverlay from './TuneInOverlay';
 import DotRail from './DotRail';
+import CommandPalette from './CommandPalette';
+import ShortcutsDialog from './ShortcutsDialog';
 import { Sheet } from './ui/sheet';
 import { Toaster } from './ui/toaster';
 import TimelineDrawer from './drawers/TimelineDrawer';
@@ -17,6 +19,7 @@ import RequestDrawer from './drawers/RequestDrawer';
 import { useStationFeed } from '../hooks/useStationFeed';
 import { usePlayer } from '../hooks/usePlayer';
 import { useMediaSession } from '../hooks/useMediaSession';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { getStoredTheme, setTheme as persistTheme } from '../lib/theme';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -30,7 +33,7 @@ const DRAWER_TITLES = {
 export default function PlayerApp({ contained = false }) {
   const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, elapsed, progress } = useStationFeed();
   const boothFeed = session.messages;
-  const { audioRef, tunedIn, volume, setVolume, tune, stop } = usePlayer();
+  const { audioRef, tunedIn, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer();
 
   // streamOnline is null until the first poll resolves — only treat an
   // explicit false as offline so the player never flashes "offline" on load.
@@ -58,6 +61,8 @@ export default function PlayerApp({ contained = false }) {
   const [drawer, setDrawer] = useState(null);
   const [tickerOn, setTickerOn] = useState(true);
   const [theme, setTheme] = useState('light');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // First-paint tune-in gate. Shown on every fresh load until the listener
   // taps it; dismissed permanently for the rest of the session once they've
@@ -96,6 +101,35 @@ export default function PlayerApp({ contained = false }) {
       return next;
     });
   };
+
+  // Tune toggle for shortcuts/palette — also dismisses the first-paint gate,
+  // so Space behaves like tapping the overlay before the listener has tuned in.
+  const handleTune = () => {
+    if (showTuneIn) tuneInFromOverlay();
+    else tune();
+  };
+  const adjustVolume = (delta) =>
+    setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100)));
+
+  // Global keyboard shortcuts. Bare keys are suppressed while a text field
+  // is focused or while the palette/help dialog owns input; ⌘K always works.
+  useKeyboardShortcuts(
+    {
+      space: handleTune,
+      k: handleTune,
+      arrowup: () => adjustVolume(0.05),
+      arrowdown: () => adjustVolume(-0.05),
+      m: toggleMute,
+      t: toggleTheme,
+      '1': () => setDrawer('timeline'),
+      '2': () => setDrawer('booth'),
+      '3': () => setDrawer('request'),
+      r: () => setDrawer('request'),
+      '?': () => setShortcutsOpen(true),
+      'mod+k': () => setPaletteOpen(o => !o),
+    },
+    { disabled: paletteOpen || shortcutsOpen },
+  );
 
   // Submit a request. The controller accepts in ~50ms and returns a request
   // id; the actual matching runs in the booth. The drawer then polls
@@ -209,6 +243,26 @@ export default function PlayerApp({ contained = false }) {
       {showTuneIn && !offline && (
         <TuneInOverlay onTune={tuneInFromOverlay} nowPlaying={nowPlaying} />
       )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        container={portalNode}
+        tunedIn={tunedIn}
+        theme={theme}
+        muted={muted}
+        onTune={handleTune}
+        onOpenDrawer={setDrawer}
+        onToggleTheme={toggleTheme}
+        onToggleMute={toggleMute}
+        onShowShortcuts={() => setShortcutsOpen(true)}
+      />
+
+      <ShortcutsDialog
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+        container={portalNode}
+      />
 
       {!contained && <Toaster />}
     </div>

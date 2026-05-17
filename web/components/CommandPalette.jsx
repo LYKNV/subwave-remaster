@@ -1,0 +1,69 @@
+'use client';
+
+import {
+  CommandDialog,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+} from './ui/command';
+import { Kbd } from './ui/kbd';
+
+/* ⌘K command palette for the listener-facing player. Scope is player
+   actions only — no jumping to admin/site routes. Each item runs its
+   handler and closes the palette. */
+export default function CommandPalette({
+  open,
+  onOpenChange,
+  container,
+  tunedIn,
+  theme,
+  muted,
+  onTune,
+  onOpenDrawer,
+  onToggleTheme,
+  onToggleMute,
+  onShowShortcuts,
+}) {
+  const run = (fn) => () => {
+    onOpenChange(false);
+    fn();
+  };
+
+  const items = [
+    { label: tunedIn ? 'Tune out' : 'Tune in', hint: 'Space', onSelect: run(onTune) },
+    { label: 'Open Timeline', hint: '1', onSelect: run(() => onOpenDrawer('timeline')) },
+    { label: 'Open Booth feed', hint: '2', onSelect: run(() => onOpenDrawer('booth')) },
+    { label: 'Make a request', hint: '3', onSelect: run(() => onOpenDrawer('request')) },
+    {
+      label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+      hint: 'T',
+      onSelect: run(onToggleTheme),
+    },
+    { label: muted ? 'Unmute' : 'Mute', hint: 'M', onSelect: run(onToggleMute) },
+    { label: 'Keyboard shortcuts', hint: '?', onSelect: run(onShowShortcuts) },
+  ];
+
+  return (
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      container={container}
+      label="Command palette"
+    >
+      <CommandInput placeholder="Type a command…" />
+      <CommandList>
+        <CommandEmpty>No commands found.</CommandEmpty>
+        <CommandGroup heading="Player">
+          {items.map((it) => (
+            <CommandItem key={it.label} value={it.label} onSelect={it.onSelect}>
+              <span>{it.label}</span>
+              <Kbd>{it.hint}</Kbd>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      </CommandList>
+    </CommandDialog>
+  );
+}

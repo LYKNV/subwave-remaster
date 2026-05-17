@@ -11,6 +11,13 @@ import { dirname, resolve } from 'node:path';
 export const STATE_DIR = process.env.STATE_DIR
   || resolve(dirname(fileURLToPath(import.meta.url)), '../../state');
 
+// TTS speech-rate multiplier: 1.0 = normal pace, lower = slower, higher =
+// faster. TTS_SPEED is the cross-engine default; each engine can be tuned
+// independently with its own var (PIPER_SPEED / KOKORO_SPEED / CLOUD_TTS_SPEED).
+// The multiplier semantics are consistent everywhere — piper.js inverts it
+// internally because Piper expresses rate as length_scale (higher = slower).
+const TTS_SPEED = process.env.TTS_SPEED || '1.0';
+
 export const config = {
   // Absolute path to the shared state dir — modules build their own file
   // paths from this rather than hardcoding /var/sub-wave.
@@ -34,6 +41,7 @@ export const config = {
     voice: process.env.PIPER_VOICE || '/opt/piper/voices/en_GB-alan-medium.onnx',
     voiceConfig: process.env.PIPER_VOICE_CONFIG || '/opt/piper/voices/en_GB-alan-medium.onnx.json',
     outDir: process.env.PIPER_OUT || `${STATE_DIR}/voice`,
+    speed: parseFloat(process.env.PIPER_SPEED || TTS_SPEED),
   },
   kokoro: {
     python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',
@@ -42,7 +50,7 @@ export const config = {
     voices: process.env.KOKORO_VOICES || '/opt/kokoro/models/voices-v1.0.bin',
     voice: process.env.KOKORO_VOICE || 'bf_isabella',   // British female, BBC-ish
     lang: process.env.KOKORO_LANG || 'en-gb',
-    speed: parseFloat(process.env.KOKORO_SPEED || '1.0'),
+    speed: parseFloat(process.env.KOKORO_SPEED || TTS_SPEED),
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
@@ -84,5 +92,11 @@ export const config = {
   },
   show: {
     autoQueueRefreshMinutes: parseInt(process.env.AUTO_QUEUE_REFRESH_MINUTES || '60', 10),
+  },
+  tts: {
+    // Speech-rate multiplier for the cloud engine (OpenAI / ElevenLabs).
+    // 1.0 = normal, lower = slower. speech.js clamps it to each provider's
+    // supported range before the request.
+    cloudSpeed: parseFloat(process.env.CLOUD_TTS_SPEED || TTS_SPEED),
   },
 };

@@ -25,6 +25,21 @@ const CLOUD_DEFAULT_MODELS = {
   elevenlabs: 'eleven_flash_v2_5',
 };
 
+// Speech-rate multiplier limits per provider. A value outside the supported
+// range makes the provider API reject the request, so we clamp before calling.
+// ElevenLabs allows 0.7–1.2; OpenAI allows 0.25–4.0.
+const SPEED_RANGE = {
+  elevenlabs: [0.7, 1.2],
+  openai: [0.25, 4.0],
+};
+
+function clampSpeed(speed, provider) {
+  const n = Number(speed);
+  if (!Number.isFinite(n) || n <= 0) return 1.0;
+  const [lo, hi] = SPEED_RANGE[provider] || [0.25, 4.0];
+  return Math.min(hi, Math.max(lo, n));
+}
+
 function cloudCfg() {
   return settings.get().tts?.cloud || {};
 }
@@ -84,10 +99,16 @@ export async function speak(text, { outPath, cloudOverride = null } = {}) {
     c.model = CLOUD_DEFAULT_MODELS[cloudOverride.provider] || c.model;
   }
 
+  // Speech rate (CLOUD_TTS_SPEED / TTS_SPEED), clamped to the provider's
+  // range. Only sent when it differs from default so default stations are
+  // unaffected and providers that ignore the field never see it.
+  const speed = clampSpeed(config.tts.cloudSpeed, c.provider);
+
   const result = await generateSpeech({
     model: speechModel(c),
     text,
     voice: c.voice || undefined,
+    ...(speed !== 1.0 ? { speed } : {}),
     // ElevenLabs gates 44.1 kHz PCM/WAV behind paid tiers — a free/lower-tier
     // key 403s ("Forbidden") on pcm_44100. mp3 is allowed on every tier and
     // OpenAI honours it too, so it's the safe cross-provider request.

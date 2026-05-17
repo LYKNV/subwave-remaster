@@ -20,12 +20,22 @@ export async function speak(text, { outPath: customPath } = {}) {
     await mkdir(path.dirname(customPath), { recursive: true });
   }
 
+  const args = [
+    '--model', config.piper.voice,
+    '--config', config.piper.voiceConfig,
+    '--output_file', outPath,
+  ];
+  // Piper expresses speech rate as length_scale — the per-phoneme duration
+  // multiplier, where HIGHER is slower. We carry a "speed" multiplier
+  // everywhere (lower = slower), so invert it here. Only passed when it
+  // actually differs from default so unchanged stations behave identically.
+  const speed = config.piper.speed;
+  if (speed && speed > 0 && speed !== 1.0) {
+    args.push('--length_scale', String(1 / speed));
+  }
+
   return new Promise((resolve, reject) => {
-    const piper = spawn(config.piper.binary, [
-      '--model', config.piper.voice,
-      '--config', config.piper.voiceConfig,
-      '--output_file', outPath,
-    ]);
+    const piper = spawn(config.piper.binary, args);
 
     let stderr = '';
     piper.stderr.on('data', (d) => { stderr += d.toString(); });

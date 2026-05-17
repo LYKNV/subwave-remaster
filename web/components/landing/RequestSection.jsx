@@ -74,9 +74,9 @@ export default function RequestSection() {
       </h2>
       <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: 'var(--muted)', maxWidth: '64ch' }}>
         Open the player above and tap Request. Write a mood, a memory, an
-        album you half-remember. The LLM reads it, picks something from the
-        library, writes an intro that mentions you by name, and the DJ reads
-        it on air. Usually under ten seconds end-to-end.
+        album you half-remember. The request is accepted the instant you send
+        it — then, in the background, the DJ matches it to the library, writes
+        an intro that mentions you by name, and queues it to air.
       </p>
 
       <div

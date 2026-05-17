@@ -7,6 +7,7 @@ import Hero from './landing/Hero';
 import WhatIs from './landing/WhatIs';
 import Navidrome from './landing/Navidrome';
 import MeetTheDJ from './landing/MeetTheDJ';
+import Programme from './landing/Programme';
 import BoothColumn from './landing/BoothColumn';
 import HowWeBroadcast from './landing/HowWeBroadcast';
 import RecentPlays from './landing/RecentPlays';
@@ -48,6 +49,8 @@ export default function Landing() {
         <Navidrome />
 
         <MeetTheDJ />
+
+        <Programme />
 
         <section className="bs-section">
           <HowWeBroadcast />

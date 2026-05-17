@@ -11,13 +11,13 @@ const POINTS = [
     eyebrow: 'AN LLM WITH A LIBRARY',
     title: 'A DJ that actually picks the next track.',
     body:
-      'A small Node service watches the time, the weather, what just played, the season, festivals on the operator’s calendar, and any listener requests. It asks Ollama what should come next and pulls a real song from a Subsonic library. No "algorithm". A taste.',
+      'A small Node service watches the time, the weather, what just played, the season, festivals on the operator’s calendar, and any listener requests. It asks an LLM — local Ollama or a hosted provider, the operator’s choice — what should come next and pulls a real song from a Subsonic library. No "algorithm". A taste.',
   },
   {
     eyebrow: 'A VOICE BETWEEN TRACKS',
     title: 'Intros, weather, time checks — generated live.',
     body:
-      'The links between songs are written by the LLM in the DJ’s voice, then spoken by Piper TTS, then ducked under the next track by Liquidsoap. No pre-recorded air talent. The station idents are also generated. Everything you hear except the music is rendered on the fly.',
+      'The links between songs are written by the LLM in the DJ’s voice, then spoken aloud — by local Piper or Kokoro, or a cloud voice from OpenAI or ElevenLabs — then ducked under the next track by Liquidsoap. No pre-recorded air talent. The station idents are also generated. Everything you hear except the music is rendered on the fly.',
   },
   {
     eyebrow: 'HONEST ABOUT WHAT IT IS',

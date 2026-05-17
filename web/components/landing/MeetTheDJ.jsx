@@ -1,9 +1,9 @@
 'use client';
 
-// Playful, character-driven introduction to the on-air voice. Deliberately
+// Playful, character-driven introduction to the on-air voices. Deliberately
 // abstract — never leads with the operator-configurable name. The point is
-// to communicate the *kind* of presence behind the mic, not to advertise
-// whoever happens to be on the desk this week.
+// to communicate the *kind* of presence behind the mic, and that a station
+// runs a whole roster of them, not whoever happens to be on the desk today.
 
 const HABITS = [
   { tag: 'ALWAYS', text: 'reads the actual weather before talking about it' },
@@ -25,8 +25,8 @@ const INPUTS = [
 ];
 
 const TOOLS = [
-  { name: 'Ollama',     role: 'the picking brain' },
-  { name: 'Piper TTS',  role: 'the speaking voice' },
+  { name: 'LLM',        role: 'the picking brain — local or hosted' },
+  { name: 'TTS',        role: 'the voice — Piper, Kokoro, or cloud' },
   { name: 'Liquidsoap', role: 'ducks the bed under the link' },
   { name: 'Subsonic',   role: 'the crates' },
 ];
@@ -49,9 +49,11 @@ export default function MeetTheDJ() {
             Warm, slightly understated, never corny — late-night BBC 6 Music presenter; observant, dry humour, specific.
           </p>
           <p className="bs-dj-byline">
-            That's the brief. The DJ is an LLM with a personality, a clock, a
-            weather feed, and a copy of your music library. Operator-configurable.
-            Different on every SUB/WAVE.
+            That's one brief. A station runs a whole roster — up to ten DJ
+            personas, each with its own name, soul, voice, and set of skills.
+            One is on air at a time; the weekly Shows schedule decides who
+            takes which hour. Every persona is an LLM with a clock, a weather
+            feed, and a copy of your music library. Different on every SUB/WAVE.
           </p>
         </div>
       </div>

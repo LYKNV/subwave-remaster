@@ -6,7 +6,7 @@ const BOXES = [
   { label: 'ICECAST', tone: 'default', note: 'one stream' },
   { label: 'LIQUIDSOAP', tone: 'default', note: 'mixer' },
   { label: 'CONTROLLER', tone: 'default', note: 'node.js' },
-  { label: 'DJ BRAIN', tone: 'accent', note: 'ollama' },
+  { label: 'DJ BRAIN', tone: 'accent', note: 'llm' },
 ];
 
 export default function HowWeBroadcast() {
@@ -32,8 +32,9 @@ export default function HowWeBroadcast() {
         Single Icecast stream — every listener hears the same broadcast at the
         same time. Liquidsoap mixes music, crossfades, ducks the DJ voice over
         the bed, and rotates jingles. The Controller is a small Node.js
-        process that picks tracks via Ollama using time, weather, festivals,
-        and listener requests. Piper renders the DJ's voice on the fly.
+        process that picks tracks via an LLM using time, weather, festivals,
+        and listener requests. Piper, Kokoro, or a cloud voice renders the
+        DJ's speech on the fly.
         Four cooperating processes, file-based IPC, one stream out.
       </div>
 

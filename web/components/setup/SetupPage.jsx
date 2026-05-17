@@ -16,23 +16,29 @@ NAVIDROME_PASS=your-password
 # disk, set this to the mount path — skips streaming over HTTP.
 # MUSIC_LIBRARY_PATH=/music
 
-# Ollama — wherever you run it
-OLLAMA_URL=http://ollama.local:11434
-OLLAMA_MODEL=qwen2.5:7b
+# LLM — the active provider + model are chosen in the admin Settings UI,
+# not here. Ollama (the homelab default) needs no key. Only set a cloud
+# key below if you switch to a hosted provider in Settings.
+# ANTHROPIC_API_KEY=
+# OPENAI_API_KEY=
+# OPENROUTER_API_KEY=
+# DEEPSEEK_API_KEY=
+# ELEVENLABS_API_KEY=     # only for the 'cloud' TTS voice
 
 # Icecast source password (any string; just match the docker-compose env)
 ICECAST_SOURCE_PASSWORD=replace-me-with-a-strong-string
 
-# (Optional) Admin auth — Settings, Debug, Jingles are open without these.
-# ADMIN_USER=admin
-# ADMIN_PASS=replace-me`;
+# Admin auth — gates the /admin console. REQUIRED in production (the
+# controller refuses to boot without it); optional for local dev.
+ADMIN_USER=admin
+ADMIN_PASS=replace-me`;
 
 const ICECAST_ENV = `# docker/.env
 ICECAST_SOURCE_PASSWORD=replace-me-with-a-strong-string
 ICECAST_ADMIN_PASSWORD=another-strong-string
 ICECAST_RELAY_PASSWORD=another-strong-string
-STATE_DIR=/var/lib/subwave
-SUBWAVE_HOMEPAGE=landing`;
+SUBWAVE_HOMEPAGE=landing
+# STATE_DIR=/srv/subwave   # optional — defaults to <repo>/state`;
 
 export default function SetupPage() {
   return (
@@ -45,10 +51,11 @@ export default function SetupPage() {
           <h1>Run your own SUB/WAVE.</h1>
           <p>
             SUB/WAVE points at <strong style={{ color: 'var(--ink)' }}>your</strong> Navidrome
-            library and <strong style={{ color: 'var(--ink)' }}>your</strong> Ollama instance.
-            Once it's running, the LLM-driven DJ broadcasts from your homelab, plays from
-            your music collection, and answers requests from anyone with the URL.
-            About ten minutes to set up if you already have Navidrome and Ollama running.
+            library and <strong style={{ color: 'var(--ink)' }}>your</strong> LLM — a local
+            Ollama box by default, or any hosted provider you prefer. Once it's running, the
+            LLM-driven DJ broadcasts from your homelab, plays from your music collection, and
+            answers requests from anyone with the URL. About ten minutes to set up if you
+            already have Navidrome and an LLM running.
           </p>
         </section>
 
@@ -69,10 +76,12 @@ export default function SetupPage() {
               <a href="https://www.navidrome.org/" target="_blank" rel="noreferrer" className="bs-link" style={{ marginLeft: 6, fontSize: 12 }}>navidrome.org ↗</a>
             </li>
             <li>
-              <strong>Ollama</strong> with a model that supports{' '}
-              <code className="bs-code-inline">format: json</code> (qwen2.5:7b, llama3.1:8b,
-              nemotron). Note the URL and model name.
+              <strong>An LLM provider.</strong> The homelab default is{' '}
+              <strong>Ollama</strong> with a tool-capable model (qwen2.5:7b, llama3.1:8b,
+              nemotron) — note the URL and model name.
               <a href="https://ollama.com/" target="_blank" rel="noreferrer" className="bs-link" style={{ marginLeft: 6, fontSize: 12 }}>ollama.com ↗</a>
+              {' '}Or use a hosted provider (Anthropic, OpenAI, Google, OpenRouter,
+              DeepSeek) — pick it in the admin Settings UI and supply the API key.
             </li>
             <li>
               <strong>(Optional) ffmpeg</strong> — used by{' '}
@@ -109,7 +118,7 @@ npm run setup`}</CodeBlock>
                 <code className="bs-code-inline">docker-compose.prod.yml</code> with{' '}
                 <code className="bs-code-inline">--build</code>, Caddy on{' '}
                 <code className="bs-code-inline">:4800</code>, state in{' '}
-                <code className="bs-code-inline">/var/lib/subwave</code> (or wherever you
+                <code className="bs-code-inline">./state</code> (or wherever you
                 point <code className="bs-code-inline">STATE_DIR</code>). Re-run with sudo
                 if the state dir isn't writable.
               </li>
@@ -179,7 +188,7 @@ cd subwave
               <tr>
                 <td><code className="bs-code-inline">docker/docker-compose.prod.yml</code></td>
                 <td>+ web (built image) + caddy edge</td>
-                <td><code className="bs-code-inline">${'{STATE_DIR:-/var/lib/subwave}'}</code></td>
+                <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
               </tr>
             </tbody>
           </table>
@@ -255,11 +264,15 @@ cd subwave`}</CodeBlock>
         <div className="bs-step">
           <div className="bs-step-num">02</div>
           <div className="bs-step-body">
-            <h3>Tell the controller where your Navidrome and Ollama live</h3>
+            <h3>Tell the controller where your Navidrome library lives</h3>
             <p>Copy the template and fill in your values:</p>
             <CodeBlock>{`cp controller/.env.example controller/.env
 $EDITOR controller/.env`}</CodeBlock>
-            <p>The four values that actually matter (the rest of the template has good defaults):</p>
+            <p>
+              The values that actually matter (the rest of the template has good
+              defaults). The LLM provider and model are chosen later, in the admin
+              Settings UI — not here:
+            </p>
             <CodeBlock lang="env">{ENV_TEMPLATE}</CodeBlock>
             <div className="bs-callout">
               <div className="bs-eyebrow">CONNECTION TEST</div>
@@ -283,7 +296,7 @@ $EDITOR controller/.env`}</CodeBlock>
               the Icecast config from a template; running it once is enough.
             </p>
             <CodeBlock lang="env">{ICECAST_ENV}</CodeBlock>
-            <CodeBlock>{`sudo STATE_DIR=/var/lib/subwave ./scripts/setup.sh`}</CodeBlock>
+            <CodeBlock>{`sudo ./scripts/setup.sh   # state defaults to <repo>/state`}</CodeBlock>
             <p style={{ fontSize: 12, color: 'var(--muted)' }}>
               The <code className="bs-code-inline">STATE_DIR</code> is where Liquidsoap, the
               controller, and the web container exchange files (next track, voice WAVs,
@@ -327,9 +340,13 @@ $EDITOR controller/.env`}</CodeBlock>
             <div className="bs-callout">
               <div className="bs-eyebrow">EDIT THE DJ</div>
               <p>
-                Open the player at <code className="bs-code-inline">/listen</code>, click
-                the settings icon in the top bar, and edit the DJ's name, soul, and system
-                prompt. Persona changes apply on the next intro — no restart needed.
+                Sign in to the admin console at{' '}
+                <code className="bs-code-inline">/admin</code> (the{' '}
+                <code className="bs-code-inline">ADMIN_USER</code> /{' '}
+                <code className="bs-code-inline">ADMIN_PASS</code> you set earlier).
+                Build a roster of DJ personas — each with its own name, soul, voice,
+                and skills — pick the LLM provider, and paint the weekly Shows
+                schedule. Persona changes apply on the next intro — no restart needed.
               </p>
             </div>
           </div>
@@ -418,7 +435,7 @@ docker compose -f docker/docker-compose.prod.yml up -d --build controller web
             <li>
               <strong>Built-in diagnostics</strong> —
               open <Link href="/admin/debug" className="bs-link">/admin/debug</Link> for a live snapshot
-              of every state file, recent Ollama calls, Icecast status, and the most recent
+              of every state file, recent LLM calls, Icecast status, and the most recent
               100 lines of Liquidsoap.
             </li>
             <li>

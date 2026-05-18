@@ -299,8 +299,12 @@ intro = mic_chain(intro_queue)
 
 bed_path = "/sounds/bed.mp3"
 
+# Studio bed disabled — the looping ambient bed was audible/annoying under the
+# DJ's voice during links. Flip back to `true` to restore it.
+bed_enabled = false
+
 music_bus =
-  if file.exists(bed_path) then
+  if bed_enabled and file.exists(bed_path) then
     log("Loading studio bed from #{bed_path}")
     bed = mksafe(single(id="bed", bed_path))
     add(
@@ -309,7 +313,7 @@ music_bus =
       [music, bed]
     )
   else
-    log("No bed.mp3 — skipping studio bed (expected at /sounds/bed.mp3)")
+    log("Studio bed off (bed_enabled=#{bed_enabled}) — music plays without a bed")
     music
   end
 

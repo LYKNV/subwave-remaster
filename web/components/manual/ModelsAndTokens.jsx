@@ -35,6 +35,13 @@ export default function ModelsAndTokens() {
           these are the dials to turn down. None of them take the DJ off the air — they
           just make it do less work per moment.
         </p>
+        <p>
+          With these settings in place, a small model runs the whole station
+          comfortably — a 9B-class local model such as{' '}
+          <strong>Qwen3.5 9B</strong> is plenty for picking tracks and writing the DJ's
+          lines. The lean profile keeps each request short and well-shaped, which is
+          exactly what a smaller model needs to stay reliable.
+        </p>
         <ul className="bs-list">
           <li>
             <strong>Reasoning off</strong> (Admin &rarr; LLM) — stops &ldquo;thinking&rdquo;

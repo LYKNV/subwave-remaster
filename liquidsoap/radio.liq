@@ -405,7 +405,17 @@ def on_meta(m) =
   if title != "" or artist != "" then
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
-    json = '{"title":"#{title}","artist":"#{artist}","album":"#{album}","subsonic_id":"#{subsonic_id}","filename":"#{filename}","timestamp":#{ts}}'
+    # Build via json.stringify so values with embedded quotes/backslashes
+    # (e.g. a title like Fall (From "Rabb Da Radio 3")) are properly escaped —
+    # raw string interpolation here produced invalid JSON the UI couldn't parse.
+    json = json.stringify(compact=true, {
+      title = title,
+      artist = artist,
+      album = album,
+      subsonic_id = subsonic_id,
+      filename = filename,
+      timestamp = ts
+    })
     file.write(data=json, "/var/sub-wave/now-playing.json")
   end
 end

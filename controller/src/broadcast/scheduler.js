@@ -16,6 +16,7 @@ import * as session from './session.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
+import { withTrace } from '../observability/events.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -46,6 +47,10 @@ async function tracksFromAlbums(albums, perAlbum, max) {
 // ---------------------------------------------------------------------------
 
 export async function refreshAutoPlaylist() {
+  return withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner());
+}
+
+async function refreshAutoPlaylistInner() {
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
   const recent = queue.recentlyPlayedIds(25);
@@ -139,14 +144,16 @@ export async function refreshAutoPlaylist() {
 // Gate-free runner — also called directly by the /dj/segment command route as
 // an operator override. The cron wrapper below adds the frequency gate.
 export async function runHourlyCheck() {
-  const ctx = await getFullContext();
-  const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
-    recap: queue.getDjRecap(),
-    context: ctx,
-    recentOpeners: queue.getRecentOpeners(),
+  return withTrace({ kind: 'hourly' }, async () => {
+    const ctx = await getFullContext();
+    const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
+      recap: queue.getDjRecap(),
+      context: ctx,
+      recentOpeners: queue.getRecentOpeners(),
+    });
+    await queue.announce(script, 'hourly-check');
+    return script;
   });
-  await queue.announce(script, 'hourly-check');
-  return script;
 }
 
 async function hourlyCheck() {
@@ -169,20 +176,22 @@ async function hourlyCheck() {
 // Generate and air a between-track DJ link for whatever is playing now.
 // Gate-free; used by the /dj/segment command route.
 export async function runLink() {
-  const current = queue.current?.track;
-  if (!current) throw new Error('nothing is playing — no track to link from');
-  const previous = queue.history[0]?.track || null;
-  const ctx = await getFullContext();
-  const script = await dj.generateLink({
-    previous,
-    current,
-    context: ctx,
-    recap: queue.getDjRecap(),
-    recentTracks: queue.getRecentTracks(),
-    recentOpeners: queue.getRecentOpeners(),
+  return withTrace({ kind: 'link' }, async () => {
+    const current = queue.current?.track;
+    if (!current) throw new Error('nothing is playing — no track to link from');
+    const previous = queue.history[0]?.track || null;
+    const ctx = await getFullContext();
+    const script = await dj.generateLink({
+      previous,
+      current,
+      context: ctx,
+      recap: queue.getDjRecap(),
+      recentTracks: queue.getRecentTracks(),
+      recentOpeners: queue.getRecentOpeners(),
+    });
+    await queue.announce(script, 'link');
+    return script;
   });
-  await queue.announce(script, 'link');
-  return script;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,8 +205,10 @@ export async function runLink() {
 
 async function skillsTick() {
   try {
-    const ctx = await getFullContext();
-    await agenticTick(ctx);
+    await withTrace({ kind: 'segment' }, async () => {
+      const ctx = await getFullContext();
+      await agenticTick(ctx);
+    });
   } catch (err) {
     queue.log('error', `Segment tick failed: ${err.message}`);
   }
@@ -210,14 +221,16 @@ async function skillsTick() {
 
 // Gate-free runner — also called directly by the /dj/segment command route.
 export async function runStationId() {
-  const ctx = await getFullContext();
-  const script = await dj.generateStationId({
-    recap: queue.getDjRecap(),
-    context: ctx,
-    recentOpeners: queue.getRecentOpeners(),
+  return withTrace({ kind: 'station-id' }, async () => {
+    const ctx = await getFullContext();
+    const script = await dj.generateStationId({
+      recap: queue.getDjRecap(),
+      context: ctx,
+      recentOpeners: queue.getRecentOpeners(),
+    });
+    await queue.announce(script, 'station-id');
+    return script;
   });
-  await queue.announce(script, 'station-id');
-  return script;
 }
 
 async function stationId() {

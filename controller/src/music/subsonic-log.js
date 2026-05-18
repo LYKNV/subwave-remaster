@@ -5,6 +5,7 @@
 
 import { appendFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
+import { logEvent } from '../observability/events.js';
 
 const MAX_CALLS = 150;
 export const recentCalls = [];
@@ -49,6 +50,19 @@ export function record(entry) {
     entry.count,
   ].join('\t') + '\n';
   appendFile(CALLS_LOG, line).catch(() => {});
+
+  // Durable, trace-correlated event — logEvent stamps the active traceId, so
+  // this Navidrome call is linked to the DJ decision that caused it. Carries
+  // the request params that the tab-separated CALLS_LOG above drops.
+  logEvent('navidrome', {
+    endpoint: entry.endpoint,
+    params: entry.params || null,
+    ms: entry.ms,
+    ok: entry.ok,
+    count: entry.count,
+    error: entry.error || null,
+    songIds: (entry.songIds || []).slice(0, 25),
+  });
 }
 
 export function snapshot(libraryTotal = null) {

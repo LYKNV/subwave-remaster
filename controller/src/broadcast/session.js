@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
+import { logEvent } from '../observability/events.js';
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
 const WINDOW_TURNS = 40;                    // turns fed to the agent (full log is kept)
@@ -137,6 +138,12 @@ export function start(ctx, handoff = null) {
   };
   appendTurn({ role: 'event', kind: 'scenario', text: scenarioText(_session) });
   persist();
+  // Milestone on the unified timeline — marks where one DJ run ends and the
+  // next begins, so traces can be grouped by the session they belong to.
+  logEvent('session.start', {
+    sessionId: _session.id, kind: _session.kind, key: _session.key,
+    handoff: handoff || null,
+  });
   return _session;
 }
 
@@ -145,6 +152,7 @@ async function end() {
   _session.endedAt = new Date().toISOString();
   await persist();
   await archive(_session);
+  logEvent('session.end', { sessionId: _session.id, key: _session.key });
 }
 
 // End + restart if the context no longer matches the live session.

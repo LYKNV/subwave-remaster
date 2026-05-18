@@ -11,6 +11,7 @@ import * as djAgent from './dj-agent.js';
 import * as session from './session.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
+import { logEvent } from '../observability/events.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -316,6 +317,14 @@ class Queue {
       role: 'track', kind: 'play',
       text: `▶ "${this.current.track.title}" by ${this.current.track.artist || 'unknown'}`,
       meta: { source: this.current.source, requestedBy: this.current.requestedBy || null },
+    });
+
+    // Milestone on the unified timeline — the anchor each pick trace hangs off.
+    logEvent('track.play', {
+      title: this.current.track.title,
+      artist: this.current.track.artist || null,
+      source: this.current.source,
+      requestedBy: this.current.requestedBy || null,
     });
 
     this.persist();  // upcoming/current/history all just changed

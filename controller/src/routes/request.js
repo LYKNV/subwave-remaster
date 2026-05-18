@@ -11,6 +11,7 @@ import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
+import * as listeners from '../broadcast/listeners.js';
 import {
   checkRateLimit, clientIp,
   REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
@@ -385,6 +386,17 @@ async function resolveRequest(entry) {
 router.post('/request', async (req, res) => {
   if (REQUESTS_DISABLED) {
     return res.status(503).json({ success: false, message: 'Requests are temporarily closed.' });
+  }
+
+  // Zero-listener pause: a request would mean LLM work, so it's gated too.
+  // Force a fresh Icecast read so a listener who just connected isn't turned
+  // away on a stale cached count.
+  await listeners.refresh();
+  if (!listeners.djCallsAllowed()) {
+    return res.status(503).json({
+      success: false,
+      message: "The DJ's on autopilot — requests reopen when someone's tuned in.",
+    });
   }
 
   const rawText = typeof req.body?.text === 'string' ? req.body.text : '';

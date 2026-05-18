@@ -201,6 +201,11 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // When on, autonomous DJ LLM work (track picks, links, station IDs,
+    // hourly checks, segments) and listener requests pause whenever Icecast
+    // reports zero listeners — the stream coasts on the auto playlist — and
+    // resume as soon as someone tunes in. Off by default.
+    pauseWhenEmpty: false,
   },
   skills: {
     enabled: {},
@@ -406,6 +411,9 @@ export async function load() {
       pickerAgent: typeof stored.llm?.pickerAgent === 'boolean'
         ? stored.llm.pickerAgent
         : DEFAULTS.llm.pickerAgent,
+      pauseWhenEmpty: typeof stored.llm?.pauseWhenEmpty === 'boolean'
+        ? stored.llm.pauseWhenEmpty
+        : DEFAULTS.llm.pauseWhenEmpty,
     },
     skills: {
       enabled: Object.fromEntries(
@@ -712,6 +720,9 @@ export async function update(patch) {
     }
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.pauseWhenEmpty !== undefined) {
+      next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
     }
     // An OpenAI-compatible provider is useless without a server to talk to.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {

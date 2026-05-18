@@ -11,6 +11,7 @@ import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import { getFullContext } from './context.js';
 import { startScheduler } from './broadcast/scheduler.js';
+import { startListenerMonitor } from './broadcast/listeners.js';
 import { cors } from './middleware/cors.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
@@ -75,6 +76,7 @@ app.listen(config.server.port, async () => {
   queue.recover();
 
   queue.startWatcher();
+  startListenerMonitor();
   startScheduler();
   jingles.ensureDefaultIdent().catch(err => console.error('[jingles] ident generation failed:', err.message));
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));

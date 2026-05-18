@@ -1,6 +1,7 @@
 // Public, unauthenticated endpoints: liveness, now-playing, station/DJ info,
 // queue state, and the cover-art proxy.
 import express from 'express';
+import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
 import { getFullContext } from '../context.js';
@@ -18,7 +19,7 @@ async function getStreamStatus() {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch('http://icecast:7702/status-json.xsl', { signal: ctrl.signal });
+    const r = await fetch(config.icecast.statusUrl, { signal: ctrl.signal });
     clearTimeout(timer);
     const ic = (await r.json())?.icestats;
     const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];

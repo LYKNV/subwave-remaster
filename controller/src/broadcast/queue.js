@@ -13,6 +13,7 @@ import * as session from './session.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
+import { djCallsAllowed } from './listeners.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -356,8 +357,12 @@ class Queue {
     // writes a between-track link to air over what just started. Fire-and-
     // forget: the pick lands in Liquidsoap's dj_queue before this track ends.
     // Listener requests bring their own intro and don't count toward the gap.
+    // When nobody is listening (and the pause toggle is on) skip the pick —
+    // `upcoming` stays empty and Liquidsoap coasts on the auto playlist. The
+    // watcher still gets onTrackStarted events for those auto tracks, so the
+    // first transition after a listener returns re-enters this block.
     const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
       let wantLink = false;
       if (this.autoLink && isAutonomous && this.history[0]) {
         this.tracksUntilLink--;

@@ -3,6 +3,7 @@
 
 import { config } from './config.js';
 import { resolveActiveShow } from './settings.js';
+import { getListenerCount } from './broadcast/listeners.js';
 
 export function getTimeContext(date = new Date()) {
   const h = date.getHours();
@@ -163,5 +164,9 @@ export async function getFullContext() {
   // Show > festival > weather > time, in that order of priority for mood.
   const dominantMood = activeShow?.mood || festival?.mood || weather.mood || time.mood;
 
-  return { time, weather, festival, dominantMood, date, clock, activeShow };
+  // Live audience size, from the cached Icecast monitor. `count` is null when
+  // it couldn't be read — callers treat that as "unknown" and stay quiet.
+  const listeners = { count: getListenerCount() };
+
+  return { time, weather, festival, dominantMood, date, clock, activeShow, listeners };
 }

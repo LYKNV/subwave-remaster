@@ -167,6 +167,12 @@ export function buildContextLines(context, { recentTracks } = {}) {
     const topic = context.activeShow.topic ? ` — ${context.activeShow.topic}` : '';
     lines.push(`On now: the show "${context.activeShow.name}"${topic}. Stay loosely on its theme.`);
   }
+  if (context?.listeners?.count != null) {
+    const n = context.listeners.count;
+    lines.push(n === 0
+      ? `No one is tuned in right now.`
+      : `Listeners tuned in right now: ${n}.`);
+  }
   if (recentTracks && recentTracks.length) {
     const list = recentTracks.slice(0, 5).map(t => `"${t.title}" by ${t.artist || 'unknown'}`).join('; ');
     lines.push(`Recently played (do not mention these artists or titles): ${list}`);

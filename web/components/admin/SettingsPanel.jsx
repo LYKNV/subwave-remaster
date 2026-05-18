@@ -112,6 +112,7 @@ export default function SettingsPanel() {
         baseUrl: data.values.llm?.baseUrl ?? '',
         reasoning: !!data.values.llm?.reasoning,
         pickerAgent: !!data.values.llm?.pickerAgent,
+        pauseWhenEmpty: !!data.values.llm?.pauseWhenEmpty,
       },
     });
   }, [data, form]);
@@ -715,6 +716,7 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
       baseUrl: form.llm.baseUrl,
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
+      pauseWhenEmpty: form.llm.pauseWhenEmpty,
       // The API key is never set from the UI — it comes from the controller's
       // environment (ANTHROPIC_API_KEY / OPENAI_API_KEY / AI_GATEWAY_API_KEY).
     },
@@ -912,6 +914,29 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
               { id: 'agent', label: 'Agent' },
             ]}
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
+          />
+        </div>
+      </Card>
+
+      <Card title="Idle behaviour" sub="when no one's listening">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Pause DJ when empty</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, maxWidth: 480, lineHeight: 1.5 }}>
+              When on, the DJ stops making LLM calls — track picks, links, station
+              IDs, hourly checks, segments and listener requests — whenever Icecast
+              reports zero listeners. The stream keeps playing from the auto
+              playlist, and the DJ resumes the moment someone tunes back in.
+            </div>
+          </div>
+          <Seg
+            accent
+            value={form.llm.pauseWhenEmpty ? 'on' : 'off'}
+            options={[
+              { id: 'off', label: 'Off' },
+              { id: 'on', label: 'On' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pauseWhenEmpty: v === 'on' } }))}
           />
         </div>
       </Card>

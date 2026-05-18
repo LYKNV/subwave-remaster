@@ -60,6 +60,10 @@ export const config = {
     lang: process.env.KOKORO_LANG || 'en-gb',
     speed: parseFloat(process.env.KOKORO_SPEED || TTS_SPEED),
   },
+  icecast: {
+    // Public status JSON — listener counts + per-mount metadata. No auth.
+    statusUrl: process.env.ICECAST_STATUS_URL || 'http://icecast:7702/status-json.xsl',
+  },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
     sayFile: `${STATE_DIR}/say.txt`,

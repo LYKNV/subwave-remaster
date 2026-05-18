@@ -22,11 +22,6 @@ export default function Prerequisites() {
             <code className="bs-code-inline">npm run setup</code> wizard and the web dev
             server. A production deploy can run without it.
           </li>
-          <li>
-            <strong>(Optional) ffmpeg</strong> — used by{' '}
-            <code className="bs-code-inline">scripts/setup.sh</code> to render the emergency
-            fallback and studio-bed audio.
-          </li>
         </ul>
       </section>
 
@@ -50,8 +45,8 @@ export default function Prerequisites() {
         <h2>An LLM provider.</h2>
         <p>
           The DJ's words and track picks come from a language model. The homelab default is{' '}
-          <strong>Ollama</strong> with a tool-capable model — qwen2.5:7b, llama3.1:8b, or
-          nemotron all work. Note the URL and model name.
+          <strong>Ollama</strong> with a tool-capable model — qwen3.5, qwen3.6, or gemma4
+          all work. Note the URL and model name.
         </p>
         <p>
           Prefer a hosted model? SUB/WAVE also supports Anthropic, OpenAI, Google, OpenRouter,

@@ -435,6 +435,16 @@ radio = compress(
 # METADATA — write current track info for the web UI
 # ---------------------------------------------------------------------------
 
+# Wrap the broadcast source so we can push ICY stream metadata explicitly.
+# Icecast otherwise derives its stream title from the post-cross `radio`
+# source, where dj_transition's fade.out (initial_metadata=a.metadata)
+# re-emits the OUTGOING track's metadata and wins the `add` — leaving the
+# Icecast title frozen one track behind (the symptom: Icecast shows the
+# previous song/album while the UI shows the current one). We drive the
+# stream metadata from the same pre-cross on_metadata hook that writes
+# now-playing.json, so the ICY title and the web UI always agree.
+radio = insert_metadata(radio)
+
 def on_meta(m) =
   title = m["title"]
   artist = m["artist"]
@@ -456,6 +466,13 @@ def on_meta(m) =
       timestamp = ts
     })
     file.write(data=json, "/var/sub-wave/now-playing.json")
+    # Push the same metadata onto the Icecast stream so the ICY title
+    # tracks the current song instead of lagging a transition behind.
+    radio.insert_metadata([
+      ("title", title),
+      ("artist", artist),
+      ("album", album)
+    ])
   end
 end
 

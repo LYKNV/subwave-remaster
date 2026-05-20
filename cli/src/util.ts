@@ -1,6 +1,6 @@
 // Misc helpers. Kept dependency-free so any module can pull these in.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 
 export const DOCKER_DIR = resolve(REPO_ROOT, 'docker');
 export const SCRIPTS_DIR = resolve(REPO_ROOT, 'scripts');
 export const CONTROLLER_ENV = resolve(REPO_ROOT, 'controller', '.env');
+export const CONTROLLER_ENV_EXAMPLE = resolve(REPO_ROOT, 'controller', '.env.example');
 export const STATE_DIR = resolve(REPO_ROOT, 'state');
 
 export function expandHome(p: string): string {
@@ -45,6 +46,44 @@ export function parseEnvFile(path: string): Record<string, string> {
     out[m[1] as string] = v;
   }
   return out;
+}
+
+// Template-aware .env writer. Preserves comments and key order from the
+// existing file (or the .env.example template, if the file doesn't exist
+// yet). Keys present in `values` but absent from the template are appended
+// at the end. Keys present in the template but not in `values` keep their
+// existing value untouched.
+//
+// Pattern lifted from the legacy scripts/setup.mjs:61–77 — the operator
+// expects their `.env` to keep its layout across re-runs of the wizard.
+export function writeEnvFile(
+  path: string,
+  values: Record<string, string>,
+  opts: { templateFallback?: string } = {},
+): void {
+  const templateSource = existsSync(path) ? path : opts.templateFallback;
+  const lines = templateSource && existsSync(templateSource)
+    ? readFileSync(templateSource, 'utf8').split('\n')
+    : [];
+
+  const seen = new Set<string>();
+  const out = lines.map((line) => {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)\s*=/);
+    if (!m) return line;
+    const key = m[1] as string;
+    if (!(key in values)) return line;
+    seen.add(key);
+    return `${key}=${values[key]}`;
+  });
+
+  for (const [k, v] of Object.entries(values)) {
+    if (!seen.has(k)) out.push(`${k}=${v}`);
+  }
+
+  // Always end with exactly one trailing newline.
+  let content = out.join('\n');
+  if (!content.endsWith('\n')) content += '\n';
+  writeFileSync(path, content);
 }
 
 export function formatMs(ms: number): string {

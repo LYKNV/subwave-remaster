@@ -135,7 +135,20 @@ Navidrome credentials in `controller/.env` and the LLM provider in the admin
 Settings UI.
 
 The interactive setup CLI (`npx subwave` / `node bin/subwave`) walks through
-first-boot configuration.
+first-boot configuration. After setup it doubles as an operator console —
+run `subwave` with no arguments for a menu, or use any of the subcommands
+directly:
+
+```bash
+subwave                 # interactive menu (status-aware)
+subwave status          # quick: compose env, services, now-playing, recent events
+subwave doctor          # full diagnostic sweep
+subwave start dev       # docker compose up -d (dev or prod)
+subwave restart liquidsoap   # plain restart (radio.liq is bind-mounted)
+subwave restart controller   # rebuild + recreate (source is COPY-d at build)
+subwave logs controller      # tail one service
+subwave stop                 # docker compose down (confirms first)
+```
 
 ## Production deploy
 
@@ -165,7 +178,8 @@ web/               Next.js 15 web UI (player, landing, admin, setup)
 docker/            Two compose files (dev + prod), Caddyfile, Dockerfiles
 scripts/           setup, jingle generation, update, health check
 mcp-subwave/       MCP server — lets an agent request songs / drive the DJ
-bin/subwave        Interactive setup CLI
+cli/               Operator CLI (TS, run via tsx loader — no build step)
+bin/subwave        Operator CLI entry — menu + setup, status, doctor, lifecycle
 ```
 
 ## Notable details

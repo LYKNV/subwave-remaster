@@ -12,17 +12,20 @@
     "node": ">=20"
   },
   "scripts": {
-    "setup": "node bin/subwave",
+    "setup": "node bin/subwave setup",
     "dev": "node bin/subwave",
+    "subwave": "node bin/subwave",
     "dev:docker": "cd docker && docker compose up -d",
     "dev:web": "npm --prefix web run dev",
     "rebuild": "cd docker && docker compose up -d --build",
     "down": "cd docker && docker compose down",
     "logs": "cd docker && docker compose logs -f",
-    "jingles": "COMPOSE_FILE=docker/docker-compose.yml bash scripts/generate-jingles.sh"
+    "jingles": "COMPOSE_FILE=docker/docker-compose.yml bash scripts/generate-jingles.sh",
+    "cli:typecheck": "npm --prefix cli run typecheck"
   },
   "dependencies": {
     "@clack/prompts": "^0.8.2",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "tsx": "^4.19.2"
   }
 }

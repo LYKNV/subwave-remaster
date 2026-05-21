@@ -13,23 +13,23 @@ import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
 
 const SAY_KINDS = [
   { id: 'dj-speak', label: 'Solo' },
-  { id: 'link',     label: 'Over' },
+  { id: 'link', label: 'Over' },
 ];
 const SAY_MODES = [
-  { id: 'raw',    label: 'Raw' },
+  { id: 'raw', label: 'Raw' },
   { id: 'styled', label: 'Styled' },
 ];
 const SEGMENTS = [
   { type: 'station-id', label: 'Station ID' },
-  { type: 'hourly',     label: 'Time check' },
-  { type: 'link',       label: 'Track link' },
+  { type: 'hourly', label: 'Time check' },
+  { type: 'link', label: 'Track link' },
 ];
 
 export default function DashPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [status, setStatus] = useState(null);   // { nowPlaying, context, listeners, dj, queue }
+  const [status, setStatus] = useState(null); // { nowPlaying, context, listeners, dj, queue }
   const [err, setErr] = useState(null);
-  const [busy, setBusy] = useState(null);       // key of the running action
+  const [busy, setBusy] = useState(null); // key of the running action
   const [feedback, setFeedback] = useState(null); // { tone, text }
 
   const [sayText, setSayText] = useState('');
@@ -54,7 +54,11 @@ export default function DashPanel() {
         const np = await npR.json().catch(() => null);
         const st = await stR.json().catch(() => null);
         const se = await seR.json().catch(() => null);
-        setStatus({ ...(np || {}), queue: st || {}, sessionMessages: se?.messages || [] });
+        setStatus({
+          ...(np || {}),
+          queue: st || {},
+          sessionMessages: se?.messages || [],
+        });
         setErr(null);
       } catch (e) {
         if (!cancelled) setErr(e.message);
@@ -62,7 +66,10 @@ export default function DashPanel() {
     };
     tick();
     const id = setInterval(tick, 3000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, needsAuth]);
 
@@ -82,7 +89,10 @@ export default function DashPanel() {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setFeedback({ tone: 'ok', text: j.spoken ? `on air: “${j.spoken}”` : `${label} — done` });
+      setFeedback({
+        tone: 'ok',
+        text: j.spoken ? `on air: “${j.spoken}”` : `${label} — done`,
+      });
       return j;
     } catch (e) {
       setFeedback({ tone: 'err', text: `${label}: ${e.message}` });
@@ -119,44 +129,83 @@ export default function DashPanel() {
 
   // 6-cell status strip — real data.
   const strip = [
-    { l: 'dj on air',  v: status?.dj?.name || '—', accent: true },
-    { l: 'show',       v: showName },
-    { l: 'mood',       v: ctx?.dominantMood || '—' },
-    { l: 'listeners',  v: listeners ? String(listeners.current) : '—',
-      sub: listeners ? `peak ${listeners.peak}` : null },
-    { l: 'weather',    v: weatherText },
-    { l: 'picker',     v: q.pickerBusy ? 'thinking' : 'idle', accent: !!q.pickerBusy },
+    { l: 'dj on air', v: status?.dj?.name || '—', accent: true },
+    { l: 'show', v: showName },
+    { l: 'mood', v: ctx?.dominantMood || '—' },
+    {
+      l: 'listeners',
+      v: listeners ? String(listeners.current) : '—',
+      sub: listeners ? `peak ${listeners.peak}` : null,
+    },
+    { l: 'weather', v: weatherText },
+    {
+      l: 'picker',
+      v: q.pickerBusy ? 'thinking' : 'idle',
+      accent: !!q.pickerBusy,
+    },
   ];
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       {/* ── HEADER STRIP ───────────────────────────────────────────────── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-      }}>
-        <span className="live-dot" style={{ background: err ? 'var(--danger)' : 'var(--accent)' }} />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span
+          className="live-dot"
+          style={{ background: err ? 'var(--danger)' : 'var(--accent)' }}
+        />
         <Eyebrow color={err ? 'var(--danger)' : 'var(--accent)'}>{err ? 'down' : 'live'}</Eyebrow>
         {feedback && (
-          <span style={{
-            marginLeft: 'auto', fontSize: 11,
-            color: feedback.tone === 'err' ? 'var(--danger)' : 'var(--accent)',
-          }}>
+          <span
+            style={{
+              marginLeft: 'auto',
+              fontSize: 11,
+              color: feedback.tone === 'err' ? 'var(--danger)' : 'var(--accent)',
+            }}
+          >
             {feedback.text}
           </span>
         )}
       </div>
 
-      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
+      {err && (
+        <V3Alert tone="error" title="controller error">
+          {err}
+        </V3Alert>
+      )}
 
       {/* ── ON AIR HERO ────────────────────────────────────────────────── */}
       <section className="card" style={{ borderColor: 'var(--ink)' }}>
-        <div className="stack-mobile" style={{
-          padding: 18, display: 'grid', gridTemplateColumns: '1fr auto', gap: 24,
-          alignItems: 'center', borderBottom: '1px solid var(--ink)',
-        }}>
+        <div
+          className="stack-mobile"
+          style={{
+            padding: 18,
+            display: 'grid',
+            gridTemplateColumns: '1fr auto',
+            gap: 24,
+            alignItems: 'center',
+            borderBottom: '1px solid var(--ink)',
+          }}
+        >
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <span className="live-dot" style={{ background: err ? 'var(--danger)' : 'var(--accent)' }} />
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginBottom: 10,
+              }}
+            >
+              <span
+                className="live-dot"
+                style={{ background: err ? 'var(--danger)' : 'var(--accent)' }}
+              />
               <Eyebrow color="var(--accent)">on air</Eyebrow>
               <span className="caption">
                 auto-pick {q.autoPick ? 'on' : 'off'} · auto-link {q.autoLink ? 'on' : 'off'}
@@ -164,11 +213,21 @@ export default function DashPanel() {
             </div>
             {np?.title ? (
               <>
-                <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.05 }}>
-                  {np.title} <span style={{ color: 'var(--muted)', fontWeight: 600 }}>— {np.artist}</span>
+                <div
+                  style={{
+                    fontSize: 30,
+                    fontWeight: 800,
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1.05,
+                  }}
+                >
+                  {np.title}{' '}
+                  <span style={{ color: 'var(--muted)', fontWeight: 600 }}>— {np.artist}</span>
                 </div>
                 {np.album && (
-                  <div className="caption" style={{ marginTop: 6 }}>album · {np.album}</div>
+                  <div className="caption" style={{ marginTop: 6 }}>
+                    album · {np.album}
+                  </div>
                 )}
               </>
             ) : (
@@ -178,65 +237,112 @@ export default function DashPanel() {
             )}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={() => setConfirmSkip(true)}>
+            <Btn
+              lg
+              tone="danger"
+              disabled={!!busy || !np?.title}
+              onClick={() => setConfirmSkip(true)}
+            >
               {busy === 'skip' ? 'skipping…' : 'Skip track'}
             </Btn>
           </div>
         </div>
 
         {/* status strip */}
-        <div className="strip-mobile" style={{
-          display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)',
-        }}>
+        <div
+          className="strip-mobile"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(6, 1fr)',
+          }}
+        >
           {strip.map((c, i) => (
-            <div key={i} style={{
-              padding: '12px 14px',
-              borderLeft: i === 0 ? 'none' : '1px solid var(--separator-strong)',
-              display: 'flex', flexDirection: 'column', gap: 2,
-            }}>
+            <div
+              key={i}
+              style={{
+                padding: '12px 14px',
+                borderLeft: i === 0 ? 'none' : '1px solid var(--separator-strong)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
               <span className="caption">{c.l}</span>
-              <span style={{
-                fontSize: 14, fontWeight: 600,
-                color: c.accent ? 'var(--accent)' : 'var(--ink)',
-              }}>
+              <span
+                style={{
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: c.accent ? 'var(--accent)' : 'var(--ink)',
+                }}
+              >
                 {c.v}
               </span>
-              {c.sub && <span className="caption" style={{ fontSize: 9 }}>{c.sub}</span>}
+              {c.sub && (
+                <span className="caption" style={{ fontSize: 9 }}>
+                  {c.sub}
+                </span>
+              )}
             </div>
           ))}
         </div>
       </section>
 
       {/* ── 2-COL OPS ──────────────────────────────────────────────────── */}
-      <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
+      <div
+        className="stack-mobile"
+        style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}
+      >
         {/* LEFT */}
         <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', gap: 16 }}>
           <Card
             title="Queue"
             sub={`${upcoming.length} upcoming`}
-            right={<>
-              <Pill tone={`accent ${q.autoPick ? 'dot' : ''}`}>auto-pick {q.autoPick ? 'on' : 'off'}</Pill>
-              <Pill tone={`accent ${q.autoLink ? 'dot' : ''}`}>auto-link {q.autoLink ? 'on' : 'off'}</Pill>
-            </>}
+            right={
+              <>
+                <Pill tone={`accent ${q.autoPick ? 'dot' : ''}`}>
+                  auto-pick {q.autoPick ? 'on' : 'off'}
+                </Pill>
+                <Pill tone={`accent ${q.autoLink ? 'dot' : ''}`}>
+                  auto-link {q.autoLink ? 'on' : 'off'}
+                </Pill>
+              </>
+            }
             bodyStyle={{ padding: '4px 14px' }}
           >
             {upcoming.length === 0 ? (
-              <div style={{ padding: '10px 0', fontStyle: 'italic', color: 'var(--muted)' }}>
+              <div
+                style={{
+                  padding: '10px 0',
+                  fontStyle: 'italic',
+                  color: 'var(--muted)',
+                }}
+              >
                 queue empty — auto-playlist fallback
               </div>
             ) : (
               upcoming.slice(0, 8).map((t, i) => (
                 <div className="track-row" key={i}>
                   <span className="idx">{(i + 1).toString().padStart(2, '0')}</span>
-                  <span className="title">{t.title} <span className="artist">— {t.artist}</span></span>
+                  <span className="title">
+                    {t.title} <span className="artist">— {t.artist}</span>
+                  </span>
                   <span className="dur">{t.duration || ''}</span>
                   <span></span>
                   {t.requestedBy ? (
-                    <span style={{
-                      fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase',
-                      color: 'var(--accent)', textAlign: 'right',
-                    }}>↳ {t.requestedBy}</span>
-                  ) : <span></span>}
+                    <span
+                      style={{
+                        fontSize: 9,
+                        letterSpacing: '0.2em',
+                        textTransform: 'uppercase',
+                        color: 'var(--accent)',
+                        textAlign: 'right',
+                      }}
+                    >
+                      ↳ {t.requestedBy}
+                    </span>
+                  ) : (
+                    <span></span>
+                  )}
                 </div>
               ))
             )}
@@ -247,15 +353,32 @@ export default function DashPanel() {
             sub={`${booth.length} session turns`}
             right={<Pill>session · live</Pill>}
             style={{ display: 'flex', flexDirection: 'column' }}
-            bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+            bodyStyle={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
           >
             {booth.length === 0 ? (
               <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>no session turns yet</div>
             ) : (
-              <div ref={logRef} style={{ flex: 1, minHeight: 220, maxHeight: 360, overflowY: 'auto' }}>
+              <div
+                ref={logRef}
+                style={{
+                  flex: 1,
+                  minHeight: 220,
+                  maxHeight: 360,
+                  overflowY: 'auto',
+                }}
+              >
                 {booth.map((turn, i) => (
                   <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
-                    <span className="t">{new Date(turn.t).toLocaleTimeString('en-GB', { hour12: false })}</span>
+                    <span className="t">
+                      {new Date(turn.t).toLocaleTimeString('en-GB', {
+                        hour12: false,
+                      })}
+                    </span>
                     <span className="k">[{turn.kind}]</span>
                     <span className="msg">{turnText(turn)}</span>
                   </div>
@@ -273,11 +396,21 @@ export default function DashPanel() {
               value={sayText}
               onChange={e => setSayText(e.target.value)}
               maxLength={500}
-              placeholder={sayMode === 'raw'
-                ? 'Exact words the DJ will speak, verbatim…'
-                : 'An instruction or topic — the DJ writes it in persona…'}
+              placeholder={
+                sayMode === 'raw'
+                  ? 'Exact words the DJ will speak, verbatim…'
+                  : 'An instruction or topic — the DJ writes it in persona…'
+              }
             />
-            <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+            <div
+              style={{
+                display: 'flex',
+                gap: 14,
+                alignItems: 'center',
+                marginTop: 10,
+                flexWrap: 'wrap',
+              }}
+            >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span className="caption">mode</span>
                 <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
@@ -298,7 +431,13 @@ export default function DashPanel() {
           </Card>
 
           <Card title="DJ segments" sub="fire on demand">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr 1fr',
+                gap: 8,
+              }}
+            >
               {SEGMENTS.map(s => {
                 const k = `seg:${s.type}`;
                 return (
@@ -306,21 +445,48 @@ export default function DashPanel() {
                     key={s.type}
                     disabled={!!busy}
                     onClick={() => act(k, '/dj/segment', { type: s.type }, s.label)}
-                    onMouseEnter={e => { if (!busy) e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 18%, transparent)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 8%, transparent)'; }}
+                    onMouseEnter={e => {
+                      if (!busy)
+                        e.currentTarget.style.background =
+                          'color-mix(in oklab, var(--accent) 18%, transparent)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background =
+                        'color-mix(in oklab, var(--accent) 8%, transparent)';
+                    }}
                     style={{
                       border: '1px solid var(--accent)',
                       background: 'color-mix(in oklab, var(--accent) 8%, transparent)',
-                      padding: '12px 10px', textAlign: 'left', fontFamily: 'inherit',
-                      display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--ink)',
-                      cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.4 : 1,
+                      padding: '12px 10px',
+                      textAlign: 'left',
+                      fontFamily: 'inherit',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      color: 'var(--ink)',
+                      cursor: busy ? 'not-allowed' : 'pointer',
+                      opacity: busy ? 0.4 : 1,
                       transition: 'background 0.12s ease',
                     }}
                   >
-                    <span style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', fontWeight: 700 }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        letterSpacing: '0.18em',
+                        textTransform: 'uppercase',
+                        fontWeight: 700,
+                      }}
+                    >
                       {s.label}
                     </span>
-                    <span className="caption" style={{ fontSize: 9, color: 'var(--accent)', fontWeight: 700 }}>
+                    <span
+                      className="caption"
+                      style={{
+                        fontSize: 9,
+                        color: 'var(--accent)',
+                        fontWeight: 700,
+                      }}
+                    >
                       {busy === k ? 'firing…' : 'fire ▸'}
                     </span>
                   </button>
@@ -332,27 +498,40 @@ export default function DashPanel() {
           <Card title="Broadcast">
             <div style={{ display: 'grid', gap: 10 }}>
               <ToggleRow
-                label="Auto-pick" desc="picks next track when queue runs dry"
-                on={!!q.autoPick} disabled={!!busy || !status}
+                label="Auto-pick"
+                desc="picks next track when queue runs dry"
+                on={!!q.autoPick}
+                disabled={!!busy || !status}
                 onToggle={() => act('autopick', '/auto-pick', { on: !q.autoPick }, 'auto-pick')}
               />
               <ToggleRow
-                label="Auto-link" desc="DJ talks between auto-played tracks"
-                on={!!q.autoLink} disabled={!!busy || !status}
+                label="Auto-link"
+                desc="DJ talks between auto-played tracks"
+                on={!!q.autoLink}
+                disabled={!!busy || !status}
                 onToggle={() => act('autolink', '/dj/auto-link', { on: !q.autoLink }, 'auto-link')}
               />
-              <div style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                paddingTop: 8, borderTop: '1px dashed var(--separator-strong)',
-              }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  paddingTop: 8,
+                  borderTop: '1px dashed var(--separator-strong)',
+                }}
+              >
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700 }}>Auto-playlist</div>
-                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>rebuild liquidsoap fallback</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    rebuild liquidsoap fallback
+                  </div>
                 </div>
                 <Btn
                   sm
                   disabled={!!busy}
-                  onClick={() => act('refresh', '/dj/refresh-playlist', {}, 'auto-playlist refresh')}
+                  onClick={() =>
+                    act('refresh', '/dj/refresh-playlist', {}, 'auto-playlist refresh')
+                  }
                 >
                   {busy === 'refresh' ? 'firing…' : 'Refresh'}
                 </Btn>
@@ -394,7 +573,9 @@ function ToggleRow({ label, desc, on, disabled, onToggle }) {
 function classTone(cls) {
   switch (cls) {
     case 'voice':
-    case 'track': return 'accent';
-    default:      return 'muted';
+    case 'track':
+      return 'accent';
+    default:
+      return 'muted';
   }
 }

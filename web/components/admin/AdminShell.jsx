@@ -3,7 +3,16 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect } from 'react';
-import { Radio, BarChart3, Disc3, CalendarClock, Drama, Sparkles, SlidersHorizontal, Terminal } from 'lucide-react';
+import {
+  Radio,
+  BarChart3,
+  Disc3,
+  CalendarClock,
+  Drama,
+  Sparkles,
+  SlidersHorizontal,
+  Terminal,
+} from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
@@ -14,25 +23,23 @@ import { Toaster } from '../ui/toaster';
 const NAV_SECTIONS = [
   {
     label: 'Monitor',
-    items: [
-      { href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' },
-    ],
+    items: [{ href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' }],
   },
   {
     label: 'Programming',
     items: [
-      { href: '/admin/library',  id: 'library',  label: 'Library',  icon: Disc3 },
-      { href: '/admin/shows',    id: 'shows',    label: 'Shows',    icon: CalendarClock },
+      { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
+      { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
-      { href: '/admin/skills',   id: 'skills',   label: 'Skills',   icon: Sparkles },
+      { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
     ],
   },
   {
     label: 'System',
     items: [
-      { href: '/admin/stats',    id: 'stats',    label: 'Stats',    icon: BarChart3 },
+      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
-      { href: '/admin/debug',    id: 'debug',    label: 'Debug',    icon: Terminal },
+      { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
   },
 ];
@@ -47,11 +54,14 @@ export default function AdminShell({ children }) {
   const router = useRouter();
   const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
 
-  const handleSignIn = useCallback(async (user, pass) => {
-    const res = await signIn(user, pass);
-    if (res?.ok && pathname !== '/admin/dash') router.push('/admin/dash');
-    return res;
-  }, [signIn, pathname, router]);
+  const handleSignIn = useCallback(
+    async (user, pass) => {
+      const res = await signIn(user, pass);
+      if (res?.ok && pathname !== '/admin/dash') router.push('/admin/dash');
+      return res;
+    },
+    [signIn, pathname, router],
+  );
 
   // Probe an admin endpoint on first paint so a revoked token surfaces the
   // sign-in form proactively.
@@ -59,16 +69,23 @@ export default function AdminShell({ children }) {
     if (!hydrated || !auth) return;
     let cancelled = false;
     (async () => {
-      try { await adminFetch('/settings'); } catch {}
+      try {
+        await adminFetch('/settings');
+      } catch {}
       if (cancelled) return;
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, auth]);
 
   if (!hydrated) {
     return (
-      <div className="admin-root paper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div
+        className="admin-root paper"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >
         <span className="caption">loading…</span>
       </div>
     );
@@ -108,8 +125,10 @@ export default function AdminShell({ children }) {
             </div>
           ))}
           <div className="nav-foot">
-            sub / wave<br />
-            admin console<br />
+            sub / wave
+            <br />
+            admin console
+            <br />
             newsprint v3
           </div>
         </nav>
@@ -125,35 +144,55 @@ function ShellHeader({ pathname, signedIn, onSignOut }) {
   const current = NAV.find(n => pathname?.startsWith(n.href))?.label || 'Admin';
   const { nowPlaying, listeners } = useStationFeed();
   const onAir = !!nowPlaying?.title;
-  const count = listeners?.current ?? listeners?.count ?? (typeof listeners === 'number' ? listeners : null);
+  const count =
+    listeners?.current ?? listeners?.count ?? (typeof listeners === 'number' ? listeners : null);
 
   return (
     <header className="shell-header">
       <span className="wordmark">SUB / WAVE</span>
-      <span className="caption" style={{ color: 'var(--muted)' }}>· admin</span>
-      <span className="crumb">/ <b>{current}</b></span>
+      <span className="caption" style={{ color: 'var(--muted)' }}>
+        · admin
+      </span>
+      <span className="crumb">
+        / <b>{current}</b>
+      </span>
       {signedIn && (
         <span className="right">
-          <span className="live-dot" style={{ background: onAir ? 'var(--accent)' : 'var(--muted)' }} />
+          <span
+            className="live-dot"
+            style={{ background: onAir ? 'var(--accent)' : 'var(--muted)' }}
+          />
           <span>{onAir ? 'on air' : 'off air'}</span>
           {count != null && (
             <>
-              <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--separator-strong)' }} />
+              <span
+                style={{ width: 1, alignSelf: 'stretch', background: 'var(--separator-strong)' }}
+              />
               <span>{count} listening</span>
             </>
           )}
-          <Link href="/" className="caption" style={{ color: 'var(--muted)', textDecoration: 'none' }}>
+          <Link
+            href="/"
+            className="caption"
+            style={{ color: 'var(--muted)', textDecoration: 'none' }}
+          >
             ← player
           </Link>
           <ThemeToggle />
           {onSignOut && (
-            <button className="sign-out" onClick={onSignOut}>sign out</button>
+            <button className="sign-out" onClick={onSignOut}>
+              sign out
+            </button>
           )}
         </span>
       )}
       {!signedIn && (
         <span className="right">
-          <Link href="/" className="caption" style={{ color: 'var(--muted)', textDecoration: 'none' }}>
+          <Link
+            href="/"
+            className="caption"
+            style={{ color: 'var(--muted)', textDecoration: 'none' }}
+          >
             ← player
           </Link>
           <ThemeToggle />

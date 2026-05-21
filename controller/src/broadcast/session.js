@@ -169,14 +169,49 @@ export async function maybeRoll(ctx) {
 // mapped to AI SDK message roles. The full log stays on disk for the UI.
 // Consecutive same-role turns are coalesced because some providers (Anthropic)
 // require strictly alternating user/assistant messages.
+//
+// Three turn kinds get filtered out of the window because they derail the
+// picker agent in long sessions:
+//
+// - `scenario` events (controller restart notes, session boundaries) — infra
+//   noise, not part of the DJ's conversation. Every restart leaves "Controller
+//   restarted — session resumed" in the window, eventually appearing 3-4
+//   times in a single coalesced user message.
+//
+// - `kind: 'play'` track turns ("▶ Title — Artist") — redundant. Every pick
+//   event already contains the current AND previous track ("Now playing X.
+//   Pick the next track (after Y)..."), and the picker can't choose recent
+//   artists anyway because they're filtered at the tool layer (recentArtists
+//   in buildPickerTools).
+//
+// - OLD `kind: 'pick'` events (role='event') — the "Now playing X. Pick the
+//   next track" user-side instruction is kept only for the LATEST pick.
+//   Previous ones were already answered and just add ambiguity ("which of
+//   these 11 'pick next' requests am I responding to?"). Without this filter,
+//   gemini's reliability drops from 5/5 short → 2-3/5 long in the
+//   picker-test.mjs LONG benchmark, with "No output generated" failures.
+//
+// The DJ's own reasons (role='dj' kind='pick') stay — those are the agent's
+// short memory of recent decisions, useful for variety.
 export function windowMessages() {
   if (!_session) return [];
   const raw = [];
   if (_session.handoff) {
     raw.push({ role: 'user', content: `[Continuing on air from ${_session.handoff}]` });
   }
-  for (const m of _session.messages.slice(-WINDOW_TURNS)) {
+  const recent = _session.messages.slice(-WINDOW_TURNS);
+  // Find the index of the most-recent pick-event user message — older ones
+  // are filtered, this one is the current ask we want the agent to respond to.
+  let lastPickEventIdx = -1;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].role === 'event' && recent[i].kind === 'pick') { lastPickEventIdx = i; break; }
+  }
+  for (let i = 0; i < recent.length; i++) {
+    const m = recent[i];
     if (!m.text) continue;
+    if (m.kind === 'scenario') continue;  // infra noise
+    if (m.kind === 'play') continue;       // redundant — current track is in the pick event
+    if (m.role === 'event' && m.kind === 'pick' && i !== lastPickEventIdx) continue;  // old pick asks
     const role = (m.role === 'dj' || m.role === 'segment') ? 'assistant' : 'user';
     raw.push({ role, content: m.text });
   }

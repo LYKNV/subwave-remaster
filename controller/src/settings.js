@@ -9,7 +9,6 @@ import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
-const LIQ_SETTINGS_PATH = `${STATE_DIR}/liquidsoap_settings.json`;
 
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
@@ -24,8 +23,10 @@ Hard rules:
 - Reference the actual context (time, weather, what's coming) naturally.
 - Vary your opener and shape every time — never start the same way twice in a row, never use the same metaphor or framing as your last few lines.`;
 
-// Seed souls — the SEED_PERSONAS roster picks from these, and djSystem() falls
-// back to DJ_SOULS[0] when a persona has no soul of its own.
+// Seed souls — the SEED_PERSONAS roster picks from these. renderDjPrompt()
+// falls back to DJ_SOULS[0] when the substituted persona has no soul of its
+// own; the agent path (agentPersonaPreamble) instead substitutes an empty
+// string, since its template doesn't require a soul to read cleanly.
 export const DJ_SOULS = [
   'warm, slightly understated, never corny — late-night BBC 6 Music presenter; observant, dry humour, specific',
   'thoughtful and a little wistful; finds small details in tracks and rooms; favours one well-chosen image over a list',
@@ -33,20 +34,6 @@ export const DJ_SOULS = [
   'plainspoken and grounded; says less, means more; would rather leave space than fill it',
   'quietly enthusiastic; treats every track like a small recommendation to a friend; specific over poetic',
 ];
-
-// Distilled from the "Signs of AI writing" guide — the subset that matters for
-// short spoken radio links. Appended to every DJ system prompt by renderDjPrompt()
-// and directorSystem(), so it survives custom operator templates. Kept tight on
-// purpose: a long forbidden-word list degrades small local models.
-export const DJ_HUMANNESS_RULES = `Sound like a person talking, not a write-up:
-- Skip AI-essay vocabulary: "delve", "tapestry", "testament", "boasts", "vibrant", "bustling", "elevate", "realm", "whilst", "moreover", "furthermore".
-- No significance inflation — a song is just a song; don't call it "more than just" anything or "a testament to" something.
-- Drop the "not just X, it's Y" / "not only... but also" framing.
-- No press-release hype: "iconic", "legendary", "timeless masterpiece", "must-listen".
-- Speak for yourself — never "many say", "it's often said", "critics agree".
-- No trailing "..., showcasing/highlighting..." analysis tacked onto a sentence.
-- Don't land on a tidy summary or a little moral. Make your point and stop.
-- Use contractions and plain words; let it have the rhythm of real speech.`;
 
 export const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
 
@@ -68,7 +55,16 @@ export const TTS_ENGINES = ['piper', 'kokoro', 'cloud'];
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
 // targets any self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio,
 // etc.) via the operator-supplied `llm.baseUrl`.
-export const LLM_PROVIDERS = ['ollama', 'openai-compatible', 'anthropic', 'openai', 'google', 'deepseek', 'openrouter', 'gateway'];
+export const LLM_PROVIDERS = [
+  'ollama',
+  'openai-compatible',
+  'anthropic',
+  'openai',
+  'google',
+  'deepseek',
+  'openrouter',
+  'gateway',
+];
 
 // Cloud TTS vendors usable by the `cloud` engine.
 export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs'];
@@ -77,23 +73,37 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs'];
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
 // overrides the autonomous dominantMood, so it must come from this list.
 export const SHOW_MOODS = [
-  'energetic', 'calm', 'reflective', 'celebratory', 'romantic', 'spiritual',
-  'focus', 'workout', 'driving', 'cooking', 'rainy', 'sunny',
-  'night', 'morning', 'evening', 'festival', 'cultural',
+  'energetic',
+  'calm',
+  'reflective',
+  'celebratory',
+  'romantic',
+  'spiritual',
+  'focus',
+  'workout',
+  'driving',
+  'cooking',
+  'rainy',
+  'sunny',
+  'night',
+  'morning',
+  'evening',
+  'festival',
+  'cultural',
 ];
 
 // British English Kokoro voices — the ones that fit a BBC 6 Music tone. The
 // underlying model ships 54 voices total; we expose only the British subset to
 // keep the UI tidy. Any voice matching KOKORO_VOICE_RE still passes validation.
 export const KOKORO_VOICES_BRITISH = [
-  { id: 'bm_george',    label: 'George (M)' },
-  { id: 'bm_fable',     label: 'Fable (M)' },
-  { id: 'bm_daniel',    label: 'Daniel (M)' },
-  { id: 'bm_lewis',     label: 'Lewis (M)' },
-  { id: 'bf_emma',      label: 'Emma (F)' },
-  { id: 'bf_isabella',  label: 'Isabella (F)' },
-  { id: 'bf_alice',     label: 'Alice (F)' },
-  { id: 'bf_lily',      label: 'Lily (F)' },
+  { id: 'bm_george', label: 'George (M)' },
+  { id: 'bm_fable', label: 'Fable (M)' },
+  { id: 'bm_daniel', label: 'Daniel (M)' },
+  { id: 'bm_lewis', label: 'Lewis (M)' },
+  { id: 'bf_emma', label: 'Emma (F)' },
+  { id: 'bf_isabella', label: 'Isabella (F)' },
+  { id: 'bf_alice', label: 'Alice (F)' },
+  { id: 'bf_lily', label: 'Lily (F)' },
 ];
 
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
@@ -156,8 +166,8 @@ export const SEED_PERSONAS = [
 ];
 
 const DEFAULTS = {
-  jingleRatio: 30,                    // 1 jingle per N music tracks
-  crossfadeDuration: 10.0,            // seconds
+  jingleRatio: 30, // 1 jingle per N music tracks
+  crossfadeDuration: 10.0, // seconds
   weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton' },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   djPrompt: '',
@@ -177,7 +187,13 @@ const DEFAULTS = {
     // empty means "read the provider's env var" (OPENAI_API_KEY etc.).
     // `enabled` is the operator's "Off" switch — when false the cloud engine
     // reports unavailable regardless of key, so the engine pickers grey it out.
-    cloud: { enabled: false, provider: 'openai', model: 'gpt-4o-mini-tts', voice: 'alloy', apiKey: '' },
+    cloud: {
+      enabled: false,
+      provider: 'openai',
+      model: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      apiKey: '',
+    },
   },
   llm: {
     provider: 'ollama',
@@ -219,8 +235,8 @@ const DEFAULTS = {
 };
 
 const BOUNDS = {
-  jingleRatio:        { min: 1, max: 1000, type: 'int' },
-  crossfadeDuration:  { min: 0, max: 30,   type: 'float' },
+  jingleRatio: { min: 1, max: 1000, type: 'int' },
+  crossfadeDuration: { min: 0, max: 30, type: 'float' },
 };
 
 let cache = null;
@@ -248,8 +264,11 @@ function normalizeSkills(raw) {
 
 function normalizeTts(raw) {
   const engine = TTS_ENGINES.includes(raw?.engine) ? raw.engine : 'piper';
-  const cloudProvider = TTS_CLOUD_PROVIDERS.includes(raw?.cloudProvider) ? raw.cloudProvider : 'openai';
-  let voice = (typeof raw?.voice === 'string' && raw.voice.trim()) ? raw.voice.trim().slice(0, 100) : '';
+  const cloudProvider = TTS_CLOUD_PROVIDERS.includes(raw?.cloudProvider)
+    ? raw.cloudProvider
+    : 'openai';
+  let voice =
+    typeof raw?.voice === 'string' && raw.voice.trim() ? raw.voice.trim().slice(0, 100) : '';
   if (engine === 'kokoro' && !KOKORO_VOICE_RE.test(voice)) voice = 'bf_isabella';
   if (!voice) voice = engine === 'cloud' ? 'alloy' : 'bf_isabella';
   return { engine, cloudProvider, voice };
@@ -261,7 +280,7 @@ function normalizePersona(raw) {
   const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 400) : '';
   if (!name || !soul) return null;
   return {
-    id: (typeof raw.id === 'string' && ID_RE.test(raw.id)) ? raw.id : mintId('p_'),
+    id: typeof raw.id === 'string' && ID_RE.test(raw.id) ? raw.id : mintId('p_'),
     name,
     tagline: typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, 80) : '',
     frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
@@ -295,13 +314,14 @@ function normalizeShows(raw, personaIds) {
     if (!item || typeof item !== 'object') continue;
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 60) : '';
     if (!name) continue;
-    if (!personaIds.includes(item.personaId)) continue;       // drop dangling owner
+    if (!personaIds.includes(item.personaId)) continue; // drop dangling owner
     if (!SHOW_MOODS.includes(item.mood)) continue;
-    let id = (typeof item.id === 'string' && ID_RE.test(item.id)) ? item.id : mintId('s_');
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
     out.push({
-      id, name,
+      id,
+      name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
       mood: item.mood,
@@ -329,14 +349,17 @@ export async function load() {
   if (cache) return cache;
   let stored = {};
   if (existsSync(SETTINGS_PATH)) {
-    try { stored = JSON.parse(await readFile(SETTINGS_PATH, 'utf8')); } catch {}
+    try {
+      stored = JSON.parse(await readFile(SETTINGS_PATH, 'utf8'));
+    } catch {}
   }
 
   // ── personas ──────────────────────────────────────────────────────────────
   // No valid persona roster in settings.json (fresh install) → ship the seed
   // roster of three distinct DJs.
-  const personas = normalizePersonaArray(stored.personas)
-    || DEFAULTS.personas.map(p => ({ ...p, tts: { ...p.tts } }));
+  const personas =
+    normalizePersonaArray(stored.personas) ||
+    DEFAULTS.personas.map(p => ({ ...p, tts: { ...p.tts } }));
   const personaIds = personas.map(p => p.id);
 
   const activePersonaId = personaIds.includes(stored.activePersonaId)
@@ -344,13 +367,19 @@ export async function load() {
     : personaIds[0];
 
   // djPrompt — prefer the new field, else migrate the legacy dj.systemPrompt.
-  let djPrompt = typeof stored.djPrompt === 'string'
-    ? stored.djPrompt
-    : (typeof stored.dj?.systemPrompt === 'string' ? stored.dj.systemPrompt : '');
+  let djPrompt =
+    typeof stored.djPrompt === 'string'
+      ? stored.djPrompt
+      : typeof stored.dj?.systemPrompt === 'string'
+        ? stored.dj.systemPrompt
+        : '';
   if (djPrompt.trim() === DEFAULT_DJ_PROMPT_TEMPLATE.trim()) djPrompt = '';
 
   const shows = normalizeShows(stored.shows, personaIds);
-  const schedule = normalizeSchedule(stored.schedule, shows.map(s => s.id));
+  const schedule = normalizeSchedule(
+    stored.schedule,
+    shows.map(s => s.id),
+  );
 
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
@@ -370,26 +399,30 @@ export async function load() {
         ? stored.tts.defaultEngine
         : DEFAULTS.tts.defaultEngine,
       kokoro: {
-        voice: (typeof stored.tts?.kokoro?.voice === 'string'
-                && KOKORO_VOICE_RE.test(stored.tts.kokoro.voice))
-          ? stored.tts.kokoro.voice
-          : DEFAULTS.tts.kokoro.voice,
+        voice:
+          typeof stored.tts?.kokoro?.voice === 'string' &&
+          KOKORO_VOICE_RE.test(stored.tts.kokoro.voice)
+            ? stored.tts.kokoro.voice
+            : DEFAULTS.tts.kokoro.voice,
       },
       cloud: {
         // Explicit boolean wins; otherwise an install that already had a saved
         // cloud key keeps cloud on so the upgrade doesn't silently disable it.
-        enabled: typeof stored.tts?.cloud?.enabled === 'boolean'
-          ? stored.tts.cloud.enabled
-          : !!(stored.tts?.cloud?.apiKey),
+        enabled:
+          typeof stored.tts?.cloud?.enabled === 'boolean'
+            ? stored.tts.cloud.enabled
+            : !!stored.tts?.cloud?.apiKey,
         provider: TTS_CLOUD_PROVIDERS.includes(stored.tts?.cloud?.provider)
           ? stored.tts.cloud.provider
           : DEFAULTS.tts.cloud.provider,
-        model: (typeof stored.tts?.cloud?.model === 'string' && stored.tts.cloud.model.trim())
-          ? stored.tts.cloud.model.trim()
-          : DEFAULTS.tts.cloud.model,
-        voice: (typeof stored.tts?.cloud?.voice === 'string' && stored.tts.cloud.voice.trim())
-          ? stored.tts.cloud.voice.trim()
-          : DEFAULTS.tts.cloud.voice,
+        model:
+          typeof stored.tts?.cloud?.model === 'string' && stored.tts.cloud.model.trim()
+            ? stored.tts.cloud.model.trim()
+            : DEFAULTS.tts.cloud.model,
+        voice:
+          typeof stored.tts?.cloud?.voice === 'string' && stored.tts.cloud.voice.trim()
+            ? stored.tts.cloud.voice.trim()
+            : DEFAULTS.tts.cloud.voice,
         apiKey: typeof stored.tts?.cloud?.apiKey === 'string' ? stored.tts.cloud.apiKey : '',
       },
     },
@@ -399,31 +432,30 @@ export async function load() {
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
       apiKey: typeof stored.llm?.apiKey === 'string' ? stored.llm.apiKey : DEFAULTS.llm.apiKey,
-      ollamaUrl: typeof stored.llm?.ollamaUrl === 'string'
-        ? stored.llm.ollamaUrl.trim()
-        : DEFAULTS.llm.ollamaUrl,
-      baseUrl: typeof stored.llm?.baseUrl === 'string'
-        ? stored.llm.baseUrl.trim()
-        : DEFAULTS.llm.baseUrl,
-      reasoning: typeof stored.llm?.reasoning === 'boolean'
-        ? stored.llm.reasoning
-        : DEFAULTS.llm.reasoning,
-      pickerAgent: typeof stored.llm?.pickerAgent === 'boolean'
-        ? stored.llm.pickerAgent
-        : DEFAULTS.llm.pickerAgent,
-      pauseWhenEmpty: typeof stored.llm?.pauseWhenEmpty === 'boolean'
-        ? stored.llm.pauseWhenEmpty
-        : DEFAULTS.llm.pauseWhenEmpty,
+      ollamaUrl:
+        typeof stored.llm?.ollamaUrl === 'string'
+          ? stored.llm.ollamaUrl.trim()
+          : DEFAULTS.llm.ollamaUrl,
+      baseUrl:
+        typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl,
+      reasoning:
+        typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      pickerAgent:
+        typeof stored.llm?.pickerAgent === 'boolean'
+          ? stored.llm.pickerAgent
+          : DEFAULTS.llm.pickerAgent,
+      pauseWhenEmpty:
+        typeof stored.llm?.pauseWhenEmpty === 'boolean'
+          ? stored.llm.pauseWhenEmpty
+          : DEFAULTS.llm.pauseWhenEmpty,
     },
     skills: {
       enabled: Object.fromEntries(
-        Object.entries(stored.skills?.enabled || {}).filter(([, v]) => typeof v === 'boolean')
+        Object.entries(stored.skills?.enabled || {}).filter(([, v]) => typeof v === 'boolean'),
       ),
     },
     sfx: {
-      enabled: typeof stored.sfx?.enabled === 'boolean'
-        ? stored.sfx.enabled
-        : DEFAULTS.sfx.enabled,
+      enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
   };
   return cache;
@@ -459,7 +491,9 @@ function validateTtsBlock(raw, where) {
   let voice = String(t.voice ?? '').trim();
   if (t.engine === 'kokoro') {
     if (!KOKORO_VOICE_RE.test(voice)) {
-      throw new Error(`${where}.tts.voice must match <lang><gender>_<name> for kokoro, e.g. bf_isabella`);
+      throw new Error(
+        `${where}.tts.voice must match <lang><gender>_<name> for kokoro, e.g. bf_isabella`,
+      );
     }
   } else if (t.engine === 'cloud') {
     if (voice.length < 1 || voice.length > 100) {
@@ -481,9 +515,11 @@ function validatePersonasStrict(raw) {
   return raw.map((item, i) => {
     if (!item || typeof item !== 'object') throw new Error(`personas[${i}] must be an object`);
     const name = String(item.name ?? '').trim();
-    if (name.length < 1 || name.length > 40) throw new Error(`personas[${i}].name must be 1-40 chars`);
+    if (name.length < 1 || name.length > 40)
+      throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 400) throw new Error(`personas[${i}].soul must be 1-400 chars`);
+    if (soul.length < 1 || soul.length > 400)
+      throw new Error(`personas[${i}].soul must be 1-400 chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     if (!FREQUENCIES.includes(item.frequency)) {
@@ -507,7 +543,9 @@ function validatePersonasStrict(raw) {
         throw new Error(`personas[${i}].skills must be an array of skill names`);
       }
       if (item.skills.length > SKILLS_PER_PERSONA_LIMIT) {
-        throw new Error(`personas[${i}].skills must be at most ${SKILLS_PER_PERSONA_LIMIT} entries`);
+        throw new Error(
+          `personas[${i}].skills must be at most ${SKILLS_PER_PERSONA_LIMIT} entries`,
+        );
       }
       const seenSk = new Set();
       skills = [];
@@ -516,13 +554,25 @@ function validatePersonasStrict(raw) {
         if (!SKILL_SLUG_RE.test(v)) {
           throw new Error(`personas[${i}].skills entries must be slug strings`);
         }
-        if (!seenSk.has(v)) { seenSk.add(v); skills.push(v); }
+        if (!seenSk.has(v)) {
+          seenSk.add(v);
+          skills.push(v);
+        }
       }
     }
-    let id = (typeof item.id === 'string' && ID_RE.test(item.id)) ? item.id : mintId('p_');
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('p_');
     if (seen.has(id)) id = mintId('p_');
     seen.add(id);
-    return { id, name, tagline, frequency: item.frequency, scriptLength, soul, tts, skills };
+    return {
+      id,
+      name,
+      tagline,
+      frequency: item.frequency,
+      scriptLength,
+      soul,
+      tts,
+      skills,
+    };
   });
 }
 
@@ -543,7 +593,7 @@ function validateShowsStrict(raw, personas) {
     if (!SHOW_MOODS.includes(item.mood)) {
       throw new Error(`shows[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
     }
-    let id = (typeof item.id === 'string' && ID_RE.test(item.id)) ? item.id : mintId('s_');
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
     return { id, name, topic, personaId: item.personaId, mood: item.mood };
@@ -562,7 +612,10 @@ function validateScheduleStrict(raw, shows) {
     }
     for (let h = 0; h < 24; h++) {
       const v = day[h];
-      if (v === null || v === undefined || v === '') { week[d][h] = null; continue; }
+      if (v === null || v === undefined || v === '') {
+        week[d][h] = null;
+        continue;
+      }
       if (typeof v !== 'string' || !showIds.includes(v)) {
         throw new Error(`schedule[${d}][${h}] references an unknown show`);
       }
@@ -581,16 +634,30 @@ export async function update(patch) {
   if ('jingleRatio' in patch) {
     const v = parseInt(patch.jingleRatio, 10);
     if (!Number.isFinite(v) || v < BOUNDS.jingleRatio.min || v > BOUNDS.jingleRatio.max) {
-      throw new Error(`jingleRatio must be int in [${BOUNDS.jingleRatio.min}, ${BOUNDS.jingleRatio.max}]`);
+      throw new Error(
+        `jingleRatio must be int in [${BOUNDS.jingleRatio.min}, ${BOUNDS.jingleRatio.max}]`,
+      );
     }
-    if (v !== cur.jingleRatio) { next.jingleRatio = v; restart = true; }
+    if (v !== cur.jingleRatio) {
+      next.jingleRatio = v;
+      restart = true;
+    }
   }
   if ('crossfadeDuration' in patch) {
     const v = parseFloat(patch.crossfadeDuration);
-    if (!Number.isFinite(v) || v < BOUNDS.crossfadeDuration.min || v > BOUNDS.crossfadeDuration.max) {
-      throw new Error(`crossfadeDuration must be number in [${BOUNDS.crossfadeDuration.min}, ${BOUNDS.crossfadeDuration.max}]`);
+    if (
+      !Number.isFinite(v) ||
+      v < BOUNDS.crossfadeDuration.min ||
+      v > BOUNDS.crossfadeDuration.max
+    ) {
+      throw new Error(
+        `crossfadeDuration must be number in [${BOUNDS.crossfadeDuration.min}, ${BOUNDS.crossfadeDuration.max}]`,
+      );
     }
-    if (v !== cur.crossfadeDuration) { next.crossfadeDuration = v; restart = true; }
+    if (v !== cur.crossfadeDuration) {
+      next.crossfadeDuration = v;
+      restart = true;
+    }
   }
   if ('weather' in patch) {
     const w = patch.weather || {};
@@ -705,7 +772,7 @@ export async function update(patch) {
       if (v && !/^https?:\/\//i.test(v)) {
         throw new Error('llm.ollamaUrl must start with http:// or https://');
       }
-      next.llm.ollamaUrl = v.replace(/\/+$/, '');  // strip trailing slashes
+      next.llm.ollamaUrl = v.replace(/\/+$/, ''); // strip trailing slashes
     }
     if (l.baseUrl !== undefined) {
       const v = String(l.baseUrl).trim();
@@ -713,7 +780,7 @@ export async function update(patch) {
       if (v && !/^https?:\/\//i.test(v)) {
         throw new Error('llm.baseUrl must start with http:// or https://');
       }
-      next.llm.baseUrl = v.replace(/\/+$/, '');  // strip trailing slashes
+      next.llm.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
     }
     if (l.reasoning !== undefined) {
       next.llm.reasoning = !!l.reasoning;
@@ -821,13 +888,38 @@ export function getEffectivePersona(date = new Date()) {
 export function renderDjPrompt(persona, ctx = {}) {
   const station = ctx.station || 'SUB/WAVE';
   const location = ctx.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
-  const tpl = (cache?.djPrompt && cache.djPrompt.trim()) ? cache.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+  const tpl =
+    cache?.djPrompt && cache.djPrompt.trim() ? cache.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
   const rendered = tpl
     .replaceAll('{name}', persona?.name || 'your host')
     .replaceAll('{soul}', persona?.soul || DJ_SOULS[0])
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
-  return `${rendered}\n\n${DJ_HUMANNESS_RULES}`;
+  return `${rendered}`;
+}
+
+// Persona prelude shared by every tool-loop agent system prompt — the picker
+// and request agents in broadcast/dj-agent.js, and the segment director in
+// skills/_agent.js. These agents build task-specific templates (with tools,
+// schemas, and JSON shapes the legacy generateXxx prompts don't need), so they
+// can't go through renderDjPrompt — but they still need the same persona
+// opener everywhere. Paste this at the top of any new agent system prompt;
+// never hand-roll the opener.
+//
+// `rules` is OPT-IN, defaulting to true. Pass `false` for tool-loop agents
+// whose primary task is structured exploration + strict JSON output (the
+// track picker and the request agent): the ~600-char humanness block at the
+// top of the prompt competes for the model's attention with the tool-loop
+// instructions and reliably derails small cloud models — they read "sound
+// like a person talking" and emit conversational prose instead of executing
+// the tool loop. The rules belong on agents whose primary task IS spoken
+// output (the segment director), not on agents whose primary task is
+// orchestration with an incidental spoken side-channel.
+export function agentPersonaPreamble(persona, { rules = true } = {}) {
+  const name = persona?.name || 'the DJ';
+  const soul = persona?.soul || '';
+  const opener = `You are ${name}, the on-air DJ for SUB/WAVE, a personal internet radio station. ${soul}`;
+  return rules ? `${opener}` : opener;
 }
 
 // Liquidsoap reads two tiny text files instead of JSON.

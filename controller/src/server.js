@@ -56,7 +56,9 @@ app.listen(config.server.port, async () => {
     config.weather.lng = s.weather.lng;
     config.weather.locationName = s.weather.locationName;
     await settings.ensureLiquidsoapSettingsFile();
-    console.log(`[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName}`);
+    console.log(
+      `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName}`,
+    );
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
@@ -78,6 +80,8 @@ app.listen(config.server.port, async () => {
   queue.startWatcher();
   startListenerMonitor();
   startScheduler();
-  jingles.ensureDefaultIdent().catch(err => console.error('[jingles] ident generation failed:', err.message));
+  jingles
+    .ensureDefaultIdent()
+    .catch(err => console.error('[jingles] ident generation failed:', err.message));
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));
 });

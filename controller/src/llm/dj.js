@@ -9,10 +9,12 @@
 import { z } from 'zod';
 import * as settings from '../settings.js';
 import { djText, djObject } from './sdk.js';
-import { recentCalls, record } from './log.js';
+import { recentCalls } from './log.js';
 
-// Re-exported so server.js /debug can read the recent-call ring buffer.
-export { recentCalls, record };
+// Re-exported so routes/debug.js can read the LLM call ring buffer through the
+// same module that produces the calls. record() is internal — sdk.js writes,
+// nothing else should.
+export { recentCalls };
 
 // Resolve the DJ system prompt for the persona on air right now. The effective
 // persona is the current show's owner if a show is scheduled for this hour,
@@ -33,7 +35,6 @@ const LENGTH_PHRASES = {
   concise: {
     intro:     'Keep it brief — 2 to 4 sentences.',
     link:      '1-2 sentences',
-    weather:   '1-2 sentences',
     stationId: 'a 1-sentence station ident',
     hourly:    '1 sentence',
     adlib:     '1-2 sentences',
@@ -42,7 +43,6 @@ const LENGTH_PHRASES = {
   extended: {
     intro:     'Take your time — 5 to 8 sentences. Set a scene, tell a small story around the track.',
     link:      '4-6 sentences',
-    weather:   '3-4 sentences',
     stationId: 'a 2-3 sentence station ident',
     hourly:    '2-3 sentences',
     adlib:     '4-6 sentences',
@@ -62,8 +62,11 @@ export function lengthPhrase(kind, persona) {
 
 // Narrative angles per call type. One is picked at random and injected into
 // the user prompt as "Tone for this segment:" so consecutive generations
-// don't fall back to the same shape. Add freely — the more variety here,
-// the less the DJ repeats itself.
+// don't fall back to the same shape. Only the generate* callers in this file
+// consume these — the segment director (skills/_agent.js) gets its variety
+// from its CAPABILITIES descriptions and from picking a different capability
+// each tick, so it doesn't go through pickAngle. Add freely — the more
+// variety here, the less the DJ repeats itself.
 export const ANGLES = {
   intro: [
     'Open with one specific image from right now (weather, time, day, season) and slide into the track.',
@@ -90,47 +93,12 @@ export const ANGLES = {
     'Open with the time or weather, then drop the station name in the middle of the sentence.',
     'A single observation about broadcasting from a homelab, with the station name woven in.',
   ],
-  weather: [
-    'One concrete sensory detail about the weather, no temperature recital.',
-    'Compare it to what it was earlier, or what it might be tonight — give it a small arc.',
-    'Tie the weather to a recommendation about how to spend the next hour.',
-    'Skip the forecast voice — just say what it actually feels like outside right now.',
-    'Acknowledge weather as a co-conspirator with the music, not as a news item.',
-  ],
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
     'Treat the hour mark like a quiet check-in, not a bulletin.',
     'Open with where in the day we are (mid-afternoon lull, evening getting started, etc.) before the actual time.',
     'Just one short sentence that happens to mention the time.',
     'Acknowledge what kind of listener might be tuning in at this exact hour, without naming them.',
-  ],
-  news: [
-    'Read it like a half-distracted DJ skimming the wire, not a news anchor.',
-    'Land one specific image or phrase from the headline, skip the editorial.',
-    'Treat it as something you just noticed on a second screen, then slide back to music.',
-    'Keep it one sentence. The next sentence is the song.',
-    'Acknowledge the world outside the room without dwelling on it.',
-  ],
-  traffic: [
-    'Tongue-in-cheek traffic for a station that has none — invent a SUB/WAVE-shaped obstacle (a cat on the cable, slow buffering on the M6, a queue at the kettle).',
-    'Mock the format of a real traffic report. Keep it a single sentence.',
-    'Make the "delay" tiny and domestic, not a real road incident.',
-    'Treat traffic as a metaphor for the listening room itself.',
-    'Land one absurd detail, then ease into the next track.',
-  ],
-  random_facts: [
-    'One small "did you know" — concrete, oddly specific, no Wikipedia rote.',
-    'Frame the fact like something you half-remember telling a friend at 1am.',
-    'Tie the fact to the time of day or season if it lands naturally; otherwise drop it cold.',
-    'Keep it one sentence. Avoid the words "interestingly" and "fun fact".',
-    'A fact that earns the next song, not one that competes with it.',
-  ],
-  web_search: [
-    'Drop one current detail about the artist like a half-remembered thing you read, then back to the music.',
-    'Treat it as news from the wider world about who is on air — light, never a press release.',
-    'Land one specific, recent fact; skip the context and skip the source.',
-    'Keep it one sentence. The detail should make the next play feel timely.',
-    'Mention what the artist has been up to lately as if the listener might not have heard.',
   ],
 };
 
@@ -144,8 +112,9 @@ export function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000);
 }
 
-// Build the shared "right now" context block fed to every generate* call.
-// Pulled out so all five DJ functions show the model the same picture.
+// Build the shared "right now" context block. Used by every generate* function
+// in this file, by matchRequest, and by the segment director (skills/_agent.js)
+// — so they all show the model the same picture of the current moment.
 export function buildContextLines(context, { recentTracks } = {}) {
   const lines = [];
   if (context?.date) {
@@ -199,17 +168,6 @@ export function decoratePrompt(prompt, { kind, recap, recentOpeners }) {
 
 const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener sends a request; you turn it into structured search parameters.
 
-Fill in every field. Use null where a value does not apply — never omit a field.
-
-- search_terms: 1-3 strings to look up in the library — ARTIST NAMES or SONG TITLES only. NEVER genres, and NEVER mood/vibe words like "calm", "rainy", "overcast". Genres go in "genre"; vibes go in "mood".
-- artist: the artist's common name if the listener named one (e.g. "Diljit Dosanjh"), else null.
-- genre: a real music genre if the listener asked for one (e.g. "punjabi", "hip hop", "jazz", "lofi", "rock", "bhangra"), else null. A genre is a kind of music — not a mood and not a feeling.
-- sort: "latest" for latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top, else null.
-- scope: "album" or "song" — what the listener wants. Default "song".
-- mood: one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null. ALWAYS set this for vibe/feeling requests ("overcast mood" → calm or reflective, "cosy" → calm, "pumped up" → energetic, "late night drive" → night — pick the strongest single match).
-- intent: one short sentence describing what the listener wants.
-- ack: short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros.
-
 Vibe-to-mood mapping (use these when the request describes a feeling, weather, or moment rather than naming an artist/song):
 - overcast, cloudy, grey day, drizzly → calm or reflective
 - rainy day, downpour → rainy + calm
@@ -253,19 +211,21 @@ Worked examples (these show how the fields map — values only; the response for
 "play <title> by <artist>"
 {"search_terms":["<title>","<artist>"],"artist":"<artist>","genre":null,"sort":null,"scope":"song","mood":null,"intent":"Wants a specific song by a specific artist.","ack":"Coming right up."}`;
 
-// Lenient schema — it enforces the SHAPE; the system prompt enforces the
-// SEMANTICS. `mood`/`sort` stay free strings (not enums) so a near-miss from a
-// weaker model doesn't 500 a listener request — server.js tolerates unknown
-// moods by falling through to its other pick sources.
+// Lenient schema — it enforces the SHAPE; the prompt + per-field .describe()
+// strings carry the SEMANTICS. `mood`/`sort` stay free strings (not enums) so a
+// near-miss from a weaker model doesn't 500 a listener request — server.js
+// tolerates unknown moods by falling through to its other pick sources. The AI
+// SDK feeds these descriptions to the model alongside the schema, so they don't
+// need to be restated in REQUEST_SYSTEM.
 const REQUEST_SCHEMA = z.object({
-  search_terms: z.array(z.string()),
-  artist: z.string().nullable(),
-  genre: z.string().nullable(),
-  sort: z.string().nullable(),
-  scope: z.enum(['album', 'song']),
-  mood: z.string().nullable(),
-  intent: z.string(),
-  ack: z.string(),
+  search_terms: z.array(z.string()).describe('1-3 strings to look up in the library — ARTIST NAMES or SONG TITLES only. NEVER genres, and NEVER mood/vibe words like "calm", "rainy", "overcast". Genres go in "genre"; vibes go in "mood".'),
+  artist: z.string().nullable().describe(`the artist's common name if the listener named one (e.g. "Diljit Dosanjh"), else null`),
+  genre: z.string().nullable().describe('a real music genre if the listener asked for one (e.g. "punjabi", "hip hop", "jazz", "lofi", "rock", "bhangra"), else null. A genre is a kind of music — not a mood and not a feeling.'),
+  sort: z.string().nullable().describe('"latest" for latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top, else null'),
+  scope: z.enum(['album', 'song']).describe('what the listener wants; default "song"'),
+  mood: z.string().nullable().describe('one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null. ALWAYS set this for vibe/feeling requests ("overcast mood" → calm or reflective, "cosy" → calm, "pumped up" → energetic, "late night drive" → night — pick the strongest single match).'),
+  intent: z.string().describe('one short sentence describing what the listener wants'),
+  ack: z.string().describe(`short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros`),
 });
 
 export async function matchRequest(userQuery, { listenerName = null, nowPlaying = null } = {}) {
@@ -309,18 +269,6 @@ export async function generateIntro({ track, context, requestedBy = null, reques
     prompt: decoratePrompt(prompt, { kind: 'intro', recap, recentOpeners }),
     temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
     kind: 'generateIntro',
-  });
-}
-
-export async function generateWeatherSegment(weather, time, { recap = null, context = null, recentOpeners = null } = {}) {
-  const ctx = context || { weather, time };
-  const ctxLines = buildContextLines(ctx);
-  ctxLines.push(`Task: a brief weather check, in character. ${lengthPhrase('weather')}.`);
-  return djText({
-    system: djSystem(),
-    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'weather', recap, recentOpeners }),
-    temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
-    kind: 'generateWeatherSegment',
   });
 }
 
@@ -383,8 +331,8 @@ export async function generateHourlyTime(time, weather, { recap = null, context 
 // ---------------------------------------------------------------------------
 
 // Shared selection criteria — used by both the pool picker (PICKER_SYSTEM
-// below) and the agent picker (AGENT_INSTRUCTIONS in music/picker.js) so the
-// two strategies can't drift apart.
+// below) and the conversational agent picker (pickSystem in broadcast/
+// dj-agent.js) so the two strategies can't drift apart on selection rules.
 export const PICKER_CRITERIA = `Selection criteria, in order:
 1. FLOW — does it transition naturally from what just played (energy, mood, tempo)?
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?
@@ -407,14 +355,7 @@ Use it to balance familiarity against discovery.
 recentPlays is context for judging flow — every candidate is already guaranteed
 unplayed, so you never need to reject one for being recent.
 
-Pick exactly one candidate. Respond with a JSON object only — no prose, no
-markdown, no reasoning outside the object:
-{ "id": "<exact id from a candidate>", "reason": "<one short sentence on why this one>" }`;
-
-const PICK_SCHEMA = z.object({
-  id: z.string(),
-  reason: z.string(),
-});
+Pick exactly one candidate.`;
 
 export async function pickNextTrack({ candidates, recentPlays, context }) {
   const user = JSON.stringify({
@@ -432,7 +373,10 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   return djObject({
     system: PICKER_SYSTEM,
     prompt: user,
-    schema: PICK_SCHEMA,
+    schema: z.object({
+      id: z.string().describe('the exact id of one candidate'),
+      reason: z.string().describe('one short sentence on why this one'),
+    }),
     temperature: 0.5,
     kind: 'pickNextTrack',
   });

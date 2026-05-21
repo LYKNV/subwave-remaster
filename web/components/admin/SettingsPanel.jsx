@@ -877,10 +877,12 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
           <div>
             <div style={{ fontSize: 13, fontWeight: 700 }}>Chain-of-thought</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, maxWidth: 480, lineHeight: 1.5 }}>
-              When off, reasoning (“thinking”) models are told to skip the
-              &lt;think&gt; block and answer directly. The DJ writes short scripts and
-              structured picks that don’t need reasoning — and an uncapped thought
-              chain on a small model balloons every call. Leave off unless you’re
+              When off, the picker tells the model to skip or minimize its
+              internal thinking step. Wired across providers that expose a
+              thinking knob — Ollama, openai-compatible (Qwen3), Gemini 2.5/3.x,
+              OpenAI o-series and gpt-5, and Claude (adaptive thinking). DJ
+              scripts and structured picks are short, and an uncapped thought
+              chain just balloons latency and cost. Leave off unless you&apos;re
               running a model that genuinely needs it.
             </div>
           </div>

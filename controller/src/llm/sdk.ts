@@ -25,9 +25,9 @@ import * as settings from '../settings.js';
 // when `llm.reasoning` is off, but provider coverage isn't complete — so the
 // caps stay generous enough to survive a thinking model even when we can't
 // turn its thinking off.
-const MAX_TOKENS_TEXT   = 2000;
-const MAX_TOKENS_OBJECT = 4000;
-const MAX_TOKENS_AGENT  = 4000;
+const MAX_TOKENS_TEXT   = 4000;
+const MAX_TOKENS_OBJECT = 8000;
+const MAX_TOKENS_AGENT  = 8000;
 
 // Some models (Qwen 3, DeepSeek R1, etc.) emit a <think>…</think> reasoning
 // block before the answer. Reasoning is suppressed at the provider layer when

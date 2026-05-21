@@ -1,8 +1,17 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, type RefObject } from 'react';
+import type { NowPlayingTrack } from '@/lib/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+
+export interface UseMediaSessionParams {
+  tunedIn: boolean;
+  nowPlaying: NowPlayingTrack | null;
+  audioRef: RefObject<HTMLAudioElement | null>;
+  onTune?: () => void;
+  onSkip?: () => void;
+}
 
 // Wires the browser's Media Session API to the controller's now-playing feed.
 // Effect: track + artist + album show on the OS lock screen, in the
@@ -24,7 +33,13 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 // station means asking the controller to advance. POST /skip does exactly
 // that — but we gate it on the skipFn callback so consumers can opt out
 // (e.g. an unauthenticated public listener page that shouldn't expose skip).
-export function useMediaSession({ tunedIn, nowPlaying, audioRef, onTune, onSkip }) {
+export function useMediaSession({
+  tunedIn,
+  nowPlaying,
+  audioRef,
+  onTune,
+  onSkip,
+}: UseMediaSessionParams): void {
   // Reflect tune-in / out into the system playback state. The browser uses
   // this to render the play/pause glyph on the lock screen correctly even
   // if the <audio> readyState is still loading.
@@ -48,7 +63,7 @@ export function useMediaSession({ tunedIn, nowPlaying, audioRef, onTune, onSkip 
     const album = nowPlaying?.album || 'SUB/WAVE';
     const subsonicId = nowPlaying?.subsonic_id;
 
-    const artwork = subsonicId
+    const artwork: MediaImage[] = subsonicId
       ? [
           // Real cover first; the app icon trails as a fallback in case the
           // Subsonic fetch errors or the track has no embedded art (some

@@ -12,7 +12,11 @@
 //   track  — a track that aired
 //   system — system events (session start, pick prompts, restarts)
 
-export function turnClass(turn) {
+import type { SessionTurn } from './types';
+
+export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
+
+export function turnClass(turn: SessionTurn | null | undefined): TurnDisplayClass {
   switch (turn?.role) {
     case 'segment': return 'voice';
     case 'dj':      return 'dj';
@@ -21,22 +25,23 @@ export function turnClass(turn) {
   }
 }
 
-export const isVoice = (turn) => turnClass(turn) === 'voice';
+export const isVoice = (turn: SessionTurn | null | undefined): boolean =>
+  turnClass(turn) === 'voice';
 
 // "DJ" view = everything the DJ personally said or decided.
-export const isDjTurn = (turn) => {
+export const isDjTurn = (turn: SessionTurn | null | undefined): boolean => {
   const c = turnClass(turn);
   return c === 'voice' || c === 'dj';
 };
 
 // Session turns carry no id — derive a stable React key from timestamp + index.
-export function turnKey(turn, i) {
+export function turnKey(turn: SessionTurn | null | undefined, i: number): string {
   return `${turn?.t || 'x'}-${i}`;
 }
 
 // Plain display text. `track` turns already carry a "▶ …" prefix in their
 // text; strip it so callers can supply their own marker.
-export function turnText(turn) {
+export function turnText(turn: SessionTurn | null | undefined): string {
   const text = turn?.text || '';
   if (turnClass(turn) === 'track') return text.replace(/^▶\s*/, '');
   return text;

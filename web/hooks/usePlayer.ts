@@ -1,19 +1,37 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 
 const STREAM_URL = process.env.NEXT_PUBLIC_STREAM_URL || '/stream.mp3';
+
+export type PlayerStatus = 'idle' | 'connecting' | 'playing';
+
+export interface Player {
+  audioRef: RefObject<HTMLAudioElement | null>;
+  tunedIn: boolean;
+  status: PlayerStatus;
+  volume: number;
+  setVolume: (v: number) => void;
+  tune: () => void;
+  stop: () => void;
+  toggleMute: () => void;
+  muted: boolean;
+}
+
+export interface UsePlayerOptions {
+  initialVolume?: number;
+}
 
 // Owns the <audio> element + tune-in state. The audioRef must be attached to
 // an <audio> tag rendered by the consumer (so the Waveform's Web Audio API
 // can also reach it).
-export function usePlayer({ initialVolume = 1 } = {}) {
-  const audioRef = useRef(null);
+export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [tunedIn, setTunedIn] = useState(false);
   // 'idle' | 'connecting' | 'playing'. 'connecting' covers the unavoidable
   // gap between the tune-in gesture and the first audible MP3 frames — surfaced
   // in the UI so the player doesn't claim to be playing while still silent.
-  const [status, setStatus] = useState('idle');
+  const [status, setStatus] = useState<PlayerStatus>('idle');
   const [volume, setVolume] = useState(initialVolume);
   const preMuteVolume = useRef(initialVolume || 1);
 
@@ -22,7 +40,7 @@ export function usePlayer({ initialVolume = 1 } = {}) {
   // generation counter so rapid tune/stop toggles (now trivially reachable
   // via the Space/K shortcuts) settle on the last action without spurious
   // errors or a stale teardown clobbering a fresh play.
-  const playPromise = useRef(null);
+  const playPromise = useRef<Promise<void> | null>(null);
   const gen = useRef(0);
 
   useEffect(() => {
@@ -37,7 +55,8 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     const el = audioRef.current;
     if (!el) return;
     const onPlaying = () => setStatus('playing');
-    const onWaiting = () => setStatus(s => (s === 'playing' ? 'connecting' : s));
+    const onWaiting = () =>
+      setStatus(s => (s === 'playing' ? 'connecting' : s));
     const onError = () => setStatus('idle');
     el.addEventListener('playing', onPlaying);
     el.addEventListener('waiting', onWaiting);
@@ -85,9 +104,10 @@ export function usePlayer({ initialVolume = 1 } = {}) {
     setStatus('connecting');
     const p = el.play();
     playPromise.current = p;
-    Promise.resolve(p).catch(err => {
+    Promise.resolve(p).catch((err: unknown) => {
       // AbortError just means a later stop() interrupted this play — benign.
-      if (gen.current === myGen && err?.name !== 'AbortError') {
+      const name = err && typeof err === 'object' && 'name' in err ? (err as { name?: string }).name : undefined;
+      if (gen.current === myGen && name !== 'AbortError') {
         console.error('Play failed:', err);
       }
     });

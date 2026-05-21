@@ -3,7 +3,9 @@
 // (per-persona voice) and the Settings page (the shared Cloud-engine default).
 // A free-text "Custom voice id…" override sits next to every dropdown, so this
 // list only needs the common picks — not every voice the providers offer.
-export const CLOUD_VOICES = {
+import type { CloudProvider, CloudVoice } from './types';
+
+export const CLOUD_VOICES: Record<CloudProvider, CloudVoice[]> = {
   openai: [
     { id: 'alloy',   label: 'Alloy' },
     { id: 'ash',     label: 'Ash' },
@@ -34,7 +36,7 @@ export const CLOUD_VOICES = {
 // operator switches provider — a model id is provider-specific, so an OpenAI
 // id like "gpt-4o-mini-tts" is invalid against ElevenLabs and vice versa.
 // First entry is the per-provider default.
-export const CLOUD_MODELS = {
+export const CLOUD_MODELS: Record<CloudProvider, string[]> = {
   openai: ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd'],
   elevenlabs: ['eleven_flash_v2_5', 'eleven_multilingual_v2', 'eleven_turbo_v2_5'],
 };

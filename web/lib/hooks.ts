@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 
-export function useClock() {
-  const [t, setT] = useState(null);
+export function useClock(): Date | null {
+  const [t, setT] = useState<Date | null>(null);
   useEffect(() => {
     setT(new Date());
     const id = setInterval(() => setT(new Date()), 1000);
@@ -14,8 +14,8 @@ export function useClock() {
 
 // Pseudo-random animated spectrum used as fallback when the real analyser
 // can't attach (CORS, paused, no AudioContext, etc.). Values in [0, 1].
-export function useSpectrum(bins = 120, active = true, speed = 60) {
-  const [arr, setArr] = useState(() => Array(bins).fill(0.1));
+export function useSpectrum(bins = 120, active = true, speed = 60): number[] {
+  const [arr, setArr] = useState<number[]>(() => Array(bins).fill(0.1));
   useEffect(() => {
     if (!active) return;
     const id = setInterval(() => {
@@ -29,16 +29,30 @@ export function useSpectrum(bins = 120, active = true, speed = 60) {
   return arr;
 }
 
+export interface Analyser {
+  ready: boolean;
+  read: () => Uint8Array<ArrayBuffer> | null;
+}
+
+// Older Safari exposes AudioContext as webkitAudioContext.
+type AudioContextCtor = typeof AudioContext;
+interface WebkitWindow {
+  webkitAudioContext?: AudioContextCtor;
+}
+
 // Web Audio analyser hook — wires an AnalyserNode to the given <audio> ref
 // the first time `active` flips true, then writes per-frame frequency bytes
 // into an internal ref read via `read()`. Returns `{ ready, read }`. If CORS
 // or anything else blocks attachment, `ready` stays false and `read()` returns
 // null — callers should fall back to `useSpectrum`.
-export function useAnalyser(audioRef, active) {
-  const ctxRef = useRef(null);
-  const analyserRef = useRef(null);
-  const sourceRef = useRef(null);
-  const binsRef = useRef(null);
+export function useAnalyser(
+  audioRef: RefObject<HTMLAudioElement | null> | null | undefined,
+  active: boolean,
+): Analyser {
+  const ctxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const binsRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const probedRef = useRef(false);
   const [ready, setReady] = useState(false);
 
@@ -46,12 +60,13 @@ export function useAnalyser(audioRef, active) {
     if (!active || !audioRef?.current) return;
     let cancelled = false;
     const audioEl = audioRef.current;
-    let probeInterval = null;
-    let onPlaying = null;
+    let probeInterval: ReturnType<typeof setInterval> | null = null;
+    let onPlaying: (() => void) | null = null;
     (async () => {
       try {
         if (!ctxRef.current) {
-          const AC = window.AudioContext || window.webkitAudioContext;
+          const AC: AudioContextCtor | undefined =
+            window.AudioContext || (window as Window & WebkitWindow).webkitAudioContext;
           if (!AC) return;
           ctxRef.current = new AC();
         }
@@ -79,13 +94,21 @@ export function useAnalyser(audioRef, active) {
           let max = 0;
           let ticks = 0;
           probeInterval = setInterval(() => {
-            if (cancelled) { clearInterval(probeInterval); probeInterval = null; return; }
-            analyserRef.current.getByteFrequencyData(binsRef.current);
-            for (let i = 0; i < binsRef.current.length; i++) {
-              if (binsRef.current[i] > max) max = binsRef.current[i];
+            if (cancelled) {
+              if (probeInterval) clearInterval(probeInterval);
+              probeInterval = null;
+              return;
+            }
+            const bins = binsRef.current;
+            const an = analyserRef.current;
+            if (!bins || !an) return;
+            an.getByteFrequencyData(bins);
+            for (let i = 0; i < bins.length; i++) {
+              const v = bins[i] ?? 0;
+              if (v > max) max = v;
             }
             if (++ticks >= 12) {
-              clearInterval(probeInterval);
+              if (probeInterval) clearInterval(probeInterval);
               probeInterval = null;
               if (max === 0) {
                 try { sourceRef.current?.disconnect(); } catch {}
@@ -108,7 +131,7 @@ export function useAnalyser(audioRef, active) {
     };
   }, [active, audioRef]);
 
-  const read = () => {
+  const read = (): Uint8Array<ArrayBuffer> | null => {
     if (!ready || !analyserRef.current || !binsRef.current) return null;
     analyserRef.current.getByteFrequencyData(binsRef.current);
     return binsRef.current;

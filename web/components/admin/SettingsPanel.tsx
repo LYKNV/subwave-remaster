@@ -679,6 +679,34 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
     return { ...base, tts: { ...base.tts, defaultEngine: engine } };
   });
 
+  const savedTts: any = data.values?.tts || {};
+  const savedEngine: string = savedTts.defaultEngine || 'piper';
+  const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
+  const savedCloud: any = savedTts.cloud || {};
+  const savedEngineLabel = ENGINE_LABELS[savedEngine] || savedEngine;
+  const formEngineLabel = ENGINE_LABELS[form.tts.defaultEngine] || form.tts.defaultEngine;
+
+  const ttsDirty =
+    form.tts.defaultEngine !== savedEngine
+    || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
+    || form.tts.cloud.provider !== (savedCloud.provider || '')
+    || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
+    || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
+    || (form.tts.cloud.baseUrl || '').trim() !== (savedCloud.baseUrl || '').trim();
+
+  let activeDetail: ReactNode = null;
+  if (savedEngine === 'piper') {
+    activeDetail = <>Bundled — no key, no config. Always the safe fallback.</>;
+  } else if (savedEngine === 'kokoro') {
+    activeDetail = <>Voice <code>{savedKokoroVoice || '—'}</code>. Falls back to Piper if the model isn’t loaded.</>;
+  } else if (savedEngine === 'cloud') {
+    activeDetail = <>
+      {savedCloud.provider || '—'} · model <code>{savedCloud.model || '—'}</code>
+      {savedCloud.voice ? <> · voice <code>{savedCloud.voice}</code></> : null}
+    </>;
+  }
+  const savedEngineMissing = available[savedEngine] === false;
+
   return (
     <>
       <SectionHeader
@@ -698,20 +726,40 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
         ]}
       />
 
-      <Card title="Voice engine" sub="pick one — then configure it">
-        <div className="field">
-          <Label>Engine</Label>
-          <Seg
-            accent
-            value={form.tts.defaultEngine}
-            options={engineOptions}
-            onChange={selectEngine}
-          />
-          <div className="field-hint">
-            The station default — renders jingles and is the fallback when a persona’s
-            own engine fails. Per-segment voice still comes from the persona on air.
+      <Card title="Voice engine" sub="active default">
+        <div className="grid gap-[18px]">
+          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+            <div className="grid min-w-0 gap-0.5">
+              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
+                Default engine now · {savedEngineLabel}
+              </span>
+              <span className="text-[11px] leading-[1.5] text-muted">
+                {activeDetail} — {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
+                {savedEngineMissing && (
+                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build — segments fall back to Piper.</span>
+                )}
+              </span>
+            </div>
           </div>
-        </div>
+
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Engine</Label>
+              {ttsDirty && <Pill tone="accent" dot>unsaved</Pill>}
+            </div>
+            <Seg
+              accent
+              value={form.tts.defaultEngine}
+              options={engineOptions}
+              onChange={selectEngine}
+            />
+            <div className="field-hint">
+              {ttsDirty
+                ? <>Engine changed — hit “Save TTS settings” below to make <strong>{formEngineLabel}</strong> the new default.</>
+                : <>The station default — renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
+            </div>
+          </div>
 
         {form.tts.defaultEngine === 'piper' && (
           <div className="field mt-4">
@@ -887,10 +935,13 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
           </div>
           );
         })()}
+        </div>
       </Card>
 
       <SaveBar
-        note="Applies to jingle rendering and the engine fallback · no mixer restart. Per-segment voice comes from the persona on air."
+        note={ttsDirty
+          ? `Saving will switch the default engine to ${formEngineLabel}. Applies to jingle rendering and the engine fallback · no mixer restart.`
+          : `Default engine: ${savedEngineLabel}. Applies to jingle rendering and the engine fallback · no mixer restart.`}
         busy={busy}
         saveMsg={saveMsg}
         onSave={save}

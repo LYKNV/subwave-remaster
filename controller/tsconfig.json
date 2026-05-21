@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "incremental": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Migration-window relaxations (this is the rename PR — all 45 files were
+    // converted .js→.ts in one go without writing types). The rest of strict
+    // mode (strictNullChecks, strictFunctionTypes, …) stays ON so real bugs
+    // still surface. Re-enable these two in a follow-up PR once parameter and
+    // catch types are written out across the codebase.
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

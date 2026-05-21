@@ -4,9 +4,12 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "tag": "node src/music/tag-library.js"
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "tag": "tsx src/music/tag-library.ts",
+    "lint": "eslint . && tsc --noEmit",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.77",
@@ -21,6 +24,15 @@
     "ollama-ai-provider-v2": "^3.5.1",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
+    "tsx": "^4.19.2",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^25.9.1",
+    "@types/node-cron": "^3.0.11",
+    "eslint": "^9.39.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.4"
   }
 }

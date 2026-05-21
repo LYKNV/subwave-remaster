@@ -6,4 +6,4 @@
 import { register } from 'tsx/esm/api';
 
 register();
-await import('../src/main.jsx');
+await import('../src/main.js');

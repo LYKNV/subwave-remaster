@@ -5,7 +5,17 @@
 const DEFAULT_API = 'http://localhost:7701';
 const DEFAULT_STREAM = 'http://localhost:7702/stream.mp3';
 
-export function resolveConfig(flags = {}) {
+export interface CliFlags {
+  api?: string;
+  stream?: string;
+}
+
+export interface AppConfig {
+  apiUrl: string;
+  streamUrl: string;
+}
+
+export function resolveConfig(flags: CliFlags = {}): AppConfig {
   const apiUrl = (flags.api || process.env.SUBWAVE_API_URL || DEFAULT_API)
     .replace(/\/+$/, '');
   const streamUrl = flags.stream || process.env.SUBWAVE_STREAM_URL || DEFAULT_STREAM;

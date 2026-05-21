@@ -1,16 +1,21 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import { c, glyph } from '../theme.js';
+import type { PlayerState } from '../hooks/usePlayer.js';
 
 const HINTS = 'space ⏵⏸ · m mute · ↑↓ vol · 1/2/3 panels · ? q';
 const VOL_WIDTH = 12;
 const BAL_WIDTH = 8;
 
+interface TransportBarProps {
+  player: PlayerState;
+  offline: boolean;
+}
+
 // Winamp's button strip + VOL/BAL sliders, plus the keyboard legend.
 // Prev/next are rendered dim because there is no /skip endpoint — the
 // station picks the next track itself (see CLAUDE.md). They're kept for
 // the visual rhythm; the active glyph is play (when tuned in) or stop.
-export default function TransportBar({ player, offline }) {
+export default function TransportBar({ player, offline }: TransportBarProps) {
   const { tunedIn, volume, muted, available, supportsVolume } = player;
 
   const status = !available
@@ -54,7 +59,13 @@ export default function TransportBar({ player, offline }) {
   );
 }
 
-function Btn({ glyph: g, active, dim }) {
+interface BtnProps {
+  glyph: string;
+  active?: boolean;
+  dim?: boolean;
+}
+
+function Btn({ glyph: g, active = false, dim = false }: BtnProps) {
   const color = active ? c.title : dim ? c.chrome : undefined;
   return (
     <Text>
@@ -65,9 +76,17 @@ function Btn({ glyph: g, active, dim }) {
   );
 }
 
+interface SliderProps {
+  label: string;
+  value: number;
+  width: number;
+  color: string;
+  hint?: string | null;
+}
+
 // 12-cell track ━━━━━●─────, with a label on the left and an optional
 // status hint on the right.
-function Slider({ label, value, width, color, hint }) {
+function Slider({ label, value, width, color, hint }: SliderProps) {
   const v = Math.max(0, Math.min(1, value));
   const pos = Math.round(v * (width - 1));
   let track = '';

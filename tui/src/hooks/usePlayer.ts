@@ -1,11 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StreamPlayer } from '../audio/player.js';
+import { StreamPlayer, type Engine } from '../audio/player.js';
+
+export interface PlayerState {
+  tunedIn: boolean;
+  volume: number;
+  muted: boolean;
+  available: boolean;
+  supportsVolume: boolean;
+  engine: Engine | null;
+  toggle: () => void;
+  stop: () => void;
+  adjustVolume: (delta: number) => void;
+  toggleMute: () => void;
+}
 
 // Owns the audio child process. Mirrors the web usePlayer: tune in / out,
 // volume, mute. Volume is held in React state (0–100, the listener's intent)
 // and pushed to the engine whenever it — or the mute toggle — changes.
-export function usePlayer(streamUrl) {
-  const ref = useRef(null);
+export function usePlayer(streamUrl: string): PlayerState {
+  const ref = useRef<StreamPlayer | null>(null);
   if (!ref.current) ref.current = new StreamPlayer(streamUrl);
   const sp = ref.current;
 
@@ -32,7 +45,7 @@ export function usePlayer(streamUrl) {
 
   const stop = useCallback(() => { sp.stop(); setTunedIn(false); }, [sp]);
 
-  const adjustVolume = useCallback((delta) => {
+  const adjustVolume = useCallback((delta: number) => {
     setVolume(v => Math.max(0, Math.min(100, v + delta)));
   }, []);
 

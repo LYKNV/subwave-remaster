@@ -1,7 +1,13 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import { c, glyph } from '../theme.js';
 import { fmtClock } from '../lib/format.js';
+import type { Track } from '../hooks/useStationFeed.js';
+
+interface TimelineProps {
+  upcoming?: Track[];
+  history?: Track[];
+  nowPlaying: Track | null;
+}
 
 // Winamp Playlist Editor — up-next, the now-playing carat row in the
 // middle, then recently-played below a separator. /state's upcoming and
@@ -11,7 +17,7 @@ import { fmtClock } from '../lib/format.js';
 // Track numbers in cyan; requestedBy in Winamp-purple (accent magenta).
 // Durations are only shown where the data exists — /state doesn't carry
 // durations for upcoming/history items, only for nowPlaying.
-export default function Timeline({ upcoming = [], history = [], nowPlaying }) {
+export default function Timeline({ upcoming = [], history = [], nowPlaying }: TimelineProps) {
   const empty = !upcoming.length && !history.length && !nowPlaying;
   if (empty) {
     return (
@@ -55,7 +61,14 @@ export default function Timeline({ upcoming = [], history = [], nowPlaying }) {
   );
 }
 
-function Row({ n, track, carat = false, duration = null }) {
+interface RowProps {
+  n: number;
+  track: Track;
+  carat?: boolean;
+  duration?: string | null;
+}
+
+function Row({ n, track, carat = false, duration = null }: RowProps) {
   return (
     <Text>
       <Text color={carat ? c.title : c.chrome}>{carat ? `${glyph.carat} ` : '  '}</Text>
@@ -71,7 +84,11 @@ function Row({ n, track, carat = false, duration = null }) {
   );
 }
 
-function HistRow({ track }) {
+interface HistRowProps {
+  track: Track;
+}
+
+function HistRow({ track }: HistRowProps) {
   return (
     <Text dimColor>
       ·  {track.title} — {track.artist}

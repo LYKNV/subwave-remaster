@@ -1,4 +1,3 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import { c } from '../theme.js';
 
@@ -14,9 +13,13 @@ const TABS = [
   { id: 'booth',    label: 'EQ · BOOTH',     key: '2' },
   { id: 'request',  label: 'AT · ADD TRACK', key: '3' },
   { id: 'help',     label: 'AB · ABOUT',     key: '?' },
-];
+] as const;
 
-export default function TabBar({ active }) {
+interface TabBarProps {
+  active: string;
+}
+
+export default function TabBar({ active }: TabBarProps) {
   return (
     <Box paddingX={1} marginTop={1} flexShrink={0}>
       <Text>

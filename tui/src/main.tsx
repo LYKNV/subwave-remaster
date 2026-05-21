@@ -1,7 +1,6 @@
-import React from 'react';
 import { render } from 'ink';
 import meow from 'meow';
-import App from './App.jsx';
+import App from './App.js';
 import { resolveConfig } from './config.js';
 
 const cli = meow(`

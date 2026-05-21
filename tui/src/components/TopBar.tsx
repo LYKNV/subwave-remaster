@@ -1,6 +1,13 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import { c, glyph } from '../theme.js';
+import type { ActiveShow, DjInfo, Listeners } from '../hooks/useStationFeed.js';
+
+interface TopBarProps {
+  dj: DjInfo | null;
+  activeShow: ActiveShow | null;
+  listeners: Listeners | null;
+  streamOnline: boolean | null;
+}
 
 // Fake Winamp window titlebar for the whole app: the wordmark on the left
 // (treated as the active titlebar text in amber), DJ + show as a dim
@@ -9,7 +16,7 @@ import { c, glyph } from '../theme.js';
 //
 // Weather + day-of-week used to live here; they've moved into the MAIN
 // LCD where they read more like a Winamp readout than a chrome detail.
-export default function TopBar({ dj, activeShow, listeners, streamOnline }) {
+export default function TopBar({ dj, activeShow, listeners, streamOnline }: TopBarProps) {
   const onAir = streamOnline !== false;
   const showLabel = activeShow?.name ? `  ${glyph.shimR}  ${activeShow.name}` : '';
   const count = listeners?.current ?? 0;

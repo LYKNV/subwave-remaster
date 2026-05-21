@@ -1,18 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
-import TopBar from './components/TopBar.jsx';
-import NowPlaying from './components/NowPlaying.jsx';
-import Timeline from './components/Timeline.jsx';
-import Booth from './components/Booth.jsx';
-import RequestForm from './components/RequestForm.jsx';
-import TransportBar from './components/TransportBar.jsx';
-import WindowFrame from './components/WindowFrame.jsx';
-import TabBar from './components/TabBar.jsx';
+import TopBar from './components/TopBar.js';
+import NowPlaying from './components/NowPlaying.js';
+import Timeline from './components/Timeline.js';
+import Booth from './components/Booth.js';
+import RequestForm from './components/RequestForm.js';
+import TransportBar from './components/TransportBar.js';
+import WindowFrame from './components/WindowFrame.js';
+import TabBar from './components/TabBar.js';
 import { useStationFeed } from './hooks/useStationFeed.js';
 import { usePlayer } from './hooks/usePlayer.js';
+import type { AppConfig } from './config.js';
 import { c, glyph } from './theme.js';
 
-const PANEL_TITLE = {
+type PanelId = 'timeline' | 'booth' | 'request' | 'help';
+
+const PANEL_TITLE: Record<PanelId, string> = {
   timeline: 'PLAYLIST EDITOR',
   booth:    'BOOTH EQ',
   request:  'ADD TRACK ░ URL/PATH',
@@ -20,7 +23,7 @@ const PANEL_TITLE = {
 };
 
 function About() {
-  const rows = [
+  const rows: Array<[string, string]> = [
     ['space',    'tune in / out'],
     ['↑ / ↓',    'volume (mpv only)'],
     ['m',        'mute / unmute'],
@@ -63,19 +66,24 @@ function useTerminalSize() {
   return size;
 }
 
-export default function App({ config }) {
+interface AppProps {
+  config: AppConfig;
+}
+
+export default function App({ config }: AppProps) {
   const { exit } = useApp();
   const feed = useStationFeed(config.apiUrl);
   const player = usePlayer(config.streamUrl);
-  const [panel, setPanel] = useState('timeline');
+  const [panel, setPanel] = useState<PanelId>('timeline');
   const { columns, rows } = useTerminalSize();
 
   const offline = feed.streamOnline === false;
+  const { tunedIn: playerTunedIn, stop: playerStop } = player;
 
   // Tear playback down if the station drops off air while tuned in.
   useEffect(() => {
-    if (offline && player.tunedIn) player.stop();
-  }, [offline, player.tunedIn, player.stop]);
+    if (offline && playerTunedIn) playerStop();
+  }, [offline, playerTunedIn, playerStop]);
 
   // The request form owns the keyboard while its panel is open — only Esc
   // (handled here) gets through, so typing a request never triggers shortcuts.

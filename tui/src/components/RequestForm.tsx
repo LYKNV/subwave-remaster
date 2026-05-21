@@ -1,7 +1,19 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Box, Text } from 'ink';
 import TextInput from 'ink-text-input';
 import { c, glyph } from '../theme.js';
+
+interface RequestFormProps {
+  apiUrl: string;
+}
+
+type Field = 'name' | 'text' | 'sent';
+type StatusKind = 'ok' | 'error' | 'pending';
+
+interface Status {
+  kind: StatusKind;
+  message: string;
+}
 
 // Listener request form, dressed as a Winamp "Add URL" dialog. Submits to
 // POST /request, then polls GET /request/:id for the booth's outcome —
@@ -10,13 +22,19 @@ import { c, glyph } from '../theme.js';
 // Field order: name → request text → submit on Enter. While this panel is
 // mounted, App suppresses its own shortcuts (except Esc), so the
 // TextInputs own the keyboard.
-export default function RequestForm({ apiUrl }) {
-  const [field, setField] = useState('name');   // name | text | sent
+export default function RequestForm({ apiUrl }: RequestFormProps) {
+  const [field, setField] = useState<Field>('name');
   const [name, setName] = useState('');
   const [text, setText] = useState('');
-  const [status, setStatus] = useState(null);   // { kind, message }
+  const [status, setStatus] = useState<Status | null>(null);
 
-  const poll = async (id) => {
+  const poll = async (id: string) => {
+    interface PollResponse {
+      status?: 'resolved' | 'failed' | string;
+      track?: { title?: string; artist?: string };
+      ack?: string;
+      message?: string;
+    }
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 2000));
       try {
@@ -25,7 +43,7 @@ export default function RequestForm({ apiUrl }) {
           setStatus({ kind: 'error', message: 'Request lost — try again.' });
           return;
         }
-        const d = await res.json();
+        const d = await res.json() as PollResponse;
         if (d.status === 'resolved') {
           const track = d.track ? ` — ${d.track.title} by ${d.track.artist}` : '';
           setStatus({ kind: 'ok', message: `${d.ack || 'Queued.'}${track}` });
@@ -35,12 +53,17 @@ export default function RequestForm({ apiUrl }) {
           setStatus({ kind: 'error', message: d.message || 'Nothing matched that.' });
           return;
         }
-      } catch {}
+      } catch { /* keep polling */ }
     }
     setStatus({ kind: 'error', message: 'Timed out waiting on the booth.' });
   };
 
   const submit = async () => {
+    interface SubmitResponse {
+      success?: boolean;
+      message?: string;
+      requestId?: string;
+    }
     if (!text.trim()) { setField('text'); return; }
     setField('sent');
     setStatus({ kind: 'pending', message: 'Sending to the booth…' });
@@ -50,20 +73,20 @@ export default function RequestForm({ apiUrl }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.trim(), name: name.trim() }),
       });
-      const data = await res.json();
+      const data = await res.json() as SubmitResponse;
       if (!data.success) {
         setStatus({ kind: 'error', message: data.message || 'Request rejected.' });
         return;
       }
       setStatus({ kind: 'pending', message: 'In the booth — waiting for a pick…' });
-      await poll(data.requestId);
+      if (data.requestId) await poll(data.requestId);
     } catch {
       setStatus({ kind: 'error', message: 'Network error — is the controller up?' });
     }
   };
 
-  const statusColor = status
-    ? { ok: c.ok, error: c.danger, pending: c.warn }[status.kind]
+  const statusColor: string | undefined = status
+    ? ({ ok: c.ok, error: c.danger, pending: c.warn } as const)[status.kind]
     : undefined;
   const focusTextField = field === 'text';
 

@@ -1,18 +1,31 @@
-import React from 'react';
 import { Box, Text } from 'ink';
-import { turnClass, turnText } from '../lib/sessionFeed.js';
+import { turnClass, turnText, type SessionTurn, type TurnClass } from '../lib/sessionFeed.js';
 import { c, glyph } from '../theme.js';
 
-const COLOR = { voice: c.accent, dj: undefined, track: c.lcdDim };
-const MARKER = { voice: glyph.voice, dj: glyph.djDot, track: glyph.track };
+const COLOR: Record<TurnClass, string | undefined> = {
+  voice: c.accent,
+  dj: undefined,
+  track: c.lcdDim,
+  system: undefined,
+};
+const MARKER: Record<TurnClass, string> = {
+  voice: glyph.voice,
+  dj: glyph.djDot,
+  track: glyph.track,
+  system: glyph.djDot,
+};
 // Faux EQ-band lead-ins — the bar height ramps with row index, so the
 // newest turn (rendered at the top) reads as the tallest band. Matches
 // Winamp's settled EQ curve aesthetic without needing a tick.
 const BANDS = ['▕▎', '▕▍', '▕▌', '▕▋', '▕▊', '▕▉', '▕█', '▕█'];
 
+interface BoothProps {
+  items?: SessionTurn[];
+}
+
 // Booth EQ — the live DJ session, newest first. System turns are
 // operator-facing and dropped, matching the web Booth drawer.
-export default function Booth({ items = [] }) {
+export default function Booth({ items = [] }: BoothProps) {
   const turns = items
     .filter(t => turnClass(t) !== 'system')
     .slice(-8)

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useAnimation } from 'ink';
 import { c } from '../theme.js';
 
@@ -22,7 +22,14 @@ import { c } from '../theme.js';
 // `incrementalRendering` on the root `render()` to keep flicker down.
 const COLORS_TOP_DOWN = [c.danger, c.danger, c.warn, c.warn, c.lcd, c.lcd, c.lcd, c.lcdDim];
 
-export default function Spectrum({ width = 48, height = 8, active = true, seed = '' }) {
+interface SpectrumProps {
+  width?: number;
+  height?: number;
+  active?: boolean;
+  seed?: string;
+}
+
+export default function Spectrum({ width = 48, height = 8, active = true, seed = '' }: SpectrumProps) {
   const w = Math.max(8, Math.floor(width));
   const h = Math.max(3, Math.floor(height));
 
@@ -62,8 +69,8 @@ export default function Spectrum({ width = 48, height = 8, active = true, seed =
     const nextThreshold = (h - r - 1) / h;
     let line = '';
     for (let col = 0; col < w; col++) {
-      const v = bars.current[col];
-      const p = peaks.current[col];
+      const v = bars.current[col] ?? 0;
+      const p = peaks.current[col] ?? 0;
       // Peak marker first — wins over the bar so the dot sits on top.
       if (p > 0 && p >= nextThreshold && p < threshold + 1 / h && p < threshold) {
         line += '▔';
@@ -84,19 +91,24 @@ export default function Spectrum({ width = 48, height = 8, active = true, seed =
 }
 
 // One step of the random walk.
-function step(bars, peaks, targets, w) {
+function step(bars: Float32Array, peaks: Float32Array, targets: Float32Array, w: number): void {
   for (let i = 0; i < w; i++) {
+    const tCur = targets[i] ?? 0;
     // Re-pick a target ~10% of frames so each band drifts visibly.
-    if (Math.random() < 0.12 || targets[i] === 0) {
+    if (Math.random() < 0.12 || tCur === 0) {
       // Centre-weighted shape — Winamp's spectrums tend to bulge in the
       // mids and taper toward the rails.
       const centre = 1 - Math.abs(i / (w - 1) - 0.5) * 1.4;
       targets[i] = Math.max(0.05, Math.min(1, Math.random() * Math.max(0.15, centre) * 1.1));
     }
+    const b = bars[i] ?? 0;
+    const t = targets[i] ?? 0;
     // Ease toward target.
-    bars[i] = bars[i] * 0.62 + targets[i] * 0.38;
+    bars[i] = b * 0.62 + t * 0.38;
+    const newB = bars[i] ?? 0;
+    const pCur = peaks[i] ?? 0;
     // Peak hold: rises instantly to bar, falls slowly.
-    if (bars[i] > peaks[i]) peaks[i] = bars[i];
-    else peaks[i] = Math.max(0, peaks[i] - 0.018);
+    if (newB > pCur) peaks[i] = newB;
+    else peaks[i] = Math.max(0, pCur - 0.018);
   }
 }

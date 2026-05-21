@@ -14,7 +14,7 @@ export const c = {
   warn:    'yellow',
   danger:  'red',
   ok:      'green',
-};
+} as const;
 
 export const glyph = {
   prev:   '⏮',
@@ -31,7 +31,7 @@ export const glyph = {
   djDot:  '·',
   track:  '▶',
   request:'✦',
-};
+} as const;
 
 // Honest stream-format badge — these are the values `liquidsoap/radio.liq`
 // encodes with (`output.icecast(%mp3(bitrate=192))`, default sample rate

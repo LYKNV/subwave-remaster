@@ -1,9 +1,9 @@
-import React from 'react';
 import { Box, Text } from 'ink';
-import WindowFrame from './WindowFrame.jsx';
-import Spectrum from './Spectrum.jsx';
+import WindowFrame from './WindowFrame.js';
+import Spectrum from './Spectrum.js';
 import { lcdClock, marquee, progressBar } from '../lib/format.js';
 import { turnText } from '../lib/sessionFeed.js';
+import type { SessionSnapshot, StationContext, Track } from '../hooks/useStationFeed.js';
 import {
   c, glyph,
   STREAM_BITRATE_LABEL, STREAM_SAMPLERATE_LABEL, STREAM_CHANNELS_LABEL,
@@ -13,6 +13,15 @@ const LCD_WIDTH = 48;       // marquee text width inside the LCD frame
 const SPECTRUM_BANDS = 24;  // number of analyser bands (column width = 2 cells/band)
 const SPECTRUM_HEIGHT = 8;  // rows of stacked block bars
 const PROGRESS_WIDTH = 24;  // elapsed-bar fill width
+
+interface NowPlayingProps {
+  nowPlaying: Track | null;
+  trackStartedAt: number | null;
+  session: SessionSnapshot;
+  context: StationContext | null;
+  offline: boolean;
+  tunedIn: boolean;
+}
 
 // MAIN window — the Winamp main player's LCD area. Bitrate LEDs + weather
 // on top, marquee track title, an 8-row stacked-block spectrum analyser,
@@ -25,7 +34,7 @@ const PROGRESS_WIDTH = 24;  // elapsed-bar fill width
 // frame from being rewritten on every tick.
 export default function NowPlaying({
   nowPlaying, trackStartedAt, session, context, offline, tunedIn,
-}) {
+}: NowPlayingProps) {
   const w = context?.weather;
   const weatherStr = w && w.temp != null
     ? `${w.temp}° ${String(w.condition || '').toUpperCase()}`
@@ -91,7 +100,14 @@ function WaitingLcd() {
   );
 }
 
-function LiveLcd({ nowPlaying, trackStartedAt, session, tunedIn }) {
+interface LiveLcdProps {
+  nowPlaying: Track;
+  trackStartedAt: number | null;
+  session: SessionSnapshot;
+  tunedIn: boolean;
+}
+
+function LiveLcd({ nowPlaying, trackStartedAt, session, tunedIn }: LiveLcdProps) {
   const dur = nowPlaying.duration || 0;
   const elapsed = trackStartedAt
     ? Math.max(0, Math.floor((Date.now() - trackStartedAt) / 1000))
@@ -138,8 +154,13 @@ function LiveLcd({ nowPlaying, trackStartedAt, session, tunedIn }) {
   );
 }
 
+interface LcdLineProps {
+  text: string;
+  color?: string;
+}
+
 // A boxed LCD line: dim-green brackets around bright-green digits/text.
-function LcdLine({ text, color = c.lcd }) {
+function LcdLine({ text, color = c.lcd }: LcdLineProps) {
   return (
     <Text>
       <Text color={c.lcdDim}>│ </Text>

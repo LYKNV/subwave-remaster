@@ -11,7 +11,7 @@ import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 
 const CANDIDATE_CAP = 18;
-const HISTORY_DEPTH = 8;
+const HISTORY_DEPTH = 4;
 
 // Per-source caps so the LLM sees a balanced mix rather than 15 similar songs.
 const CAP_SIMILAR = 8;
@@ -39,7 +39,7 @@ function shuffle(arr) {
 }
 
 function notRecent(recentIds) {
-  return (t) => t && t.id && !recentIds.has(t.id);
+  return t => t && t.id && !recentIds.has(t.id);
 }
 
 // Walk a list of albums and return up to `perAlbum` tracks from each, capped.
@@ -68,7 +68,9 @@ async function buildCandidates(mood, recentIds, currentTrack) {
   // 1. Similar-songs from current track — strongest contextual signal.
   if (currentTrack?.id) {
     try {
-      const similar = await subsonic.getSimilarSongs(currentTrack.id, { count: 20 });
+      const similar = await subsonic.getSimilarSongs(currentTrack.id, {
+        count: 20,
+      });
       add('similar', similar.filter(notRecent(recentIds)).slice(0, CAP_SIMILAR));
     } catch {}
   }
@@ -83,13 +85,13 @@ async function buildCandidates(mood, recentIds, currentTrack) {
   if (mood) {
     try {
       const playlists = await memo('playlists', CACHE_TTL_MS, () => subsonic.getPlaylists());
-      const matched = playlists.filter(p =>
-        p.name?.toLowerCase().includes(mood.toLowerCase())
-      );
+      const matched = playlists.filter(p => p.name?.toLowerCase().includes(mood.toLowerCase()));
       const plTracks = [];
       for (const pl of matched.slice(0, 2)) {
         try {
-          const songs = await memo(`playlist:${pl.id}`, CACHE_TTL_MS, () => subsonic.getPlaylist(pl.id));
+          const songs = await memo(`playlist:${pl.id}`, CACHE_TTL_MS, () =>
+            subsonic.getPlaylist(pl.id),
+          );
           plTracks.push(...songs);
         } catch {}
       }
@@ -122,21 +124,32 @@ async function buildCandidates(mood, recentIds, currentTrack) {
   // 6. Similar-artist top songs — adjacency through Last.fm artist graph.
   if (currentTrack?.artist) {
     try {
-      const similarArtistTracks = await memo(`similar-artist:${currentTrack.artist}`, CACHE_TTL_MS, async () => {
-        const matches = await subsonic.searchArtists(currentTrack.artist, { artistCount: 1 });
-        if (matches.length === 0) return [];
-        const info = await subsonic.getArtistInfo(matches[0].id, { count: 5 });
-        const similars = (info?.similarArtist || []).slice(0, 2);
-        const collected = [];
-        for (const sa of similars) {
-          try {
-            const top = await subsonic.getTopSongs(sa.name, { count: 5 });
-            collected.push(...top);
-          } catch {}
-        }
-        return collected;
-      });
-      add('similar-artist', similarArtistTracks.filter(notRecent(recentIds)).slice(0, CAP_SIMILAR_ARTIST));
+      const similarArtistTracks = await memo(
+        `similar-artist:${currentTrack.artist}`,
+        CACHE_TTL_MS,
+        async () => {
+          const matches = await subsonic.searchArtists(currentTrack.artist, {
+            artistCount: 1,
+          });
+          if (matches.length === 0) return [];
+          const info = await subsonic.getArtistInfo(matches[0].id, {
+            count: 5,
+          });
+          const similars = (info?.similarArtist || []).slice(0, 2);
+          const collected = [];
+          for (const sa of similars) {
+            try {
+              const top = await subsonic.getTopSongs(sa.name, { count: 5 });
+              collected.push(...top);
+            } catch {}
+          }
+          return collected;
+        },
+      );
+      add(
+        'similar-artist',
+        similarArtistTracks.filter(notRecent(recentIds)).slice(0, CAP_SIMILAR_ARTIST),
+      );
     } catch {}
   }
 
@@ -157,17 +170,19 @@ async function buildCandidates(mood, recentIds, currentTrack) {
   const MAX_PER_ARTIST = 3;
   const seen = new Set();
   const perArtist = new Map();
-  const final = shuffle(pool).filter(t => {
-    if (!t.id || seen.has(t.id)) return false;
-    const artistKey = (t.artist || '').toLowerCase().trim();
-    if (artistKey) {
-      const n = perArtist.get(artistKey) || 0;
-      if (n >= MAX_PER_ARTIST) return false;
-      perArtist.set(artistKey, n + 1);
-    }
-    seen.add(t.id);
-    return true;
-  }).slice(0, CANDIDATE_CAP);
+  const final = shuffle(pool)
+    .filter(t => {
+      if (!t.id || seen.has(t.id)) return false;
+      const artistKey = (t.artist || '').toLowerCase().trim();
+      if (artistKey) {
+        const n = perArtist.get(artistKey) || 0;
+        if (n >= MAX_PER_ARTIST) return false;
+        perArtist.set(artistKey, n + 1);
+      }
+      seen.add(t.id);
+      return true;
+    })
+    .slice(0, CANDIDATE_CAP);
 
   return { candidates: final, sources };
 }
@@ -176,15 +191,17 @@ function summariseRecent(queue) {
   const items = [];
   if (queue.current) items.push(queue.current);
   items.push(...queue.history.slice(0, HISTORY_DEPTH));
-  return items.filter(i => i?.track?.title).map(i => {
-    const tags = i.track.id ? library.get(i.track.id) : null;
-    return {
-      title: i.track.title,
-      artist: i.track.artist,
-      moods: tags?.moods || [],
-      energy: tags?.energy || null,
-    };
-  });
+  return items
+    .filter(i => i?.track?.title)
+    .map(i => {
+      const tags = i.track.id ? library.get(i.track.id) : null;
+      return {
+        title: i.track.title,
+        artist: i.track.artist,
+        moods: tags?.moods || [],
+        energy: tags?.energy || null,
+      };
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -202,9 +219,12 @@ export async function pickViaPool(queue, ctx) {
     return null;
   }
 
-  queue.log('picker', `pool ${candidates.length} (${
-    Object.entries(sources).map(([k, v]) => `${k}=${v}`).join(' ')
-  })`);
+  queue.log(
+    'picker',
+    `pool ${candidates.length} (${Object.entries(sources)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ')})`,
+  );
 
   const recentPlays = summariseRecent(queue);
 
@@ -231,14 +251,28 @@ export async function pickViaPool(queue, ctx) {
     // take the top candidate rather than returning null, which would starve
     // the queue and drop the stream to the generic auto.m3u playlist.
     queue.log('error', `picker LLM failed: ${err.message} — falling back to first pool candidate`);
-    return { song: candidates[0], reason: 'fallback (LLM pick failed)', source: candidates[0]._source };
+    return {
+      song: candidates[0],
+      reason: 'fallback (LLM pick failed)',
+      source: candidates[0]._source,
+    };
   }
 
   const chosen = candidates.find(c => c.id === pickRaw?.id);
   if (!chosen) {
-    queue.log('error', `picker returned unknown id ${pickRaw?.id}; falling back to first candidate`);
-    return { song: candidates[0], reason: 'fallback (LLM returned invalid id)' };
+    queue.log(
+      'error',
+      `picker returned unknown id ${pickRaw?.id}; falling back to first candidate`,
+    );
+    return {
+      song: candidates[0],
+      reason: 'fallback (LLM returned invalid id)',
+    };
   }
 
-  return { song: chosen, reason: pickRaw.reason || null, source: chosen._source };
+  return {
+    song: chosen,
+    reason: pickRaw.reason || null,
+    source: chosen._source,
+  };
 }

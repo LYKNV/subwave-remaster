@@ -1,0 +1,214 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import type { ComponentType, ReactNode } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useDynamicStyle } from '../../hooks/useDynamicStyle';
+import {
+  Radio,
+  BarChart3,
+  Disc3,
+  CalendarClock,
+  Drama,
+  Sparkles,
+  SlidersHorizontal,
+  Terminal,
+} from 'lucide-react';
+import { useAdminAuth } from '../../lib/adminAuth';
+import type { SignInResult } from '../../lib/adminAuth';
+import { useStationFeed } from '../../hooks/useStationFeed';
+import SignInForm from './SignInForm';
+import ThemeToggle from './ThemeToggle';
+import { Toaster } from '../ui/toaster';
+
+interface NavItem {
+  href: string;
+  id: string;
+  label: string;
+  icon: ComponentType<{ className?: string; size?: number; strokeWidth?: number; 'aria-hidden'?: boolean | 'true' | 'false' }>;
+  pill?: string;
+}
+
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+// Nav is grouped: what's happening now → what the station plays → the box itself.
+const NAV_SECTIONS: NavSection[] = [
+  {
+    label: 'Monitor',
+    items: [{ href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' }],
+  },
+  {
+    label: 'Programming',
+    items: [
+      { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
+      { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
+      { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
+      { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
+      { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
+      { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
+    ],
+  },
+];
+
+const NAV = NAV_SECTIONS.flatMap(s => s.items);
+
+export interface AdminShellProps {
+  children: ReactNode;
+}
+
+// Wraps every page under /admin. Renders the newsprint shell + sign-in gate.
+// Children are admin panels that re-call useAdminAuth themselves to avoid
+// prop-drilling the adminFetch.
+export default function AdminShell({ children }: AdminShellProps) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
+
+  const handleSignIn = useCallback(
+    async (user: string, pass: string): Promise<SignInResult> => {
+      const res = await signIn(user, pass);
+      if (res?.ok && pathname !== '/admin/dash') router.push('/admin/dash');
+      return res;
+    },
+    [signIn, pathname, router],
+  );
+
+  // Probe an admin endpoint on first paint so a revoked token surfaces the
+  // sign-in form proactively.
+  useEffect(() => {
+    if (!hydrated || !auth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await adminFetch('/settings');
+      } catch {}
+      if (cancelled) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, auth, adminFetch]);
+
+  if (!hydrated) {
+    return (
+      <div className="admin-root paper flex items-center justify-center">
+        <span className="caption">loading…</span>
+      </div>
+    );
+  }
+
+  // Authentication gate — covers both "no token yet" and "token rejected".
+  if (!auth || needsAuth) {
+    return (
+      <div className="admin-root paper">
+        <ShellHeader pathname={pathname} signedIn={false} />
+        <div className="mx-auto max-w-[1440px] px-7 py-12">
+          <SignInForm onSubmit={handleSignIn} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="admin-root paper">
+      <ShellHeader pathname={pathname} signedIn onSignOut={signOut} />
+      <div className="shell-body">
+        <nav className="shell-nav">
+          {NAV_SECTIONS.map(section => (
+            <div key={section.label} className="nav-section">
+              <span className="nav-section-label">{section.label}</span>
+              {section.items.map(n => {
+                const active = pathname?.startsWith(n.href);
+                const Icon = n.icon;
+                return (
+                  <Link key={n.id} href={n.href} className={`nav-item ${active ? 'active' : ''}`}>
+                    <Icon className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+                    <span className="nav-label">{n.label}</span>
+                    {n.pill && <span className="pill">{n.pill}</span>}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
+          <div className="nav-foot">
+            sub / wave
+            <br />
+            admin console
+            <br />
+            newsprint v3
+          </div>
+        </nav>
+        <main className="min-w-0">{children}</main>
+      </div>
+      <Toaster />
+    </div>
+  );
+}
+
+interface ShellHeaderProps {
+  pathname: string | null;
+  signedIn: boolean;
+  onSignOut?: () => void;
+}
+
+// Header — wordmark, breadcrumb, and (when signed in) the live station strip.
+function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
+  const current = NAV.find(n => pathname?.startsWith(n.href))?.label || 'Admin';
+  const { nowPlaying, listeners } = useStationFeed();
+  const onAir = !!nowPlaying?.title;
+  const listenersObj = (listeners && typeof listeners === 'object') ? listeners as { current?: number; count?: number } : null;
+  const count =
+    listenersObj?.current ?? listenersObj?.count ?? (typeof listeners === 'number' ? listeners : null);
+
+  const dotRef = useRef<HTMLSpanElement>(null);
+  useDynamicStyle(dotRef, { background: onAir ? 'var(--accent)' : 'var(--muted)' });
+
+  return (
+    <header className="shell-header">
+      <span className="wordmark">SUB / WAVE</span>
+      <span className="caption text-muted">· admin</span>
+      <span className="crumb">
+        / <b>{current}</b>
+      </span>
+      {signedIn && (
+        <span className="right">
+          <span ref={dotRef} className="live-dot" />
+          <span>{onAir ? 'on air' : 'off air'}</span>
+          {count != null && (
+            <>
+              <span className="w-px self-stretch bg-separator-strong" />
+              <span>{count} listening</span>
+            </>
+          )}
+          <Link href="/" className="caption text-muted no-underline">
+            ← player
+          </Link>
+          <ThemeToggle />
+          {onSignOut && (
+            <button className="sign-out" onClick={onSignOut}>
+              sign out
+            </button>
+          )}
+        </span>
+      )}
+      {!signedIn && (
+        <span className="right">
+          <Link href="/" className="caption text-muted no-underline">
+            ← player
+          </Link>
+          <ThemeToggle />
+        </span>
+      )}
+    </header>
+  );
+}

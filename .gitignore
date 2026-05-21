@@ -10,6 +10,9 @@ node_modules/
 .next/
 out/
 
+# TypeScript
+web/tsconfig.tsbuildinfo
+
 # Runtime state — file-based IPC, TTS output, archives, logs
 state/voice/
 state/archive/

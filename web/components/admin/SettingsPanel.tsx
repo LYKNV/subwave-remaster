@@ -19,6 +19,7 @@ import { cn } from '../../lib/cn';
 const SECTIONS = [
   { id: 'tts',     label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',     label: 'LLM provider', hint: 'model routing' },
+  { id: 'search',  label: 'Web search', hint: 'live-facts backend' },
   { id: 'mixer',   label: 'Mixer', hint: 'crossfade · weather' },
   { id: 'jingles', label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',     label: 'Sound FX', hint: 'agent stingers' },
@@ -50,6 +51,14 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
 const llmProviderLabel = (id: string | undefined): string =>
   (id && LLM_PROVIDER_LABELS[id]) || id || '—';
 
+const SEARCH_PROVIDER_LABELS: Record<string, string> = {
+  duckduckgo: 'DuckDuckGo — free, no key',
+  tavily: 'Tavily — paid web search',
+};
+
+const searchProviderLabel = (id: string | undefined): string =>
+  (id && SEARCH_PROVIDER_LABELS[id]) || id || '—';
+
 interface WeatherCfg {
   lat: string;
   lng: string;
@@ -79,12 +88,18 @@ interface LlmForm {
   pauseWhenEmpty: boolean;
 }
 
+interface SearchForm {
+  provider: string;
+  apiKey: string;
+}
+
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
+  search: SearchForm;
 }
 
 interface JingleEntry {
@@ -119,6 +134,7 @@ interface SettingsData {
       cloud?: Partial<CloudTtsCfg>;
     };
     llm?: Partial<LlmForm>;
+    search?: Partial<SearchForm>;
     sfx?: { enabled?: boolean };
   };
   tts?: {
@@ -130,6 +146,12 @@ interface SettingsData {
   llm?: {
     providers?: string[];
     active?: string;
+  };
+  search?: {
+    providers?: string[];
+  };
+  defaults?: {
+    search?: Partial<SearchForm>;
   };
   jingles?: JingleEntry[];
   env?: Record<string, unknown>;
@@ -214,6 +236,12 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
+      },
+      search: {
+        provider: v.search?.provider ?? 'duckduckgo',
+        // GET /settings returns the apiKey redacted to 'set' | '' — that
+        // round-trips through POST harmlessly (settings.update ignores 'set').
+        apiKey: v.search?.apiKey ?? '',
       },
     });
   }, [data, form]);
@@ -445,6 +473,12 @@ export default function SettingsPanel() {
             )}
             {activeSection === 'llm' && data.llm && (
               <LlmSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveMsg={saveMsg} saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'search' && (
+              <SearchSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveMsg={saveMsg} saveSettings={saveSettings}
               />
@@ -1070,6 +1104,121 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
         saveMsg={saveMsg}
         onSave={save}
         saveLabel="Save LLM provider"
+      />
+    </>
+  );
+}
+
+/* ── Web search ──────────────────────────────────────────────────────── */
+
+function SearchSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
+  const save = () => saveSettings({
+    search: {
+      provider: form.search.provider,
+      // Don't echo back 'set' — that's the redaction sentinel from getRedacted().
+      // The controller's update() ignores it, but skipping it keeps the patch tidy.
+      ...(form.search.apiKey && form.search.apiKey !== 'set'
+        ? { apiKey: form.search.apiKey }
+        : {}),
+    },
+  });
+
+  const savedSearch = data.values?.search || {};
+  const providers = data.search?.providers || ['duckduckgo', 'tavily'];
+  const provider = form.search.provider;
+  const searchDirty = provider !== savedSearch.provider
+    || (provider === 'tavily'
+        && form.search.apiKey
+        && form.search.apiKey !== 'set'
+        && form.search.apiKey !== (savedSearch.apiKey || ''));
+  const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="web search"
+        title="Where the DJ gets live facts about the artist on air."
+        sub={<>
+          The segment director can air a single line of recent artist context between
+          tracks — when the active backend returns something worth saying. DuckDuckGo
+          is free and keyless; Tavily is paid but returns full web results. Switching
+          here reroutes the next call — no restart.
+        </>}
+        metrics={[{ n: String(providers.length), l: 'providers' }]}
+      />
+
+      <Card title="Provider" sub="active backend">
+        <div className="grid gap-[18px]">
+          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+            <div className="grid min-w-0 gap-0.5">
+              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
+                Routing now · {searchProviderLabel(savedSearch.provider || 'duckduckgo')}
+              </span>
+              <span className="text-[11px] leading-[1.5] text-muted">
+                {searchDirty
+                  ? <>Your edits below aren&apos;t live until you Save.</>
+                  : <>This is the saved, running config.</>}
+              </span>
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Provider</Label>
+              {searchDirty && <Pill tone="accent" dot>unsaved</Pill>}
+            </div>
+            <Select
+              value={provider}
+              onValueChange={v => setForm(f => ({ ...f, search: { ...f.search, provider: v } }))}
+            >
+              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {providers.map(p => (
+                    <SelectItem key={p} value={p}>{searchProviderLabel(p)}</SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div className="field-hint">
+              {provider === 'duckduckgo'
+                ? 'DuckDuckGo Instant Answer — free, no key. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
+                : 'Tavily — paid web search with full results and an answer summary. Needs an API key.'}
+            </div>
+          </div>
+
+          {provider === 'tavily' && (
+            <>
+              <div className="field">
+                <Label>Tavily API key</Label>
+                <Input
+                  type="password"
+                  value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
+                  placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Stored alongside the other admin settings. Falls back to
+                  <code> SEARCH_API_KEY</code> in <code>controller/.env</code> when blank — set
+                  one or the other, not both.
+                </div>
+              </div>
+              <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
+            </>
+          )}
+        </div>
+      </Card>
+
+      <SaveBar
+        note="Applies to the next web-search call — no restart needed."
+        busy={busy}
+        saveMsg={saveMsg}
+        onSave={save}
+        saveLabel="Save web search"
       />
     </>
   );

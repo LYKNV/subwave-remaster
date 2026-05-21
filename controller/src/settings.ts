@@ -69,6 +69,14 @@ export const LLM_PROVIDERS = [
 // Cloud TTS vendors usable by the `cloud` engine.
 export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs'];
 
+// Web-search backends for the segment director's `web-search` capability.
+// `duckduckgo` is the homelab default — DuckDuckGo's Instant Answer API is free
+// and keyless, returns useful results only for entity / definition queries, and
+// silence otherwise (which the segment director already treats as a valid
+// outcome). `tavily` is the paid option for operators who want richer web
+// results; it reads its key from SEARCH_API_KEY.
+export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily'];
+
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
 // overrides the autonomous dominantMood, so it must come from this list.
@@ -222,6 +230,14 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+  },
+  // Web-search backend for the segment director's web-search capability.
+  // Default `duckduckgo` works out of the box with no key; `tavily` reads its
+  // key from SEARCH_API_KEY (or the optional override below). `apiKey` is
+  // only meaningful for Tavily.
+  search: {
+    provider: 'duckduckgo',
+    apiKey: '',
   },
   skills: {
     enabled: {},
@@ -449,6 +465,12 @@ export async function load() {
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
     },
+    search: {
+      provider: SEARCH_PROVIDERS.includes(stored.search?.provider)
+        ? stored.search.provider
+        : DEFAULTS.search.provider,
+      apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
+    },
     skills: {
       enabled: Object.fromEntries(
         Object.entries(stored.skills?.enabled || {}).filter(([, v]) => typeof v === 'boolean'),
@@ -475,6 +497,7 @@ export function getRedacted() {
   const clone = JSON.parse(JSON.stringify(s));
   if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
+  if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
   return clone;
 }
 
@@ -794,6 +817,22 @@ export async function update(patch) {
     // An OpenAI-compatible provider is useless without a server to talk to.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {
       throw new Error('llm.baseUrl is required when provider is "openai-compatible"');
+    }
+  }
+  if ('search' in patch) {
+    const sr = patch.search || {};
+    if (sr.provider !== undefined) {
+      if (!SEARCH_PROVIDERS.includes(sr.provider)) {
+        throw new Error(`search.provider must be one of: ${SEARCH_PROVIDERS.join(', ')}`);
+      }
+      next.search.provider = sr.provider;
+    }
+    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+    // round-tripped form doesn't overwrite the real key.
+    if (sr.apiKey !== undefined && sr.apiKey !== 'set') {
+      const v = String(sr.apiKey);
+      if (v.length > 200) throw new Error('search.apiKey must be 0-200 chars');
+      next.search.apiKey = v;
     }
   }
   if ('skills' in patch) {

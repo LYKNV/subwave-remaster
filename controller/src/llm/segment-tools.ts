@@ -11,10 +11,9 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 import { fetchHeadlines, hashHeadline } from '../skills/news.js';
-import { tavilySearch } from '../skills/web-search.js';
+import { searchWeb, searchReady } from '../skills/web-search.js';
 
 // `caps` is the list of capabilities offered this tick (see skills/_agent.js).
 // Only data-backed kinds get a tool — traffic and random-facts are pure
@@ -64,7 +63,7 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
     });
   }
 
-  if (kinds.has('web-search') && config.search.apiKey) {
+  if (kinds.has('web-search') && searchReady()) {
     tools.searchArtistNews = tool({
       description: 'Search the web for something recent about the artist currently on air.',
       inputSchema: z.object({}),
@@ -73,12 +72,12 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
         if (!artist || /^unknown/i.test(artist)) return { available: false };
         const alreadySearched = artist === state.lastSearchedArtist;
         try {
-          const data: any = await tavilySearch(`${artist} musician latest news`);
+          const data = await searchWeb(`${artist} musician latest news`);
           state.lastSearchedArtist = artist;
           const answer = (data.answer || '').trim();
           const sources = (data.results || [])
             .slice(0, 3)
-            .map((r: any) => `${r.title}: ${(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 240)}`);
+            .map(r => `${r.title}: ${(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 240)}`);
           if (!answer && sources.length === 0) return { available: false };
           return { artist, alreadySearched, answer, sources };
         } catch (err) {

@@ -31,12 +31,12 @@
 //   - traffic is only offered during commute hours; web-search only with a key
 
 import { z } from 'zod';
-import { config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { djAgent } from '../llm/sdk.js';
 import { buildContextLines } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
+import { searchReady } from './web-search.js';
 import * as sfx from '../broadcast/sfx.js';
 
 // Capability table — the single source of truth for the DJ's between-track
@@ -77,9 +77,11 @@ const CAPABILITIES: any[] = [
   {
     kind: 'web-search', skill: 'web-search', label: 'Web search',
     cooldownMs: 60 * 60 * 1000,
-    requiresKey: 'SEARCH_API_KEY',
-    keyUrl: 'https://app.tavily.com/home',
-    ready: () => !!config.search.apiKey,
+    // requiresKey/keyUrl depend on the active search provider — see
+    // skillCatalog() below, which derives them from settings.search.provider.
+    // DuckDuckGo (the default) needs no key; Tavily needs SEARCH_API_KEY (or a
+    // key pasted into the admin UI). searchReady() encapsulates both.
+    ready: () => searchReady(),
     desc: 'Work one genuine, recent detail about the artist on air into a single conversational line — no "I read online", no URLs, no list.',
   },
 ];
@@ -324,7 +326,15 @@ export async function runCapability(which, ctx) {
   const cap = CAPABILITIES.find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
-    throw new Error(`skill "${cap.skill}" is not ready${cap.requiresKey ? ` — set ${cap.requiresKey}` : ''}`);
+    // Hint at the missing key when the capability is keyed. web-search is the
+    // only such capability today, and only when Tavily is the active provider.
+    let hint = '';
+    if (cap.kind === 'web-search' && settings.get().search?.provider === 'tavily') {
+      hint = ' — set SEARCH_API_KEY or paste a Tavily key into the admin UI';
+    } else if (cap.requiresKey) {
+      hint = ` — set ${cap.requiresKey}`;
+    }
+    throw new Error(`skill "${cap.skill}" is not ready${hint}`);
   }
 
   const persona = settings.getEffectivePersona(new Date());
@@ -367,18 +377,36 @@ export async function runCapability(which, ctx) {
 // Skill metadata for the admin command-center UI — derived straight from
 // CAPABILITIES. Previously lived in the now-deleted skills/_registry.js.
 export function skillCatalog() {
-  const enabledMap = settings.get().skills?.enabled || {};
-  return CAPABILITIES.map(c => ({
-    name: c.skill,
-    label: c.label || c.skill,
-    description: c.desc || '',
-    kind: c.kind,
-    cooldownMs: c.cooldownMs || 0,
-    enabled: enabledMap[c.skill] !== false,
-    // `ready` is false when the capability needs an env key that isn't set;
-    // `requiresKey` names it and `keyUrl` links the operator to its source.
-    ready: typeof c.ready === 'function' ? !!c.ready() : true,
-    requiresKey: c.requiresKey || null,
-    keyUrl: c.keyUrl || null,
-  }));
+  const s = settings.get();
+  const enabledMap = s.skills?.enabled || {};
+  const searchProvider = s.search?.provider || 'duckduckgo';
+  return CAPABILITIES.map(c => {
+    // web-search's key requirement depends on the active search provider:
+    // Tavily needs SEARCH_API_KEY, DuckDuckGo needs nothing. Other capabilities
+    // carry their requiresKey/keyUrl statically in CAPABILITIES (none today).
+    let requiresKey = c.requiresKey || null;
+    let keyUrl = c.keyUrl || null;
+    if (c.kind === 'web-search') {
+      if (searchProvider === 'tavily') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://app.tavily.com/home';
+      } else {
+        requiresKey = null;
+        keyUrl = null;
+      }
+    }
+    return {
+      name: c.skill,
+      label: c.label || c.skill,
+      description: c.desc || '',
+      kind: c.kind,
+      cooldownMs: c.cooldownMs || 0,
+      enabled: enabledMap[c.skill] !== false,
+      // `ready` is false when the capability needs an env key that isn't set;
+      // `requiresKey` names it and `keyUrl` links the operator to its source.
+      ready: typeof c.ready === 'function' ? !!c.ready() : true,
+      requiresKey,
+      keyUrl,
+    };
+  });
 }

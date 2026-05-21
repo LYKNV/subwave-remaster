@@ -49,6 +49,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         schedule: s.schedule,
         tts: s.tts,
         llm: s.llm,
+        search: s.search,
         sfx: s.sfx,
       },
       defaults: {
@@ -57,6 +58,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         personas: settings.getDefaults().personas,
         tts: settings.getDefaults().tts,
         llm: settings.getDefaults().llm,
+        search: settings.getDefaults().search,
       },
       tts: {
         engines: tts.ENGINES,
@@ -70,6 +72,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         providers: settings.LLM_PROVIDERS,
         active: llmProvider.activeModelLabel(),
       },
+      search: {
+        providers: settings.SEARCH_PROVIDERS,
+      },
       // Which provider API keys are present in the controller's environment.
       // The UI keys its "key missing" alerts off this — keys are configured
       // via controller/.env, never typed into the admin surface.
@@ -81,6 +86,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
+        SEARCH_API_KEY: !!process.env.SEARCH_API_KEY,
       },
       // Skill catalogue — consumed by the Skills page and by Personas for the
       // per-persona skill-assignment checklist.

@@ -168,17 +168,6 @@ export function decoratePrompt(prompt, { kind, recap, recentOpeners }) {
 
 const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener sends a request; you turn it into structured search parameters.
 
-Fill in every field. Use null where a value does not apply — never omit a field.
-
-- search_terms: 1-3 strings to look up in the library — ARTIST NAMES or SONG TITLES only. NEVER genres, and NEVER mood/vibe words like "calm", "rainy", "overcast". Genres go in "genre"; vibes go in "mood".
-- artist: the artist's common name if the listener named one (e.g. "Diljit Dosanjh"), else null.
-- genre: a real music genre if the listener asked for one (e.g. "punjabi", "hip hop", "jazz", "lofi", "rock", "bhangra"), else null. A genre is a kind of music — not a mood and not a feeling.
-- sort: "latest" for latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top, else null.
-- scope: "album" or "song" — what the listener wants. Default "song".
-- mood: one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null. ALWAYS set this for vibe/feeling requests ("overcast mood" → calm or reflective, "cosy" → calm, "pumped up" → energetic, "late night drive" → night — pick the strongest single match).
-- intent: one short sentence describing what the listener wants.
-- ack: short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros.
-
 Vibe-to-mood mapping (use these when the request describes a feeling, weather, or moment rather than naming an artist/song):
 - overcast, cloudy, grey day, drizzly → calm or reflective
 - rainy day, downpour → rainy + calm
@@ -222,19 +211,21 @@ Worked examples (these show how the fields map — values only; the response for
 "play <title> by <artist>"
 {"search_terms":["<title>","<artist>"],"artist":"<artist>","genre":null,"sort":null,"scope":"song","mood":null,"intent":"Wants a specific song by a specific artist.","ack":"Coming right up."}`;
 
-// Lenient schema — it enforces the SHAPE; the system prompt enforces the
-// SEMANTICS. `mood`/`sort` stay free strings (not enums) so a near-miss from a
-// weaker model doesn't 500 a listener request — server.js tolerates unknown
-// moods by falling through to its other pick sources.
+// Lenient schema — it enforces the SHAPE; the prompt + per-field .describe()
+// strings carry the SEMANTICS. `mood`/`sort` stay free strings (not enums) so a
+// near-miss from a weaker model doesn't 500 a listener request — server.js
+// tolerates unknown moods by falling through to its other pick sources. The AI
+// SDK feeds these descriptions to the model alongside the schema, so they don't
+// need to be restated in REQUEST_SYSTEM.
 const REQUEST_SCHEMA = z.object({
-  search_terms: z.array(z.string()),
-  artist: z.string().nullable(),
-  genre: z.string().nullable(),
-  sort: z.string().nullable(),
-  scope: z.enum(['album', 'song']),
-  mood: z.string().nullable(),
-  intent: z.string(),
-  ack: z.string(),
+  search_terms: z.array(z.string()).describe('1-3 strings to look up in the library — ARTIST NAMES or SONG TITLES only. NEVER genres, and NEVER mood/vibe words like "calm", "rainy", "overcast". Genres go in "genre"; vibes go in "mood".'),
+  artist: z.string().nullable().describe(`the artist's common name if the listener named one (e.g. "Diljit Dosanjh"), else null`),
+  genre: z.string().nullable().describe('a real music genre if the listener asked for one (e.g. "punjabi", "hip hop", "jazz", "lofi", "rock", "bhangra"), else null. A genre is a kind of music — not a mood and not a feeling.'),
+  sort: z.string().nullable().describe('"latest" for latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top, else null'),
+  scope: z.enum(['album', 'song']).describe('what the listener wants; default "song"'),
+  mood: z.string().nullable().describe('one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null. ALWAYS set this for vibe/feeling requests ("overcast mood" → calm or reflective, "cosy" → calm, "pumped up" → energetic, "late night drive" → night — pick the strongest single match).'),
+  intent: z.string().describe('one short sentence describing what the listener wants'),
+  ack: z.string().describe(`short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros`),
 });
 
 export async function matchRequest(userQuery, { listenerName = null, nowPlaying = null } = {}) {
@@ -364,14 +355,7 @@ Use it to balance familiarity against discovery.
 recentPlays is context for judging flow — every candidate is already guaranteed
 unplayed, so you never need to reject one for being recent.
 
-Pick exactly one candidate. Respond with a JSON object only — no prose, no
-markdown, no reasoning outside the object:
-{ "id": "<exact id from a candidate>", "reason": "<one short sentence on why this one>" }`;
-
-const PICK_SCHEMA = z.object({
-  id: z.string(),
-  reason: z.string(),
-});
+Pick exactly one candidate.`;
 
 export async function pickNextTrack({ candidates, recentPlays, context }) {
   const user = JSON.stringify({
@@ -389,7 +373,10 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   return djObject({
     system: PICKER_SYSTEM,
     prompt: user,
-    schema: PICK_SCHEMA,
+    schema: z.object({
+      id: z.string().describe('the exact id of one candidate'),
+      reason: z.string().describe('one short sentence on why this one'),
+    }),
     temperature: 0.5,
     kind: 'pickNextTrack',
   });

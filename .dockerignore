@@ -1,0 +1,10 @@
+# Both compose files build with `context: ..` (the repo root), so this is the
+# .dockerignore that actually applies — the per-service web/.dockerignore is
+# inert. Without these excludes, `COPY web/ ./` and `COPY controller/ ./` drag
+# the host's stale node_modules into the image, merging on top of the fresh
+# `npm ci` install and corrupting it (e.g. a Tailwind v3/v4 hybrid).
+**/node_modules
+**/.next
+.git
+.backups
+state

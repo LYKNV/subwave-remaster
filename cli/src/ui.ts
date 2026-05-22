@@ -14,6 +14,16 @@ export { p, pc };
 
 export const MENU_BACK = Symbol('menu-back');
 
+// Brand accent — hot vermilion, matching the web UI's `--accent` token
+// (oklch(0.62 0.22 25) ≈ #d94b2a). picocolors ships only the 16 ANSI colors
+// and none of them land near vermilion, so emit a truecolor SGR sequence
+// directly; fall back to plain text when color is unsupported (pipes,
+// NO_COLOR, dumb terminals) so the CLI never leaks raw escape codes.
+const VERMILION = '\x1b[38;2;217;75;42m';
+export function accent(text: string): string {
+  return pc.isColorSupported ? `${VERMILION}${text}\x1b[39m` : text;
+}
+
 let menuMode = false;
 let rlInstalled = false;
 
@@ -58,12 +68,12 @@ export function exitIfCancelled<T>(value: T | symbol, opts: { backOnCancel?: boo
 
 export function banner(tagline?: string): void {
   const lines = [
-    pc.cyan(pc.bold('  ███████╗██╗   ██╗██████╗     ██╗    ██╗ █████╗ ██╗   ██╗███████╗')),
-    pc.cyan(pc.bold('  ██╔════╝██║   ██║██╔══██╗   ██╔╝    ██║██╔══██╗██║   ██║██╔════╝')),
-    pc.cyan(pc.bold('  ███████╗██║   ██║██████╔╝  ██╔╝     ██║███████║██║   ██║█████╗  ')),
-    pc.cyan(pc.bold('  ╚════██║██║   ██║██╔══██╗ ██╔╝ ██   ██║██╔══██║╚██╗ ██╔╝██╔══╝  ')),
-    pc.cyan(pc.bold('  ███████║╚██████╔╝██████╔╝██╔╝  ╚█████╔╝██║  ██║ ╚████╔╝ ███████╗')),
-    pc.cyan(pc.bold('  ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝    ╚════╝ ╚═╝  ╚═╝  ╚═══╝  ╚══════╝')),
+    accent(pc.bold('  ███████╗██╗   ██╗██████╗     ██╗██╗    ██╗ █████╗ ██╗   ██╗███████╗')),
+    accent(pc.bold('  ██╔════╝██║   ██║██╔══██╗   ██╔╝██║    ██║██╔══██╗██║   ██║██╔════╝')),
+    accent(pc.bold('  ███████╗██║   ██║██████╔╝  ██╔╝ ██║ █╗ ██║███████║██║   ██║█████╗  ')),
+    accent(pc.bold('  ╚════██║██║   ██║██╔══██╗ ██╔╝  ██║███╗██║██╔══██║╚██╗ ██╔╝██╔══╝  ')),
+    accent(pc.bold('  ███████║╚██████╔╝██████╔╝██╔╝   ╚███╔███╔╝██║  ██║ ╚████╔╝ ███████╗')),
+    accent(pc.bold('  ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝     ╚══╝╚══╝ ╚═╝  ╚═╝  ╚═══╝  ╚══════╝')),
   ];
   console.log();
   for (const line of lines) console.log(line);
@@ -74,7 +84,7 @@ export function banner(tagline?: string): void {
 export function header(text: string): void {
   const padLen = Math.max(0, 60 - text.length);
   console.log();
-  console.log(pc.bold(pc.cyan('━━ ' + text + ' ' + '━'.repeat(padLen))));
+  console.log(pc.bold(accent('━━ ' + text + ' ' + '━'.repeat(padLen))));
 }
 
 export function section(text: string): void {
@@ -87,7 +97,7 @@ export function section(text: string): void {
 export function ok(msg: string): void { console.log(`  ${pc.green('●')} ${msg}`); }
 export function warn(msg: string): void { console.log(`  ${pc.yellow('⚠')} ${msg}`); }
 export function err(msg: string): void { console.log(`  ${pc.red('✗')} ${msg}`); }
-export function info(msg: string): void { console.log(`  ${pc.cyan('·')} ${msg}`); }
+export function info(msg: string): void { console.log(`  ${accent('·')} ${msg}`); }
 export function muted(msg: string): void { console.log(`  ${pc.dim(msg)}`); }
 
 // Small helper so commands can pause and let the operator read output

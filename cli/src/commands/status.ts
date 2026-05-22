@@ -4,7 +4,7 @@
 import { detectCompose } from '../compose.ts';
 import { makeClient, type NowPlayingPayload, type StatePayload } from '../api.ts';
 import { formatRelative, truncate } from '../util.ts';
-import { ok, warn, err, info, muted, header, pc, pauseForEnter } from '../ui.ts';
+import { ok, warn, err, info, muted, header, pc, accent, pauseForEnter } from '../ui.ts';
 
 export async function runStatusCommand(): Promise<void> {
   const compose = detectCompose();
@@ -69,7 +69,7 @@ export async function runStatusCommand(): Promise<void> {
       for (const e of events) {
         const when = e.t ? formatRelative(e.t) : '?';
         const text = truncate(e.message ?? '', 80);
-        muted(`${when.padStart(8)} · ${pc.cyan(e.kind ?? '?')} · ${text}`);
+        muted(`${when.padStart(8)} · ${accent(e.kind ?? '?')} · ${text}`);
       }
     }
   }

@@ -52,7 +52,7 @@ import {
   probeOpenRouter,
   type ProbeResult,
 } from '../probes.ts';
-import { p, pc, exitIfCancelled, banner, header, ok, warn, err, muted } from '../ui.ts';
+import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, muted } from '../ui.ts';
 
 type Mode = 'dev' | 'prod';
 
@@ -190,13 +190,13 @@ export async function runSetupCommand(): Promise<void> {
   // --- 15. Summary --------------------------------------------------------
   header('Endpoints');
   if (mode === 'prod') {
-    muted(`Site:    ${pc.cyan('http://localhost:4800')}`);
-    muted(`Stream:  ${pc.cyan('http://localhost:4800/stream.mp3')}`);
-    muted(`API:     ${pc.cyan('http://localhost:4800/api/health')}`);
+    muted(`Site:    ${accent('http://localhost:4800')}`);
+    muted(`Stream:  ${accent('http://localhost:4800/stream.mp3')}`);
+    muted(`API:     ${accent('http://localhost:4800/api/health')}`);
   } else {
-    muted(`Controller:  ${pc.cyan('http://localhost:7701')}`);
-    muted(`Stream:      ${pc.cyan('http://localhost:7702/stream.mp3')}`);
-    muted(`Web (dev):   ${pc.cyan('http://localhost:7700')}  (separate: `+ pc.dim('`npm --prefix web run dev`') + ')');
+    muted(`Controller:  ${accent('http://localhost:7701')}`);
+    muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}`);
+    muted(`Web (dev):   ${accent('http://localhost:7700')}  (separate: `+ pc.dim('`npm --prefix web run dev`') + ')');
   }
 
   console.log();

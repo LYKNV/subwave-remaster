@@ -883,7 +883,7 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
                 </Select>
                 <div className="field-hint">
                   ~5 seconds of clean speech is enough to clone a voice. Drop WAVs into{' '}
-                  <code>{data.tts?.chatterboxVoiceDir || 'state/chatterbox-voices'}</code>
+                  <code>state/chatterbox-voices/</code>
                   {' '}on the host and they’ll appear here on next reload. Personas can
                   override this on the Personas page.
                 </div>
@@ -891,7 +891,7 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
             ) : (
               <div className="field-hint">
                 No reference voices found in{' '}
-                <code>{data.tts?.chatterboxVoiceDir || 'state/chatterbox-voices'}</code>.
+                <code>state/chatterbox-voices/</code>.
                 The engine will use its built-in default voice. Drop a 5-second WAV into
                 that directory to enable cloning.
               </div>

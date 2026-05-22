@@ -686,7 +686,7 @@ export default function PersonasPanel() {
 
             {focused.tts.engine === 'chatterbox' && (() => {
               const cbVoices: string[] = data?.tts?.chatterboxVoices || [];
-              const cbDir = data?.tts?.chatterboxVoiceDir || 'state/chatterbox-voices';
+              const cbDir = 'state/chatterbox-voices/';
               const cbAvailable = data?.tts?.available?.chatterbox !== false;
               return (
                 <div className="field max-w-[360px]">

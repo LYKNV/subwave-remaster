@@ -130,6 +130,17 @@ function personaValid(p: Persona): boolean {
   return true; // piper — voice ignored
 }
 
+// Coerce a persona's `voice` to a value the target engine's server-side
+// validator will accept. The `voice` field is shared across engines, so
+// switching engines can leave an incompatible value behind (e.g. a Kokoro id
+// after switching to Chatterbox). This is the last line of defence before the
+// POST — it runs regardless of UI state, so a stale form can't ship a bad save.
+function voiceForSave(engine: string, voice: string): string {
+  if (engine === 'kokoro') return voice || 'bf_isabella';
+  if (engine === 'chatterbox') return CHATTERBOX_VOICE_RE.test(voice) ? voice : '';
+  return voice; // piper ignores voice; cloud carries its own
+}
+
 // For a cloud persona: why (if at all) its cloud voice won't actually play —
 // its provider's API key is missing. Returns a human sentence, or null when
 // the cloud voice is good to go. A persona can look fully configured here yet
@@ -276,13 +287,15 @@ export default function PersonasPanel() {
             tts: {
               engine: p.tts.engine,
               cloudProvider: p.tts.cloudProvider,
-              // Only Kokoro needs a non-empty voice fallback. Chatterbox treats
-              // an empty voice as "use the built-in voice" and rejects a Kokoro
-              // id like "bf_isabella"; piper ignores voice; cloud carries its
-              // own. So the blanket `|| 'bf_isabella'` only applies to Kokoro.
-              voice: p.tts.engine === 'kokoro'
-                ? (p.tts.voice.trim() || 'bf_isabella')
-                : p.tts.voice.trim(),
+              // Sanitize voice for the target engine. The `voice` field is
+              // shared across engines, so a leftover value from a previous
+              // engine (e.g. a Kokoro id "bm_george" still in state after
+              // switching to Chatterbox) would fail the server's validator.
+              // Coerce per-engine here so the save can't ship a bad value:
+              //   kokoro     — needs a non-empty id; fall back to bf_isabella
+              //   chatterbox — must be a .wav filename or empty (built-in)
+              //   piper/cloud — passed through as-is
+              voice: voiceForSave(p.tts.engine, p.tts.voice.trim()),
             },
             skills: p.skills,
           })),

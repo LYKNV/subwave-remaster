@@ -130,17 +130,28 @@ cd web && npm install && npm run dev
 ```
 
 You'll need a reachable **Navidrome** instance and an **LLM provider** — the
-homelab default is a local **Ollama** box (no API key needed). Configure
-Navidrome credentials in `controller/.env` and the LLM provider in the admin
-Settings UI.
+homelab default is a local **Ollama** box (no API key needed).
 
-The operator CLI walks through first-boot configuration and then doubles as
-the console for running the station. Run `npm start` for a status-aware menu;
-every menu action is also a one-shot subcommand — append it after
-`npm start --`:
+The fastest way to get configured is the operator CLI's **setup wizard** — it
+collects Navidrome credentials, the LLM provider/model, and admin login, probes
+each one, writes the env files, and brings the stack up. From the repo root:
+
+```bash
+npm install        # installs the CLI's runtime deps (tsx loader)
+npm start -- setup # interactive first-boot wizard
+```
+
+(Prefer to configure by hand? Set Navidrome credentials in `controller/.env`
+and pick the LLM provider in the admin Settings UI — the wizard just automates
+exactly that.)
+
+The same CLI then doubles as the console for running the station. Run
+`npm start` for a status-aware menu; every menu action is also a one-shot
+subcommand — append it after `npm start --`:
 
 ```bash
 npm start                       # interactive operator console (status-aware menu)
+npm start -- setup              # first-boot wizard — Navidrome, LLM, admin, env files
 npm start -- status             # compose env, services, now-playing, recent events
 npm start -- doctor             # full diagnostic sweep
 npm start -- start dev          # docker compose up -d (dev or prod)

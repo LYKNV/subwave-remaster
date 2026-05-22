@@ -19,6 +19,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # (docker-compose.prod.yml → web.build.args). Unset → localhost fallback.
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
+# Google Analytics Measurement ID. NEXT_PUBLIC_* vars are inlined into the
+# client bundle at build time, so this must be present here, not at runtime.
+# Unset → no analytics script is emitted.
+ARG NEXT_PUBLIC_GA_ID
+ENV NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID}
 RUN npm run build
 
 # ---- runner ----

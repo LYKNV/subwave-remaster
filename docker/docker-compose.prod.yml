@@ -124,6 +124,9 @@ services:
         # statically-rendered routes (robots, sitemap, /listen, /landing,
         # /manual, /setup) — Next bakes their metadata at build.
         - SITE_URL=${SITE_URL:-}
+        # Google Analytics Measurement ID (e.g. G-XXXXXXXXXX). NEXT_PUBLIC_*
+        # is inlined into the client bundle at BUILD time. Unset → no tracking.
+        - NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID:-}
     container_name: sub-wave-web
     restart: unless-stopped
     depends_on:

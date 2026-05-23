@@ -10,7 +10,7 @@
 // the frequency gate, and the cooldown.
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { toast } from 'sonner';
+import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
@@ -113,7 +113,7 @@ export default function SkillsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       if (Array.isArray(j.skills)) setSkills(j.skills);
     } catch (e) {
-      toast.error(`Toggle failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify.err(`Toggle failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
   };
 
@@ -127,9 +127,9 @@ export default function SkillsPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as SkillRunResponse;
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      toast.success(j.spoken ? `On air: “${j.spoken}”` : `${name} fired`);
+      notify.ok(j.spoken ? `On air: “${j.spoken}”` : `${name} fired`);
     } catch (e) {
-      toast.error(`Run failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify.err(`Run failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
   };
 

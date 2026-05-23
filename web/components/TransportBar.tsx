@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
+import { animate as motionAnimate } from 'motion/react';
 import { buildTagline } from '@/lib/tagline';
 import { cn } from '@/lib/cn';
 import { Slider } from './ui/slider';
@@ -13,6 +15,8 @@ export interface TransportBarProps {
   offline?: boolean;
   volume: number;
   setVolume: (v: number) => void;
+  /** Increments on keyboard-only volume adjusts; slider drags don't tick it. */
+  volumePulse?: number;
   nowPlaying: NowPlayingTrack | null;
   elapsed: number;
   context: StationContext | null;
@@ -27,6 +31,7 @@ export default function TransportBar({
   offline = false,
   volume,
   setVolume,
+  volumePulse,
   nowPlaying,
   elapsed,
   context,
@@ -42,6 +47,23 @@ export default function TransportBar({
   // slot stays empty there. On mobile it carries the context tagline (the
   // vibe/weather line the header hides below md).
   const tagline = buildTagline(context);
+
+  // Pulse all volume cells on keyboard-driven adjusts. Imperative motion
+  // animate is the cleanest fit here — re-keying every cell on each tick
+  // would remount the DOM unnecessarily.
+  const cellsRef = useRef<(HTMLSpanElement | null)[]>([]);
+  const firstPulseRef = useRef(true);
+  useEffect(() => {
+    if (firstPulseRef.current) {
+      // Skip the initial mount tick — we only want to pulse on real adjusts.
+      firstPulseRef.current = false;
+      return;
+    }
+    if (volumePulse == null) return;
+    const els = cellsRef.current.filter((el): el is HTMLSpanElement => el != null);
+    if (els.length === 0) return;
+    motionAnimate(els, { scale: [1, 1.18, 1] }, { duration: 0.11, ease: [0.2, 0.7, 0.2, 1] });
+  }, [volumePulse]);
 
   return (
     <div className="absolute right-0 bottom-0 left-0 z-20 bg-bg [border-top:none] sm:[border-top:1px_solid_var(--ink)]">
@@ -106,6 +128,7 @@ export default function TransportBar({
             {Array.from({ length: VOLUME_CELLS }).map((_, i) => (
               <span
                 key={i}
+                ref={(el) => { cellsRef.current[i] = el; }}
                 className={cn('h-full flex-1 border border-ink', i < lit ? 'bg-ink' : 'bg-transparent')}
               />
             ))}

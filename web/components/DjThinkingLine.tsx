@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { turnClass, turnText, type TurnDisplayClass } from '@/lib/sessionFeed';
 import type { SessionTurn } from '@/lib/types';
 
@@ -17,6 +18,17 @@ function thinkingText(turn: SessionTurn): string {
   const text = turnText(turn);
   return cls === 'voice' ? `"${text}"` : text;
 }
+
+// Stagger cap: total enter time stays under ~600 ms regardless of line length.
+// Each child animates ~120 ms; for a 12-char line the previous default of
+// 42 ms/char gives ~12*0.042+0.12 ≈ 0.62 s. For longer lines we squeeze the
+// stagger so the last char still arrives by ~0.6 s.
+function staggerFor(length: number): number {
+  if (length <= 0) return 0;
+  return Math.min(0.042, 0.5 / length);
+}
+
+const cursorChar = '▍';
 
 export interface DjThinkingLineProps {
   /** Live session messages, oldest first. */
@@ -38,38 +50,13 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
     return null;
   }, [feed]);
 
-  const full = latest ? thinkingText(latest) : '';
-
-  // Typewriter: re-type from scratch whenever the latest turn changes.
-  const [shown, setShown] = useState('');
-  const turnId = latest ? `${latest.t}` : '';
-  const lastId = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!full) {
-      setShown('');
-      lastId.current = turnId;
-      return;
-    }
-    if (turnId === lastId.current) {
-      // Same turn re-rendered (e.g. the 5s feed poll) — keep finished text.
-      setShown(full);
-      return;
-    }
-    lastId.current = turnId;
-    setShown('');
-    let i = 0;
-    const id = setInterval(() => {
-      i += 1;
-      setShown(full.slice(0, i));
-      if (i >= full.length) clearInterval(id);
-    }, 42);
-    return () => clearInterval(id);
-  }, [turnId, full]);
-
   if (!enabled || !latest) return null;
 
+  const full = thinkingText(latest);
   const cls = turnClass(latest);
+  const turnId = `${latest.t}`;
+  const stagger = staggerFor(full.length);
+
   const open = () => onOpenBooth?.();
 
   return (
@@ -90,8 +77,36 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
         {MARKER[cls] || '·'}
       </span>
       <span className="[overflow-wrap:anywhere]">
-        {shown}
-        <span className="v3-blink ml-px text-vermilion">▍</span>
+        <AnimatePresence mode="wait">
+          <m.span
+            key={turnId}
+            variants={{
+              hidden:  { opacity: 0 },
+              visible: { opacity: 1, transition: { staggerChildren: stagger } },
+              exit:    { opacity: 0, transition: { duration: 0.12 } },
+            }}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            aria-label={full}
+          >
+            {Array.from(full).map((char, i) => (
+              <m.span
+                key={i}
+                variants={{
+                  hidden:  { opacity: 0, filter: 'blur(2px)' },
+                  visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
+                }}
+                aria-hidden="true"
+                // Preserve whitespace — collapsed spaces would crowd the type.
+                style={{ whiteSpace: 'pre' }}
+              >
+                {char}
+              </m.span>
+            ))}
+          </m.span>
+        </AnimatePresence>
+        <span className="v3-blink ml-px text-vermilion" aria-hidden="true">{cursorChar}</span>
       </span>
     </div>
   );

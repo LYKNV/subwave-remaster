@@ -14,6 +14,7 @@ import type { ChangeEvent, TouchEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
+import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
@@ -73,10 +74,6 @@ interface SettingsResponse {
   tts?: { moods?: string[] };
 }
 
-interface SaveMessage {
-  tone: 'ok' | 'err';
-  text: string;
-}
 
 interface NowCardProps {
   label: string;
@@ -146,7 +143,6 @@ export default function ShowsPanel() {
   const [form, setForm] = useState<FormState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<SaveMessage | null>(null);
   const [brush, setBrush] = useState<string | 'erase' | null>(null);
   const [now, setNow] = useState(() => new Date());
 
@@ -374,7 +370,7 @@ export default function ShowsPanel() {
 
   const save = async () => {
     if (!canSave || !form) return;
-    setBusy(true); setSaveMsg(null);
+    setBusy(true);
     try {
       const r = await adminFetch('/settings', {
         method: 'POST',
@@ -389,10 +385,10 @@ export default function ShowsPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setSaveMsg({ tone: 'ok', text: 'schedule saved — the current hour applies on the next pick' });
+      notify.ok('schedule saved — the current hour applies on the next pick');
       await load();
     } catch (e) {
-      setSaveMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+      notify.err(errorMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -614,16 +610,6 @@ export default function ShowsPanel() {
           {!canSave && !busy && (
             <span className="text-[11px] text-[var(--danger)]">
               every show needs a name, persona, and mood
-            </span>
-          )}
-          {saveMsg && (
-            <span
-              className={cn(
-                'text-[12px]',
-                saveMsg.tone === 'err' ? 'text-[var(--danger)]' : 'text-vermilion',
-              )}
-            >
-              {saveMsg.text}
             </span>
           )}
         </div>

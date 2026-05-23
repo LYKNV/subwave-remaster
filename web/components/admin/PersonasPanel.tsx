@@ -10,6 +10,7 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { CLOUD_VOICES } from '../../lib/cloudVoices';
+import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
@@ -102,10 +103,6 @@ interface SettingsResponse {
   env?: Record<string, unknown>;
 }
 
-interface SaveMessage {
-  tone: 'ok' | 'err';
-  text: string;
-}
 
 function clientMintId() {
   const b = crypto.getRandomValues(new Uint8Array(3));
@@ -165,7 +162,6 @@ export default function PersonasPanel() {
   const [form, setForm] = useState<FormState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<SaveMessage | null>(null);
   // index of the persona being edited in the right pane
   const [focusIdx, setFocusIdx] = useState(0);
   // toggles the system-prompt editor card
@@ -271,7 +267,7 @@ export default function PersonasPanel() {
 
   const save = async () => {
     if (!canSave || !form) return;
-    setBusy(true); setSaveMsg(null);
+    setBusy(true);
     try {
       const r = await adminFetch('/settings', {
         method: 'POST',
@@ -305,10 +301,10 @@ export default function PersonasPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setSaveMsg({ tone: 'ok', text: 'personas saved — applies on the next spoken line' });
+      notify.ok('personas saved — applies on the next spoken line');
       await load();
     } catch (e) {
-      setSaveMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+      notify.err(errorMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -867,15 +863,13 @@ export default function PersonasPanel() {
               )}
             />
             <span className="text-[11px] text-muted">
-              {saveMsg
-                ? <span className={saveMsg.tone === 'err' ? 'text-[var(--danger)]' : 'text-vermilion'}>{saveMsg.text}</span>
-                : !canSave && !focusedOk
-                  ? <span className="text-[var(--danger)]">this persona has a missing or invalid field</span>
-                  : !canSave && !allPersonasOk
-                    ? <span className="text-[var(--danger)]">another persona in the roster is incomplete</span>
-                    : !canSave && !promptOk
-                      ? <span className="text-[var(--danger)]">fix the custom system prompt</span>
-                      : 'changes apply on the next spoken line · no mixer restart'}
+              {!canSave && !focusedOk
+                ? <span className="text-[var(--danger)]">this persona has a missing or invalid field</span>
+                : !canSave && !allPersonasOk
+                  ? <span className="text-[var(--danger)]">another persona in the roster is incomplete</span>
+                  : !canSave && !promptOk
+                    ? <span className="text-[var(--danger)]">fix the custom system prompt</span>
+                    : 'changes apply on the next spoken line · no mixer restart'}
             </span>
             <span className="ml-auto flex gap-2">
               <Btn onClick={load} disabled={busy}>Discard</Btn>

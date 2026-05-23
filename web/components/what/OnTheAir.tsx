@@ -1,4 +1,5 @@
 import PlayerShowcase from '../landing/PlayerShowcase';
+import EditorialReveal from '../landing/EditorialReveal';
 
 const POINTS = [
   {
@@ -29,7 +30,7 @@ const POINTS = [
 
 export default function OnTheAir() {
   return (
-    <section className="bs-section border-t-0">
+    <EditorialReveal className="bs-section border-t-0">
       <p className="bs-eyebrow">PART ONE · THE PLAYER</p>
       <h2>One stream, every listener.</h2>
       <p className="text-muted">
@@ -52,6 +53,6 @@ export default function OnTheAir() {
           </article>
         ))}
       </div>
-    </section>
+    </EditorialReveal>
   );
 }

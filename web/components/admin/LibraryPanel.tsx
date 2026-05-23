@@ -9,6 +9,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
 import { Field, FieldLabel } from '../ui/field';
@@ -52,18 +53,12 @@ interface SettingsResponse {
   tagger?: TaggerState;
 }
 
-interface Feedback {
-  tone: 'ok' | 'err';
-  text: string;
-}
-
 export default function LibraryPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Track[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [recent, setRecent] = useState<Track[] | null>(null);
   const [loadingRecent, setLoadingRecent] = useState(false);
   const [tagState, setTagState] = useState<SettingsResponse | null>(null);
@@ -81,7 +76,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `latest tracks failed (${r.status})`);
       setRecent(Array.isArray(j.results) ? j.results : []);
     } catch (err) {
-      setFeedback({ tone: 'err', text: err instanceof Error ? err.message : String(err) });
+      notify.err(errorMessage(err));
       setRecent([]);
     } finally {
       setLoadingRecent(false);
@@ -114,14 +109,13 @@ export default function LibraryPanel() {
     const q = query.trim();
     if (!q || !ready) return;
     setSearching(true);
-    setFeedback(null);
     try {
       const r = await adminFetch(`/dj/search?q=${encodeURIComponent(q)}`);
       const j = (await r.json().catch(() => ({}))) as SearchResponse;
       if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
       setResults(Array.isArray(j.results) ? j.results : []);
     } catch (err) {
-      setFeedback({ tone: 'err', text: err instanceof Error ? err.message : String(err) });
+      notify.err(errorMessage(err));
       setResults([]);
     } finally {
       setSearching(false);
@@ -130,7 +124,6 @@ export default function LibraryPanel() {
 
   const queueTrack = async (track: Track) => {
     setQueuing(track.id);
-    setFeedback(null);
     try {
       const r = await adminFetch('/dj/queue-track', {
         method: 'POST',
@@ -139,12 +132,9 @@ export default function LibraryPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as QueueTrackResponse;
       if (!r.ok) throw new Error(j.error || `queue failed (${r.status})`);
-      setFeedback({
-        tone: 'ok',
-        text: `queued “${j.track?.title || track.title}” · position ${j.queuePosition}`,
-      });
+      notify.ok(`queued “${j.track?.title || track.title}” · position ${j.queuePosition}`);
     } catch (err) {
-      setFeedback({ tone: 'err', text: err instanceof Error ? err.message : String(err) });
+      notify.err(errorMessage(err));
     } finally {
       setQueuing(null);
     }
@@ -152,7 +142,6 @@ export default function LibraryPanel() {
 
   const startTagger = async () => {
     setTaggerBusy(true);
-    setFeedback(null);
     try {
       const limit = parseInt(taggerLimit, 10);
       const r = await adminFetch('/tag-library', {
@@ -162,9 +151,10 @@ export default function LibraryPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
+      notify.ok('tagger started');
       await loadTagState();
     } catch (err) {
-      setFeedback({ tone: 'err', text: err instanceof Error ? err.message : String(err) });
+      notify.err(errorMessage(err));
     } finally {
       setTaggerBusy(false);
     }
@@ -243,17 +233,10 @@ export default function LibraryPanel() {
                 { id: 'high', label: 'High' },
               ]}
             />
-            <span
-              className={cn(
-                'ml-auto text-[11px]',
-                feedback ? (feedback.tone === 'err' ? 'text-[var(--danger)]' : 'text-vermilion') : 'text-muted',
-              )}
-            >
-              {feedback
-                ? feedback.text
-                : resultCount === null
-                  ? 'search the library to queue a track'
-                  : `${resultCount} result${resultCount === 1 ? '' : 's'} · sorted by relevance`}
+            <span className="ml-auto text-[11px] text-muted">
+              {resultCount === null
+                ? 'search the library to queue a track'
+                : `${resultCount} result${resultCount === 1 ? '' : 's'} · sorted by relevance`}
             </span>
           </div>
         </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { turnClass, turnKey, turnText, isDjTurn, type TurnDisplayClass } from '@/lib/sessionFeed';
 import { cn } from '@/lib/cn';
 import type { SessionTurn } from '@/lib/types';
@@ -41,6 +42,12 @@ export interface BoothDrawerProps {
 
 // `items` is the live session's `messages` array — turns of
 // { t, role, kind, text, meta }, oldest first. Shown newest first.
+//
+// New turns slide in from above with a 140 ms `y: -8 → 0` fade — a teletype
+// line feeding in. `layout` on each row pushes existing rows down smoothly
+// when new ones insert. `initial={false}` on the AnimatePresence parent means
+// the first render isn't animated (we don't want a 30-row enter animation on
+// drawer open).
 export default function BoothDrawer({ items }: BoothDrawerProps) {
   const [filter, setFilter] = useState<FilterId>('all');
 
@@ -85,39 +92,46 @@ export default function BoothDrawer({ items }: BoothDrawerProps) {
         </div>
       )}
 
-      {filtered.map((turn, i) => {
-        const cls = turnClass(turn);
-        const isVoice = cls === 'voice';
-        const color = CLASS_COLOR[cls];
-        const text = turnText(turn);
-        return (
-          <div
-            key={turnKey(turn, i)}
-            className={cn(
-              'border-b border-soft-border py-3',
-              isVoice && '-ml-3 border-l-2 border-l-vermilion pl-3',
-            )}
-          >
-            <div className="mb-1 flex items-baseline gap-2">
-              <span className="v3-tab-num min-w-[56px] text-[10px] text-muted">
-                {shortTime(turn.t)}
-              </span>
-              <span className={cn('text-[9px] font-semibold tracking-[0.3em] uppercase', color)}>
-                {turn.kind}
-              </span>
-            </div>
-            <div
+      <AnimatePresence initial={false} mode="popLayout">
+        {filtered.map((turn, i) => {
+          const cls = turnClass(turn);
+          const isVoice = cls === 'voice';
+          const color = CLASS_COLOR[cls];
+          const text = turnText(turn);
+          return (
+            <m.div
+              key={turnKey(turn, i)}
+              layout
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.14, ease: [0.2, 0.7, 0.2, 1] }}
               className={cn(
-                'leading-snug [word-break:break-word] text-ink',
-                isVoice ? '[font-family:Georgia,"Times_New_Roman",serif] text-sm italic' : 'text-[13px]',
+                'border-b border-soft-border py-3',
+                isVoice && '-ml-3 border-l-2 border-l-vermilion pl-3',
               )}
             >
-              {isVoice ? `"${text}"` : text}
-            </div>
-            <MetaLine cls={cls} meta={turn.meta} />
-          </div>
-        );
-      })}
+              <div className="mb-1 flex items-baseline gap-2">
+                <span className="v3-tab-num min-w-[56px] text-[10px] text-muted">
+                  {shortTime(turn.t)}
+                </span>
+                <span className={cn('text-[9px] font-semibold tracking-[0.3em] uppercase', color)}>
+                  {turn.kind}
+                </span>
+              </div>
+              <div
+                className={cn(
+                  'leading-snug [word-break:break-word] text-ink',
+                  isVoice ? '[font-family:Georgia,"Times_New_Roman",serif] text-sm italic' : 'text-[13px]',
+                )}
+              >
+                {isVoice ? `"${text}"` : text}
+              </div>
+              <MetaLine cls={cls} meta={turn.meta} />
+            </m.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }
@@ -152,7 +166,7 @@ function MetaLine({ cls, meta }: MetaLineProps) {
       )}
       {say && (
         <div className="mt-0.5 text-[11px] leading-snug text-muted italic">
-          ↳ "{say}"
+          ↳ &ldquo;{say}&rdquo;
         </div>
       )}
     </div>

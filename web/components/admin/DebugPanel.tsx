@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { V3Alert } from '../ui/alert';
@@ -400,15 +401,25 @@ export default function DebugPanel() {
           {/* ── DJ LOG ─────────────────────────────────────── */}
           <Card title="DJ log" sub={`${data.queue?.djLogCount} total · last 30`}>
             <div className="grid max-h-72 gap-1 overflow-y-auto">
-              {(data.queue?.djLog || []).map(e => (
-                <div key={e.id} className={`log ${kindTone(e.kind)}`}>
-                  <span className="t">
-                    {e.t ? new Date(e.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
-                  </span>
-                  <span className="k">[{e.kind}]</span>
-                  <span className="msg">{e.message}</span>
-                </div>
-              ))}
+              <AnimatePresence initial={false} mode="popLayout">
+                {(data.queue?.djLog || []).map(e => (
+                  <m.div
+                    key={e.id}
+                    layout
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.14, ease: [0.2, 0.7, 0.2, 1] }}
+                    className={`log ${kindTone(e.kind)}`}
+                  >
+                    <span className="t">
+                      {e.t ? new Date(e.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+                    </span>
+                    <span className="k">[{e.kind}]</span>
+                    <span className="msg">{e.message}</span>
+                  </m.div>
+                ))}
+              </AnimatePresence>
             </div>
           </Card>
 

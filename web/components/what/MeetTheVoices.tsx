@@ -1,4 +1,5 @@
 import Figure from './Figure';
+import EditorialReveal from '../landing/EditorialReveal';
 
 const HABITS = [
   {
@@ -20,7 +21,7 @@ const HABITS = [
 
 export default function MeetTheVoices() {
   return (
-    <section className="bs-section">
+    <EditorialReveal className="bs-section">
       <p className="bs-eyebrow">PART TWO · THE DJ</p>
       <h2>An LLM with a library and a microphone.</h2>
       <p className="text-muted">
@@ -53,6 +54,6 @@ export default function MeetTheVoices() {
         a cloud voice from OpenAI or ElevenLabs. Change either one in the console
         and the next spoken line uses it. No redeploy.
       </p>
-    </section>
+    </EditorialReveal>
   );
 }

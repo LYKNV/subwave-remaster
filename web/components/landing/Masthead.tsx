@@ -13,6 +13,9 @@ function issueNo(d: Date): number {
 // Broadsheet-style header with proper landing-page navigation. Keeps the
 // big SUB/WAVE wordmark and the double rules, drops the dateline/location/
 // DJ-name strip that belonged on a newspaper but not a marketing site.
+//
+// No motion on the masthead — wordmark and meta row land static. The page's
+// reference frame should feel like print, not a performance.
 export default function Masthead() {
   const now = useClock();
 

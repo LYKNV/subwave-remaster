@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import EditorialReveal from './EditorialReveal';
 
 const COMPATIBLE = [
   'Navidrome',
@@ -14,7 +15,7 @@ const COMPATIBLE = [
 
 export default function Navidrome() {
   return (
-    <section className="bs-navidrome bs-section">
+    <EditorialReveal className="bs-navidrome bs-section">
       <div className="bs-navidrome-grid">
         <div className="bs-navidrome-copy">
           <p className="bs-eyebrow">WORKS WITH YOUR LIBRARY</p>
@@ -108,6 +109,6 @@ export default function Navidrome() {
           </span>
         ))}
       </p>
-    </section>
+    </EditorialReveal>
   );
 }

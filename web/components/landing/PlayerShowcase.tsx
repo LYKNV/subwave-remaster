@@ -1,5 +1,6 @@
 'use client';
 
+import { m } from 'motion/react';
 import PlayerApp from '../PlayerApp';
 
 // Browser-window mock chrome wrapping the actual V3 player. Same React tree
@@ -7,6 +8,10 @@ import PlayerApp from '../PlayerApp';
 // flow through, and the embed weighs ~nothing extra. The player runs in
 // `contained` mode so it pins to the frame, not the viewport, and its
 // drawers/dialogs portal into the frame too.
+//
+// The LIVE chip pulses once on mount — a "broadcast is on right now"
+// callout as the showcase appears. The bs-live-dot CSS pulse continues
+// independently after the chip settles.
 
 export default function PlayerShowcase() {
   return (
@@ -22,10 +27,16 @@ export default function PlayerShowcase() {
           <span>www.getsubwave.com</span>
           <span className="text-muted">/listen</span>
         </div>
-        <div className="bs-frame-live" aria-hidden="true">
+        <m.div
+          className="bs-frame-live"
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.6, ease: [0.2, 0.7, 0.2, 1] }}
+          aria-hidden="true"
+        >
           <span className="bs-live-dot" />
           <span>LIVE</span>
-        </div>
+        </m.div>
       </div>
 
       <div className="bs-frame-screen">

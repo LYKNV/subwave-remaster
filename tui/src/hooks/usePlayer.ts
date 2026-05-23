@@ -41,6 +41,16 @@ export function usePlayer(streamUrl: string): PlayerState {
   // Kill the child process if the app exits while playback is live.
   useEffect(() => () => sp.stop(), [sp]);
 
+  // Auto-tune-in on mount so the listener doesn't have to press space first.
+  useEffect(() => {
+    if (!sp.available) return;
+    sp.play(muted ? 0 : volume);
+    setTunedIn(true);
+    // Intentionally only on mount; subsequent volume/mute changes are pushed
+    // via the effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
+
   const toggle = useCallback(() => {
     setTunedIn(prev => {
       if (prev) { sp.stop(); return false; }

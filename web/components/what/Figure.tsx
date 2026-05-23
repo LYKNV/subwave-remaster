@@ -15,13 +15,11 @@ interface FigureProps {
 // a labelled placeholder box; pass `src` later and the same component swaps in
 // the real image — no layout change.
 //
-// Editorial-style stagger on reveal: the image fades first, the caption
-// follows 180 ms behind — mimics reading order in print features. Both fire
-// `whileInView` with once:true so they animate exactly once when the figure
-// crosses into view.
+// Mount-driven stagger: image fades first, caption fades + rises 180 ms
+// behind. Mimics reading order. No scroll trigger — everything settles as the
+// page loads.
 export default function Figure({ src, alt, caption, label, ratio = '16 / 10' }: FigureProps) {
   const aspectClass = ratio === '9 / 16' ? 'aspect-[9/16]' : 'aspect-[16/10]';
-  const viewport = { once: true, margin: '0px 0px -10% 0px' };
   return (
     <figure className="m-0 flex flex-col gap-2">
       {src ? (
@@ -29,8 +27,7 @@ export default function Figure({ src, alt, caption, label, ratio = '16 / 10' }: 
           src={src}
           alt={alt || caption || label || ''}
           initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          viewport={viewport}
+          animate={{ opacity: 1 }}
           transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}
           className="block h-auto w-full border border-ink object-contain"
         />
@@ -39,8 +36,7 @@ export default function Figure({ src, alt, caption, label, ratio = '16 / 10' }: 
           role="img"
           aria-label={alt || `Placeholder: ${label}`}
           initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          viewport={viewport}
+          animate={{ opacity: 1 }}
           transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}
           className={cn(
             'flex items-center justify-center border border-dashed border-separator-strong bg-overlay p-4 text-center',
@@ -55,8 +51,7 @@ export default function Figure({ src, alt, caption, label, ratio = '16 / 10' }: 
       {caption && (
         <m.figcaption
           initial={{ opacity: 0, y: 6 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={viewport}
+          animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, delay: 0.18, ease: [0.2, 0.7, 0.2, 1] }}
           className="text-[10px] font-medium tracking-[0.18em] text-muted uppercase"
         >

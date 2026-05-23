@@ -9,9 +9,9 @@ import PlayerApp from '../PlayerApp';
 // `contained` mode so it pins to the frame, not the viewport, and its
 // drawers/dialogs portal into the frame too.
 //
-// The LIVE chip in the chrome bar pulses once on viewport entry — a small
-// "the broadcast is on right now" callout as the showcase scrolls in. The
-// bs-live-dot CSS pulse continues independently after the chip settles.
+// The LIVE chip pulses once on mount — a "broadcast is on right now"
+// callout as the showcase appears. The bs-live-dot CSS pulse continues
+// independently after the chip settles.
 
 export default function PlayerShowcase() {
   return (
@@ -30,8 +30,7 @@ export default function PlayerShowcase() {
         <m.div
           className="bs-frame-live"
           initial={{ scale: 0.8, opacity: 0 }}
-          whileInView={{ scale: 1, opacity: 1 }}
-          viewport={{ once: true, margin: '0px 0px -10% 0px' }}
+          animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.6, ease: [0.2, 0.7, 0.2, 1] }}
           aria-hidden="true"
         >

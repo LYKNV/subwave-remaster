@@ -2,7 +2,7 @@ import EditorialReveal from '../landing/EditorialReveal';
 
 export default function ArticleHead() {
   return (
-    <EditorialReveal className="bs-hero" onMount>
+    <EditorialReveal className="bs-hero">
       <div className="bs-hero-head">
         <p className="bs-eyebrow">A REAL INTERNET RADIO STATION</p>
         <h1 className="bs-hero-title">

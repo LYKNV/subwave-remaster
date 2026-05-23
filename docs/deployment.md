@@ -1,8 +1,12 @@
 # Deploying SUB/WAVE
 
-Two modes (**dev** and **prod**), two install styles per mode (**no-clone** and
-**cloned**), and two wizards (**browser** and **CLI**) that finish the job.
-This doc shows every combination and when to use which.
+Three things to pick:
+
+1. **Mode** — `dev` (local hacking), `prod` (single-host, bundled Caddy), or `prod-byo` (you bring your own reverse proxy).
+2. **Install style** — `no-clone` (curl two files) or `cloned` (git clone the repo).
+3. **Wizard** — finish setup in the **browser** (`/onboarding`) or in the **terminal** (`npm run setup`).
+
+The wizard is independent of the install style — both wizards write to the same files and a cloned install can finish in either (or both, at different times).
 
 ---
 
@@ -13,8 +17,10 @@ This doc shows every combination and when to use which.
 | **Hack on the code locally** (Mac smoke test, branch testing) | `git clone … && cd subwave && npm install && npm run setup` → pick **dev** |
 | **Run a public station** on a Linux box, no source clone | `mkdir subwave && cd subwave && curl -O .../docker-compose.prod.yml && curl -O .../.env.example && mv .env.example .env && $EDITOR .env && docker compose -f docker-compose.prod.yml up -d && open https://your-host/onboarding` |
 | **Run a public station** but you already have Traefik / nginx / your own Caddy | Same as above, but `docker-compose.byo-proxy.yml` |
+| **Prefer the terminal wizard, but want a prod install** | `git clone … && cd subwave && npm install && npm run setup` → pick **prod** |
+| **Already cloned, but prefer the browser** | `./scripts/setup.sh && docker compose -f docker-compose.prod.yml up -d --build && open http://localhost:7700/onboarding` |
 
-Everything below is the longer version of those three rows.
+Everything below is the longer version.
 
 ---
 
@@ -63,12 +69,23 @@ docker compose -f docker-compose.byo-proxy.yml up -d
 
 ---
 
-## Install styles: no-clone vs cloned
+## Two independent choices
 
-Both prod modes work either way. Dev mode needs a clone (you're writing
-code; the source has to live somewhere).
+Setting up SUB/WAVE is two separate decisions:
 
-### No-clone install (prod / prod-byo)
+1. **How do the files get on disk?** — either `curl` two files (no-clone) or `git clone` the repo (cloned).
+2. **How do you finish configuration?** — either the **browser wizard** at `/onboarding`, or the **CLI wizard** via `npm run setup`.
+
+Almost every combination is valid:
+
+|  | Browser wizard (`/onboarding`) | CLI wizard (`npm run setup`) |
+|---|:---:|:---:|
+| **No-clone** (curl two files) | ✓ | — (no code on disk) |
+| **Cloned** (git clone) | ✓ | ✓ |
+
+The browser wizard is just an HTTP surface on the controller — it doesn't care how the stack got there. The CLI wizard needs the code present, so it's cloned-installs only.
+
+### No-clone install + browser wizard
 
 The headline path. Two `curl`s, three env vars, then a browser wizard.
 
@@ -82,52 +99,59 @@ docker compose -f docker-compose.prod.yml up -d
 open https://your-host/onboarding             # browser wizard finishes setup
 ```
 
-The browser wizard at `/onboarding` collects Navidrome, LLM, TTS engine,
-DJ persona, and offers to render jingles. It writes:
+### Cloned install + browser wizard
 
-- `state/setup-config.json` — Navidrome creds + the "setup complete" timestamp
-- `state/secrets.env` (mode 0600) — cloud LLM/TTS API keys
-- `state/settings.json` — DJ persona, jingle ratio, TTS choices (via the
-  existing admin settings flow)
+Same browser wizard, just from a local clone (handy when you want the operator console + scripts but prefer clicking to typing).
 
-Env vars in `.env` always win when set — the wizard surfaces only fill in
-fields env doesn't supply.
+```bash
+git clone https://github.com/perminder-klair/subwave.git
+cd subwave
+./scripts/setup.sh                            # scaffolds 3-var root .env + state/
+docker compose -f docker-compose.prod.yml up -d --build   # prod (builds images locally)
+# or for dev:
+docker compose up -d && (cd web && npm run dev &)
+open http://localhost:7700/onboarding
+```
 
-### Cloned install (any mode)
+### Cloned install + CLI wizard
 
-When you want the operator console (`npm start`), scripts (`update.sh`,
-`generate-jingles.sh`, `health-check.sh`), or the terminal wizard. Same end
-result, more tooling.
+Best when you're on a remote SSH session, scripting an install, or just prefer the terminal.
 
 ```bash
 git clone https://github.com/perminder-klair/subwave.git
 cd subwave
 npm install
-npm run setup                                 # terminal wizard, walks every step
+npm run setup                                 # pick mode, answer prompts, done
 ```
 
-The CLI wizard prompts for mode (dev / prod / prod-byo), runs preflight
-(node, docker), collects Navidrome + LLM + admin creds + SITE_URL (prod
-only) + timezone, then brings the stack up and renders jingles. Writes the
-same `state/setup-config.json` + `state/secrets.env` the browser wizard
-writes — both flows converge on the same files.
+The CLI wizard prompts for mode (dev / prod / prod-byo), runs preflight (node, docker), collects Navidrome + LLM + admin creds + SITE_URL (prod only) + timezone, then brings the stack up and renders jingles.
+
+### What every path writes to
+
+All three paths converge on the same files:
+
+- `state/setup-config.json` — Navidrome creds + the "setup complete" timestamp
+- `state/secrets.env` (mode 0600) — cloud LLM/TTS API keys
+- `state/settings.json` — DJ persona, jingle ratio, TTS choices (via the existing admin settings flow)
+- root `.env` — `ADMIN_USER`, `ADMIN_PASS`, `SITE_URL`, `TZ`, etc.
+
+Env vars in `.env` always win when set — the wizards only fill in fields env doesn't supply.
 
 ---
 
-## The two wizards
+## The two wizards, side by side
 
 | | CLI wizard (`npm run setup`) | Browser wizard (`/onboarding`) |
 |---|---|---|
-| Where it runs | Your terminal | A browser, anywhere |
-| Requires | Node 20+, npm | A browser |
+| Where it runs | Your terminal | A browser, anywhere on the network |
+| Requires | Node 20+, npm, a cloned repo | A browser + the stack up |
 | Collects | Mode + Navidrome + LLM + admin + SITE_URL + TZ | Navidrome + LLM + TTS + DJ persona + jingles |
-| Probes | Live (Navidrome ping, LLM tag call) | Live (via controller endpoints) |
+| Probes | Live (Navidrome ping, LLM tag call from the host) | Live (via controller endpoints, run inside the container) |
 | Persists to | `state/setup-config.json`, `state/secrets.env`, `.env`, POST `/settings` | Same |
 | Renders jingles | Optional final step | One-click button on the Jingles step |
-| Bypass with | `node bin/subwave setup` (skips npm) | Visit `/onboarding` after the stack is up |
+| Bypass with | `node bin/subwave setup` (skips npm's buffering) | Visit `/onboarding` after the stack is up |
 
-**They write the same files.** Use whichever fits the situation — terminal
-during a remote SSH session, browser when you'd rather click than type.
+**They write the same files.** Use whichever fits the situation — terminal during a remote SSH session, browser when you'd rather click than type, or both at different times (the second one detects what the first one wrote and skips the redundant prompts).
 
 ---
 
@@ -212,14 +236,15 @@ need to be UI-managed because the schema is too rich for env vars.
 
 ## When to pick what
 
-| You're… | Use |
-|---|---|
-| Bootstrapping a new homelab box | No-clone prod install, browser wizard |
-| Demoing on a Mac before a real deploy | Cloned dev, `npm run setup` |
-| Adding a feature to the controller | Cloned dev, `npm run dev` for web hot-reload |
-| Already running Traefik / nginx / Caddy | No-clone byo-proxy install |
-| Want every config knob in env files for CI | Cloned prod, hand-edit `.env`, skip the wizard |
-| Recovering a backup | Restore `state/` first, then `docker compose up -d` — wizards detect setup-config.json and skip themselves |
+| You're… | Install style | Wizard |
+|---|---|---|
+| Bootstrapping a new homelab box | No-clone prod | Browser at `/onboarding` |
+| Demoing on a Mac before a real deploy | Cloned dev | Either — CLI is faster to drive, browser shows you the actual UI |
+| Adding a feature to the controller | Cloned dev (web via `npm run dev` for hot-reload) | Either |
+| Already running Traefik / nginx / Caddy | No-clone byo-proxy *or* cloned byo-proxy | Browser, or CLI if cloned |
+| Want every config knob in env files for CI | Cloned prod | Skip both — hand-edit `.env` and `state/setup-config.json` |
+| Remote SSH session, no port-forward set up | Cloned (any mode) | CLI — it's in the same terminal |
+| Recovering a backup | Either install style | Skip both — restore `state/` first, then `docker compose up -d`. Wizards detect `setup-config.json` and stay out of your way. |
 
 ---
 

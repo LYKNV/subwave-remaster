@@ -31,9 +31,9 @@ export function Sheet({ open, onOpenChange, title, children, container }: SheetP
         <Dialog.Content
           className={cn(
             'v3-drawer-content z-50 flex flex-col border-x border-ink text-ink shadow-drawer',
-            'bg-[color-mix(in_oklab,var(--bg)_55%,transparent)]',
-            '[backdrop-filter:blur(14px)_saturate(1.6)_brightness(1.04)]',
-            '[-webkit-backdrop-filter:blur(14px)_saturate(1.6)_brightness(1.04)]',
+            'bg-[color-mix(in_oklab,var(--bg)_30%,transparent)]',
+            '[backdrop-filter:blur(28px)_saturate(1.9)_brightness(1.07)]',
+            '[-webkit-backdrop-filter:blur(28px)_saturate(1.9)_brightness(1.07)]',
             pos,
             contained
               ? 'top-16 right-4 bottom-16 w-[min(420px,calc(100%-32px))]'

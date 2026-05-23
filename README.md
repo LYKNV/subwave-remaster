@@ -11,10 +11,10 @@ button, no "up next for you." You tune in and hear whatever is on.
 
 ## Live demo
 
-- **Project site** — [www.getsubwave.com](https://www.getsubwave.com/)
-- **Demo player** — [www.getsubwave.com/listen](https://www.getsubwave.com/listen)
-- **Setup walkthrough** — [www.getsubwave.com/setup](https://www.getsubwave.com/setup)
-- **Operator manual** — [www.getsubwave.com/manual](https://www.getsubwave.com/manual)
+- **Project site** — [getsubwave.com](https://www.getsubwave.com/)
+- **Demo player** — [getsubwave.com/listen](https://www.getsubwave.com/listen)
+- **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
+- **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
 
 ## Screenshots
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Button } from '../ui/button';
@@ -194,57 +195,80 @@ export default function RequestDrawer({
     }
   };
 
-  if (result?.success) {
-    return <SuccessCard result={result} />;
-  }
-
   return (
-    <div>
-      <p className="mt-0 text-[13px] leading-normal text-muted">
-        Describe a mood, a memory, an artist. Ollama parses it, matches the library,
-        and the DJ acknowledges you on-air.
-      </p>
+    // Outer layout animates the height delta when form ↔ success swaps.
+    <m.div layout>
+      <AnimatePresence mode="wait" initial={false}>
+        {result?.success ? (
+          <m.div
+            key="success"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.12 }}
+          >
+            <SuccessCard result={result} />
+          </m.div>
+        ) : (
+          <m.div
+            key="form"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.12 }}
+          >
+            <p className="mt-0 text-[13px] leading-normal text-muted">
+              Describe a mood, a memory, an artist. Ollama parses it, matches the library,
+              and the DJ acknowledges you on-air.
+            </p>
 
-      <SuggestionChips
-        nowPlaying={nowPlaying}
-        context={context}
-        onPick={text => { setRequestText(text); taRef.current?.focus(); }}
-      />
+            <SuggestionChips
+              nowPlaying={nowPlaying}
+              context={context}
+              onPick={text => { setRequestText(text); taRef.current?.focus(); }}
+            />
 
-      <Input
-        type="text"
-        value={requesterName}
-        onChange={e => setRequesterName(e.target.value)}
-        placeholder="your name (optional)"
-        className="mb-2"
-      />
+            <Input
+              type="text"
+              value={requesterName}
+              onChange={e => setRequesterName(e.target.value)}
+              placeholder="your name (optional)"
+              className="mb-2"
+            />
 
-      <Textarea
-        ref={taRef}
-        value={requestText}
-        onChange={e => { setRequestText(e.target.value); if (result) setResult(null); }}
-        onKeyDown={onKeyDown}
-        placeholder='"something for late-night driving"…'
-        rows={3}
-        /* 16px text avoids iOS zoom-on-focus on this listener-facing field. */
-        className="resize-none p-3.5 text-[16px]"
-      />
+            <Textarea
+              ref={taRef}
+              value={requestText}
+              onChange={e => { setRequestText(e.target.value); if (result) setResult(null); }}
+              onKeyDown={onKeyDown}
+              placeholder='"something for late-night driving"…'
+              rows={3}
+              /* 16px text avoids iOS zoom-on-focus on this listener-facing field. */
+              className="resize-none p-3.5 text-[16px]"
+            />
 
-      {result && !result.success && (
-        <div className="mt-2.5 border border-[#c0392b] bg-[rgba(192,57,43,0.06)] px-3 py-2.5 text-xs leading-normal text-[#7a2218]">
-          {result.message || 'No match — try different words.'}
-        </div>
-      )}
+            {result && !result.success && (
+              <div className="mt-2.5 border border-[#c0392b] bg-[rgba(192,57,43,0.06)] px-3 py-2.5 text-xs leading-normal text-[#7a2218]">
+                {result.message || 'No match — try different words.'}
+              </div>
+            )}
 
-      <Button
-        onClick={handleSubmit}
-        disabled={isSubmitting || !requestText.trim()}
-        variant="accent"
-        className="mt-3 w-full px-6 py-3.5"
-      >
-        {isSubmitting ? 'Sending…' : 'Send to the booth'}
-      </Button>
-    </div>
+            <m.button
+              type="button"
+              onClick={handleSubmit}
+              disabled={isSubmitting || !requestText.trim()}
+              whileTap={{ scale: 0.97 }}
+              className={cn(
+                'v3-focus mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-2 border-0 bg-vermilion px-6 py-3.5 text-center font-[inherit] text-sm font-semibold tracking-[0.08em] text-bg uppercase shadow-[0_1px_0_var(--ink)] transition-opacity',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              {isSubmitting ? 'Sending…' : 'Send to the booth'}
+            </m.button>
+          </m.div>
+        )}
+      </AnimatePresence>
+    </m.div>
   );
 }
 
@@ -255,43 +279,56 @@ interface SuccessCardProps {
 function SuccessCard({ result }: SuccessCardProps) {
   const { ack, track, queuePosition, pending, requestText } = result;
   return (
-    <div className="sw-success-in py-2">
+    <div className="py-2">
       <div className="mb-[14px] text-[9px] tracking-[0.4em] text-vermilion uppercase">
         {pending ? '✓ Sent to the booth' : '✓ Queued'}
       </div>
 
       {ack && (
         <div className="mb-[22px] border-l-2 border-l-vermilion pl-[14px] [font-family:Georgia,'Times_New_Roman',serif] text-lg leading-snug text-ink italic">
-          "{ack}"
+          &ldquo;{ack}&rdquo;
         </div>
       )}
 
-      <div className="border-y border-soft-border py-4">
+      {/* layout on the inner block animates the height delta between the
+          pending "finding your track…" prose and the resolved track title +
+          artist — the bordered slab eases instead of snapping. */}
+      <m.div layout className="border-y border-soft-border py-4">
         <div className="mb-1.5 text-[9px] tracking-[0.3em] text-muted uppercase">
           {pending ? 'The DJ is digging' : 'Now in the booth'}
         </div>
-        {pending ? (
-          <>
-            <div className="sw-pulse [font-family:Georgia,'Times_New_Roman',serif] text-base leading-snug text-ink italic">
-              finding your track…
-            </div>
-            {requestText && (
-              <div className="mt-1 text-[13px] text-muted">
-                "{requestText}"
-              </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <m.div
+            key={pending ? 'pending' : 'resolved'}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.14 }}
+          >
+            {pending ? (
+              <>
+                <div className="sw-pulse [font-family:Georgia,'Times_New_Roman',serif] text-base leading-snug text-ink italic">
+                  finding your track…
+                </div>
+                {requestText && (
+                  <div className="mt-1 text-[13px] text-muted">
+                    &ldquo;{requestText}&rdquo;
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="text-[22px] leading-tight font-semibold text-ink">
+                  {track?.title}
+                </div>
+                <div className="mt-0.5 text-[13px] text-muted">
+                  {track?.artist}
+                </div>
+              </>
             )}
-          </>
-        ) : (
-          <>
-            <div className="text-[22px] leading-tight font-semibold text-ink">
-              {track?.title}
-            </div>
-            <div className="mt-0.5 text-[13px] text-muted">
-              {track?.artist}
-            </div>
-          </>
-        )}
-      </div>
+          </m.div>
+        </AnimatePresence>
+      </m.div>
 
       {!pending && typeof queuePosition === 'number' && queuePosition > 0 && (
         <div className="v3-tab-num mt-[14px] text-[11px] tracking-[0.15em] text-muted uppercase">
@@ -316,6 +353,9 @@ interface SuggestionChipsProps {
 // top, a small attribution caption underneath ("more <artist>", "weather",
 // "festival", "right now", "random"). Listeners see *why* a suggestion is
 // being offered instead of a flat canned list.
+//
+// Chips stagger in after the drawer's slide-in finishes (delayChildren: 0.12)
+// so the row arrives as a row rather than competing with the drawer entrance.
 function SuggestionChips({ nowPlaying, context, onPick }: SuggestionChipsProps) {
   // Listing only the fields buildSuggestions actually reads — depending on the
   // whole nowPlaying/context objects would recompute on every poll cycle.
@@ -327,11 +367,25 @@ function SuggestionChips({ nowPlaying, context, onPick }: SuggestionChipsProps) 
   );
 
   return (
-    <div className={cn('my-[18px] flex flex-wrap gap-1.5')}>
+    <m.div
+      className="my-[18px] flex flex-wrap gap-1.5"
+      initial="hidden"
+      animate="visible"
+      variants={{
+        hidden:  {},
+        visible: { transition: { staggerChildren: 0.04, delayChildren: 0.12 } },
+      }}
+    >
       {chips.map(chip => (
-        <button
+        <m.button
           key={chip.text}
+          type="button"
           onClick={() => onPick(chip.text)}
+          variants={{
+            hidden:  { opacity: 0, y: 4 },
+            visible: { opacity: 1, y: 0, transition: { duration: 0.18 } },
+          }}
+          whileTap={{ scale: 0.96 }}
           className="v3-focus cursor-pointer border border-ink bg-transparent px-3 py-1.5 text-left font-[inherit] leading-tight text-ink"
           title={`Suggested via ${chip.attribution}`}
         >
@@ -341,8 +395,8 @@ function SuggestionChips({ nowPlaying, context, onPick }: SuggestionChipsProps) 
           <span className="mt-[3px] block text-[8px] tracking-[0.22em] text-muted uppercase">
             {chip.attribution}
           </span>
-        </button>
+        </m.button>
       ))}
-    </div>
+    </m.div>
   );
 }

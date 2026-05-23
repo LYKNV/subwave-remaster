@@ -21,7 +21,9 @@ import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import ThemeToggle from './ThemeToggle';
+import OdometerNumber from '../OdometerNumber';
 import { Toaster } from '../ui/toaster';
+import { animate as motionAnimate } from 'motion/react';
 
 interface NavItem {
   href: string;
@@ -201,6 +203,16 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
   const dotRef = useRef<HTMLSpanElement>(null);
   useDynamicStyle(dotRef, { background: onAir ? 'var(--accent)' : 'var(--muted)' });
 
+  // Pulse the dot when onAir flips false → true (track just started). We
+  // don't pulse on the steady-state polls — only on transitions.
+  const wasOnAirRef = useRef(onAir);
+  useEffect(() => {
+    if (onAir && !wasOnAirRef.current && dotRef.current) {
+      motionAnimate(dotRef.current, { scale: [1.4, 1] }, { duration: 0.18, ease: [0.2, 0.7, 0.2, 1] });
+    }
+    wasOnAirRef.current = onAir;
+  }, [onAir]);
+
   return (
     <header className="shell-header">
       <span className="wordmark">SUB / WAVE</span>
@@ -215,7 +227,9 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
           {count != null && (
             <>
               <span className="w-px self-stretch bg-separator-strong" />
-              <span>{count} listening</span>
+              <span className="inline-flex items-baseline gap-1">
+                <OdometerNumber value={count} /> listening
+              </span>
             </>
           )}
           <Link href="/" className="caption text-muted no-underline">

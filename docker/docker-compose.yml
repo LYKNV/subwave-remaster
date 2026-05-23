@@ -45,6 +45,12 @@ services:
       # (e.g. NAVIDROME_URL=http://host.docker.internal:4533) without leaking
       # the lookup to public DNS.
       - "host.docker.internal:host-gateway"
+    # Telnet control port — bound to loopback only so a natively-run controller
+    # (`npm run dev` outside compose) can reach it via LIQUIDSOAP_HOST=localhost.
+    # In-compose controllers reach liquidsoap over the default network and
+    # don't need this; this exposure is dev-only.
+    ports:
+      - "127.0.0.1:1234:1234"
     volumes:
       - ../liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
       - ../sounds:/sounds:ro

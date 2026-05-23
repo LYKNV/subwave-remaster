@@ -24,7 +24,20 @@ export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
 
     sock.setTimeout(timeoutMs);
     sock.on('timeout', () => finish(new Error('liquidsoap telnet timeout')));
-    sock.on('error', err => finish(err));
+    sock.on('error', err => {
+      // ENOTFOUND means the controller can't resolve the liquidsoap hostname —
+      // almost always because it's running outside the compose network. Surface
+      // a hint instead of the raw DNS error so the next operator doesn't have
+      // to dig (see issue #62).
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+        finish(new Error(
+          `liquidsoap host "${HOST}:${PORT}" did not resolve — set LIQUIDSOAP_HOST=localhost in controller/.env if the controller is running outside docker-compose (and ensure liquidsoap's port 1234 is exposed on the host)`
+        ));
+        return;
+      }
+      finish(err);
+    });
     sock.on('connect', () => sock.write(`${cmd}\n`));
     sock.on('data', (chunk: Buffer) => {
       buf += chunk.toString();

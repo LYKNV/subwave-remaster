@@ -3,7 +3,7 @@
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { m } from 'motion/react';
-import { toast } from 'sonner';
+import { notify, errorMessage } from '../../lib/notify';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
@@ -164,11 +164,6 @@ interface SettingsData {
   streamOnAir?: boolean;
 }
 
-interface SaveMessage {
-  tone: 'ok' | 'err';
-  text: string;
-}
-
 interface SfxForm {
   name: string;
   description: string;
@@ -187,7 +182,6 @@ export default function SettingsPanel() {
   const [jingleText, setJingleText] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<SaveMessage | null>(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -263,7 +257,7 @@ export default function SettingsPanel() {
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveSettings: SaveSettings = async (patch) => {
-    setBusy(true); setSaveMsg(null);
+    setBusy(true);
     try {
       const r = await adminFetch('/settings', {
         method: 'POST',
@@ -273,10 +267,10 @@ export default function SettingsPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string; requiresRestart?: boolean };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       if (j.requiresRestart) setPendingRestart(true);
-      setSaveMsg({ tone: 'ok', text: j.requiresRestart ? 'saved — restart the mixer to apply' : 'saved' });
+      notify.ok(j.requiresRestart ? 'saved — restart the mixer to apply' : 'saved');
       await refresh();
     } catch (e) {
-      setSaveMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+      notify.err(errorMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -287,9 +281,9 @@ export default function SettingsPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setPendingRestart(false);
-      setSaveMsg({ tone: 'ok', text: 'mixer restarting — give it a few seconds' });
+      notify.ok('mixer restarting — give it a few seconds');
     } catch (e) {
-      setSaveMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+      notify.err(errorMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -299,10 +293,10 @@ export default function SettingsPanel() {
       const r = await adminFetch('/stream-stop', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setSaveMsg({ tone: 'ok', text: 'stream stopped — station is off air' });
+      notify.ok('stream stopped — station is off air');
       await refresh();
     } catch (e) {
-      setSaveMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+      notify.err(errorMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -312,10 +306,10 @@ export default function SettingsPanel() {
       const r = await adminFetch('/stream-start', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setSaveMsg({ tone: 'ok', text: 'stream started — station is on air' });
+      notify.ok('stream started — station is on air');
       await refresh();
     } catch (e) {
-      setSaveMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+      notify.err(errorMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -332,7 +326,7 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setJingleText('');
       await refresh();
-    } catch (e) { toast.error(`Jingle creation failed: ${e instanceof Error ? e.message : String(e)}`); }
+    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
   };
 
@@ -343,7 +337,7 @@ export default function SettingsPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refresh();
-    } catch (e) { toast.error(`Delete failed: ${e instanceof Error ? e.message : String(e)}`); }
+    } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
   };
 
@@ -365,7 +359,7 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setSfxForm({ name: '', description: '', prompt: '', durationSec: '' });
       await refreshSfx();
-    } catch (e) { toast.error(`Sound effect creation failed: ${e instanceof Error ? e.message : String(e)}`); }
+    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
   };
 
@@ -376,7 +370,7 @@ export default function SettingsPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refreshSfx();
-    } catch (e) { toast.error(`Delete failed: ${e instanceof Error ? e.message : String(e)}`); }
+    } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
   };
 
@@ -476,31 +470,30 @@ export default function SettingsPanel() {
             {activeSection === 'tts' && data.tts && (
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveMsg={saveMsg} saveSettings={saveSettings}
+                saveSettings={saveSettings}
               />
             )}
             {activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveMsg={saveMsg} saveSettings={saveSettings}
+                saveSettings={saveSettings}
               />
             )}
             {activeSection === 'search' && (
               <SearchSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveMsg={saveMsg} saveSettings={saveSettings}
+                saveSettings={saveSettings}
               />
             )}
             {activeSection === 'mixer' && (
               <MixerSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveMsg={saveMsg} saveSettings={saveSettings}
+                saveSettings={saveSettings}
               />
             )}
             {activeSection === 'jingles' && (
               <JinglesSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveMsg={saveMsg}
                 jingleText={jingleText} setJingleText={setJingleText}
                 createJingle={createJingle} saveSettings={saveSettings}
                 onDelete={setConfirmDelete}
@@ -597,27 +590,18 @@ function SectionHeader({ eyebrow, title, sub, metrics }: SectionHeaderProps) {
 interface SaveBarProps {
   note: ReactNode;
   busy: boolean;
-  saveMsg: SaveMessage | null;
   onSave: () => void;
   saveLabel: ReactNode;
   extra?: ReactNode;
 }
 
-function SaveBar({ note, busy, saveMsg, onSave, saveLabel, extra }: SaveBarProps) {
+// Save bar — no inline status; success/failure goes through the global
+// toaster (lib/notify) so it stays consistent with every other admin action.
+function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
       <span className="size-1.5 rounded-full bg-vermilion" />
       <span className="text-[11px] text-muted">{note}</span>
-      {saveMsg && (
-        <span
-          className={cn(
-            'text-[11px]',
-            saveMsg.tone === 'err' ? 'text-[var(--danger)]' : 'text-vermilion',
-          )}
-        >
-          {saveMsg.text}
-        </span>
-      )}
       <span className="ml-auto flex gap-2">
         {extra}
         {/* whileTap fires before the network call — operator feels the
@@ -681,7 +665,6 @@ interface SectionProps {
   form: FormState;
   setForm: FormUpdater;
   busy: boolean;
-  saveMsg: SaveMessage | null;
   saveSettings: SaveSettings;
 }
 
@@ -689,7 +672,7 @@ interface SectionProps {
 // rejects an empty-string SelectItem value.
 const CB_DEFAULT_VOICE = '__cb_default__';
 
-function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
+function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
   const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', cloud: 'Cloud' };
@@ -1045,7 +1028,6 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
           ? `Saving will switch the default engine to ${formEngineLabel}. Applies to jingle rendering and the engine fallback · no mixer restart.`
           : `Default engine: ${savedEngineLabel}. Applies to jingle rendering and the engine fallback · no mixer restart.`}
         busy={busy}
-        saveMsg={saveMsg}
         onSave={save}
         saveLabel="Save TTS settings"
       />
@@ -1055,7 +1037,7 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
 
 /* ── LLM ─────────────────────────────────────────────────────────────── */
 
-function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
+function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     llm: {
       provider: form.llm.provider,
@@ -1282,7 +1264,6 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call — no restart needed.`}
         busy={busy}
-        saveMsg={saveMsg}
         onSave={save}
         saveLabel="Save LLM provider"
       />
@@ -1292,7 +1273,7 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
 
 /* ── Web search ──────────────────────────────────────────────────────── */
 
-function SearchSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
+function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     search: {
       provider: form.search.provider,
@@ -1397,7 +1378,6 @@ function SearchSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sec
       <SaveBar
         note="Applies to the next web-search call — no restart needed."
         busy={busy}
-        saveMsg={saveMsg}
         onSave={save}
         saveLabel="Save web search"
       />
@@ -1407,7 +1387,7 @@ function SearchSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sec
 
 /* ── Mixer ───────────────────────────────────────────────────────────── */
 
-function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
+function MixerSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     crossfadeDuration: parseFloat(form.crossfadeDuration),
     weather: {
@@ -1497,7 +1477,6 @@ function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sect
       <SaveBar
         note="Station location applies live · Crossfade requires a mixer restart (danger zone)."
         busy={busy}
-        saveMsg={saveMsg}
         onSave={save}
         saveLabel="Save mixer settings"
       />

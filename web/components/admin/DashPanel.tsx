@@ -6,6 +6,7 @@
 import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import type { SessionTurn } from '../../lib/types';
 import type { NowPlayingTrack, StationContext, ActiveShow, DjState, ListenerCount, QueueEntry } from '../../lib/types';
@@ -48,11 +49,6 @@ interface DashStatus {
   sessionMessages?: SessionTurn[];
 }
 
-interface Feedback {
-  tone: 'ok' | 'err';
-  text: string;
-}
-
 interface ActResponse {
   ok?: boolean;
   spoken?: string;
@@ -64,7 +60,6 @@ export default function DashPanel() {
   const [status, setStatus] = useState<DashStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const [sayText, setSayText] = useState('');
   const [sayMode, setSayMode] = useState('raw');
@@ -110,10 +105,9 @@ export default function DashPanel() {
     if (logRef.current) logRef.current.scrollTop = 0;
   }, [status?.sessionMessages?.length]);
 
-  // Generic POST helper — drives the busy + feedback state.
+  // Generic POST helper — drives the busy state; result goes to the toast.
   const act = async (key: string, path: string, body: Record<string, unknown> | null, label: string): Promise<ActResponse | null> => {
     setBusy(key);
-    setFeedback(null);
     try {
       const r = await adminFetch(path, {
         method: 'POST',
@@ -122,13 +116,10 @@ export default function DashPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as ActResponse;
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setFeedback({
-        tone: 'ok',
-        text: j.spoken ? `on air: “${j.spoken}”` : `${label} — done`,
-      });
+      notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} — done`);
       return j;
     } catch (e) {
-      setFeedback({ tone: 'err', text: `${label}: ${e instanceof Error ? e.message : String(e)}` });
+      notify.err(`${label}: ${errorMessage(e)}`);
       return null;
     } finally {
       setBusy(null);
@@ -190,19 +181,6 @@ export default function DashPanel() {
 
   return (
     <div className="grid gap-4">
-      {feedback && (
-        <div className="flex items-center justify-end">
-          <span
-            className={cn(
-              'text-[11px]',
-              feedback.tone === 'err' ? 'text-[var(--danger)]' : 'text-vermilion',
-            )}
-          >
-            {feedback.text}
-          </span>
-        </div>
-      )}
-
       {err && (
         <V3Alert tone="error" title="controller error">
           {err}

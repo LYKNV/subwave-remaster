@@ -46,14 +46,17 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   // Dev compose tags `sub-wave-liquidsoap:local` and has no `image:` on the
   // controller, so it must build locally. Prod / prod-byo reference
   // published `ghcr.io/perminder-klair/subwave-*` images — pull them
-  // instead of rebuilding; operators can force a rebuild per-service via
-  // `subwave restart <svc> --build`.
+  // instead of rebuilding. `--pull always` on prod forces a fresh pull so
+  // a stale locally-tagged image doesn't mask the upstream release.
+  // Operators can force a rebuild per-service via `subwave restart <svc> --build`.
   const wantBuild = target.env === 'dev';
+  const wantPull = target.env === 'dev' ? undefined : ('always' as const);
   header(`Starting ${target.env} stack`);
-  muted(`docker compose -f ${target.file} up -d${wantBuild ? ' --build' : ''}`);
+  const flags = `${wantBuild ? ' --build' : ''}${wantPull ? ` --pull ${wantPull}` : ''}`;
+  muted(`docker compose -f ${target.file} up -d${flags}`);
   console.log();
 
-  const code = await composeUp(target, { build: wantBuild });
+  const code = await composeUp(target, { build: wantBuild, pull: wantPull });
   console.log();
   if (code !== 0) {
     err(`docker compose exited ${code}`);

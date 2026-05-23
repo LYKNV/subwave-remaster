@@ -11,12 +11,24 @@ function args(file: ComposeFile, rest: string[]): string[] {
   return ['compose', '-f', file.file, ...rest];
 }
 
-// Run `docker compose up -d [--build]` and stream output to the user's
-// terminal. Resolves with the docker exit code.
-export function composeUp(file: ComposeFile, opts: { build?: boolean } = {}): Promise<number> {
+// Run `docker compose up -d [--build] [--pull always]` and stream output to
+// the user's terminal. Resolves with the docker exit code.
+export function composeUp(
+  file: ComposeFile,
+  opts: { build?: boolean; pull?: 'always' | 'missing' } = {},
+): Promise<number> {
   const a = ['up', '-d'];
   if (opts.build) a.push('--build');
+  if (opts.pull) a.push('--pull', opts.pull);
   return run(file, a);
+}
+
+// `docker compose pull` for refreshing images without bringing the stack
+// up. Use before composeUp() when the local cache may have a stale image
+// tagged the same name (e.g. a previously-built local image masking the
+// upstream GHCR release).
+export function composePull(file: ComposeFile): Promise<number> {
+  return run(file, ['pull']);
 }
 
 export function composeDown(file: ComposeFile): Promise<number> {

@@ -167,13 +167,18 @@ export async function runSetupCommand(): Promise<void> {
   // Dev compose tags `sub-wave-liquidsoap:local` and has no `image:` on the
   // controller, so it must build locally on first install. Prod / prod-byo
   // reference published `ghcr.io/perminder-klair/subwave-*` images — pull
-  // them instead of rebuilding from source. Operators hacking on the code
-  // can force a rebuild later via `subwave restart <svc> --build`.
+  // them instead of rebuilding from source. `--pull always` forces a fresh
+  // pull on prod so a previously-built local image (e.g. from an earlier
+  // setup run, which may have baked in a stale web/.env.local) doesn't keep
+  // masking the upstream GHCR release. Operators hacking on the code can
+  // force a rebuild later via `subwave restart <svc> --build`.
   const wantBuild = mode === 'dev';
+  const wantPull = mode === 'dev' ? undefined : ('always' as const);
   header(`Starting ${mode} stack`);
-  muted(`docker compose -f ${file.file} up -d${wantBuild ? ' --build' : ''}`);
+  const flags = `${wantBuild ? ' --build' : ''}${wantPull ? ` --pull ${wantPull}` : ''}`;
+  muted(`docker compose -f ${file.file} up -d${flags}`);
   console.log();
-  const upCode = await composeUp(file, { build: wantBuild });
+  const upCode = await composeUp(file, { build: wantBuild, pull: wantPull });
   if (upCode !== 0) {
     err(`docker compose exited ${upCode}`);
     muted('→ inspect: `subwave logs <service>`. Resolve and re-run setup.');

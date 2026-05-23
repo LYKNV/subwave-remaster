@@ -292,14 +292,14 @@ async function pickMode(): Promise<Mode> {
         hint: 'docker-compose.prod.yml · Caddy :7700 · web baked into image',
       },
       {
-        value: 'dev' as const,
-        label: 'dev — local hacking',
-        hint: 'docker-compose.yml · controller :7701 · web on :7700 separately',
-      },
-      {
         value: 'prod-byo' as const,
         label: 'prod (BYO proxy) — Traefik / nginx / your own Caddy',
         hint: 'docker-compose.byo-proxy.yml · web :7700 · controller :7701 · icecast :7702',
+      },
+      {
+        value: 'dev' as const,
+        label: 'dev — local hacking',
+        hint: 'docker-compose.yml · controller :7701 · web on :7700 separately',
       },
     ],
   }), { backOnCancel: false });

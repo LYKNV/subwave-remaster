@@ -13,10 +13,16 @@
 #      Docker image uses same-origin defaults via Caddy and ignores this file
 #   7. Renders state/icecast.xml from docker/icecast.xml.template using the
 #      passwords above (mounted read-only by both compose files)
-#   8. Renders 30 s of low pink noise as sounds/emergency.mp3 (last-resort
+#   8. Pre-seeds state/settings.json with llm.ollamaUrl pointing at
+#      host.docker.internal:11434 so the Docker-running controller can reach
+#      a host-installed Ollama out of the box (the controller's default is
+#      localhost:11434, which resolves to the container itself). Only the
+#      one field is written; settings.load() merges everything else from
+#      defaults. Native dev users override via the admin Settings UI.
+#   9. Renders 30 s of low pink noise as sounds/emergency.mp3 (last-resort
 #      fallback) — ffmpeg is borrowed from the Liquidsoap image, no host
 #      install required
-#   9. Touches auto.m3u and jingles.m3u so Liquidsoap's reload_mode="watch"
+#  10. Touches auto.m3u and jingles.m3u so Liquidsoap's reload_mode="watch"
 #      has something to watch on first boot
 
 set -euo pipefail
@@ -133,7 +139,30 @@ else
 fi
 chmod 644 "$ICECAST_RENDERED"
 
-# ---- 6. Emergency audio -----------------------------------------------------
+# ---- 6. Pre-seed state/settings.json ---------------------------------------
+# The controller defaults llm.ollamaUrl to http://localhost:11434, which works
+# for `npm run dev` but breaks for the Docker stack because `localhost` inside
+# the controller container resolves to the container itself, not the host
+# running Ollama. The compose files already wire `host.docker.internal:host-
+# gateway` extra_hosts; we just point the URL at it so first-boot in Docker
+# works without a UI visit. settings.load() merges JSON with code defaults, so
+# we write the single field we want to override and leave the rest untouched.
+SETTINGS_FILE="$STATE_DIR/settings.json"
+if [[ ! -f "$SETTINGS_FILE" ]]; then
+  say "Pre-seeding $SETTINGS_FILE with Docker-friendly Ollama URL"
+  cat > "$SETTINGS_FILE" <<'EOF'
+{
+  "llm": {
+    "ollamaUrl": "http://host.docker.internal:11434"
+  }
+}
+EOF
+  chmod 644 "$SETTINGS_FILE"
+else
+  say "$SETTINGS_FILE exists — leaving it alone"
+fi
+
+# ---- 7. Emergency audio -----------------------------------------------------
 mkdir -p "$SOUNDS_DIR"
 if [[ ! -f "$SOUNDS_DIR/emergency.mp3" ]]; then
   if command -v docker &>/dev/null; then
@@ -147,7 +176,7 @@ if [[ ! -f "$SOUNDS_DIR/emergency.mp3" ]]; then
   fi
 fi
 
-# ---- 7. Studio bed ----------------------------------------------------------
+# ---- 8. Studio bed ----------------------------------------------------------
 # Continuous low-level ambient loop that Liquidsoap mixes under the broadcast.
 # Masked by music, audible under ducked music when the DJ talks solo. Replace
 # sounds/bed.mp3 with your own ambient loop any time.

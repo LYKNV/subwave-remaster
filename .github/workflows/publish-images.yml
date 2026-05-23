@@ -1,16 +1,16 @@
 name: Publish images
 
-# Builds and pushes the three first-party SUB/WAVE images to GHCR.
-# Caddy and Icecast are not built here — they come straight from upstream
-# (caddy:2-alpine and moul/icecast:latest).
+# Builds and pushes the five first-party SUB/WAVE images to GHCR.
 #
 # Triggers:
 #   - push of a tag like v1.2.3 → versioned release (also tagged :latest)
 #   - manual workflow_dispatch    → ad-hoc rebuild from the chosen ref
 #
 # Images:
+#   ghcr.io/<owner>/subwave-caddy      (bakes docker/Caddyfile)
+#   ghcr.io/<owner>/subwave-icecast    (bakes icecast.xml.template + auto-secrets entrypoint)
 #   ghcr.io/<owner>/subwave-controller
-#   ghcr.io/<owner>/subwave-liquidsoap
+#   ghcr.io/<owner>/subwave-liquidsoap (bakes radio.liq + sounds/)
 #   ghcr.io/<owner>/subwave-web
 #
 # Platforms: linux/amd64 only. Dockerfile.controller pins amd64 in compose
@@ -33,6 +33,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - image: subwave-caddy
+            dockerfile: docker/Dockerfile.caddy
+          - image: subwave-icecast
+            dockerfile: docker/Dockerfile.icecast
           - image: subwave-controller
             dockerfile: docker/Dockerfile.controller
           - image: subwave-liquidsoap

@@ -1,5 +1,5 @@
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function Development() {
   return (
@@ -7,7 +7,7 @@ export default function Development() {
       eyebrow="SETUP · 04"
       title="Hacking on SUB/WAVE."
       intro="Three compose files, three deployment shapes. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can iterate on the web without a rebuild. The two prod variants differ only at the edge — one bundles Caddy, the other binds host ports for your own reverse proxy."
-      current="/setup/development"
+      current="/docs/setup/development"
     >
       <section className="bs-section">
         <p className="bs-eyebrow">THE THREE STACKS</p>

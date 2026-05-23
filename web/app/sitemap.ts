@@ -18,12 +18,12 @@ const ROUTES = [
   '/manual/mcp',
   '/manual/clients',
   '/manual/faq',
-  '/setup',
-  '/setup/prerequisites',
-  '/setup/quick-start',
-  '/setup/manual',
-  '/setup/development',
-  '/setup/updates',
+  '/docs/setup',
+  '/docs/setup/prerequisites',
+  '/docs/setup/quick-start',
+  '/docs/setup/manual',
+  '/docs/setup/development',
+  '/docs/setup/updates',
 ];
 
 export default function sitemap(): MetadataRoute.Sitemap {

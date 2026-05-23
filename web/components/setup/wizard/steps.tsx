@@ -1,0 +1,432 @@
+'use client';
+
+import { useState } from 'react';
+import type { WizardController } from './useWizard';
+
+// Tiny presentation primitives kept local to the wizard — avoids dragging the
+// full admin UI library into a screen most operators see exactly once.
+
+function StepHeader({ title, blurb }: { title: string; blurb: string }) {
+  return (
+    <div className="mb-5">
+      <h2 className="text-xl font-semibold text-ink">{title}</h2>
+      <p className="mt-1 text-sm text-ink/70">{blurb}</p>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium uppercase tracking-wide text-ink/60">{label}</span>
+      {children}
+      {hint ? <span className="text-xs text-ink/50">{hint}</span> : null}
+    </label>
+  );
+}
+
+function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={
+        'rounded border border-ink/30 bg-bg px-2 py-1.5 text-sm focus:border-ink focus:outline-none ' +
+        (props.className || '')
+      }
+    />
+  );
+}
+
+function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={
+        'rounded border border-ink/30 bg-bg px-2 py-1.5 text-sm focus:border-ink focus:outline-none ' +
+        (props.className || '')
+      }
+    />
+  );
+}
+
+function TestPill({ result }: { result: { ok: boolean | null; msg?: string } }) {
+  if (result.ok === null) return null;
+  return (
+    <div
+      className={
+        'mt-2 inline-block rounded px-2 py-0.5 text-xs ' +
+        (result.ok ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900')
+      }
+    >
+      {result.ok ? '✓ ' : '✗ '}
+      {result.msg || (result.ok ? 'connection ok' : 'connection failed')}
+    </div>
+  );
+}
+
+// ─── NAVIDROME ─────────────────────────────────────────────────────────────
+export function NavidromeStep({ w }: { w: WizardController }) {
+  const [busy, setBusy] = useState(false);
+  const onTest = async () => {
+    setBusy(true);
+    await w.testNavidrome();
+    setBusy(false);
+  };
+  return (
+    <div>
+      <StepHeader
+        title="Connect Navidrome"
+        blurb="SUB/WAVE plays from your Subsonic-compatible music library. Point it at your Navidrome and the AI DJ takes over."
+      />
+      <div className="grid gap-3">
+        <Field label="Navidrome URL" hint="e.g. http://host.docker.internal:4533">
+          <TextInput
+            value={w.data.navidrome.url}
+            placeholder="http://host.docker.internal:4533"
+            onChange={e =>
+              w.patch(d => ({ navidrome: { ...d.navidrome, url: e.target.value }, navidromeTest: { ok: null } }))
+            }
+          />
+        </Field>
+        <Field label="Username">
+          <TextInput
+            value={w.data.navidrome.user}
+            autoComplete="username"
+            onChange={e =>
+              w.patch(d => ({ navidrome: { ...d.navidrome, user: e.target.value }, navidromeTest: { ok: null } }))
+            }
+          />
+        </Field>
+        <Field label="Password">
+          <TextInput
+            type="password"
+            value={w.data.navidrome.pass}
+            autoComplete="current-password"
+            onChange={e =>
+              w.patch(d => ({ navidrome: { ...d.navidrome, pass: e.target.value }, navidromeTest: { ok: null } }))
+            }
+          />
+        </Field>
+        <div>
+          <button
+            type="button"
+            onClick={onTest}
+            disabled={busy || !w.data.navidrome.url || !w.data.navidrome.user || !w.data.navidrome.pass}
+            className="rounded border border-ink bg-ink px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? 'Testing…' : 'Test connection'}
+          </button>
+          <TestPill result={w.data.navidromeTest} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LLM ───────────────────────────────────────────────────────────────────
+const LLM_PROVIDERS = [
+  { id: 'ollama', label: 'Ollama (local, no key)' },
+  { id: 'anthropic', label: 'Anthropic Claude' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'google', label: 'Google Gemini' },
+  { id: 'deepseek', label: 'DeepSeek' },
+  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'gateway', label: 'Vercel AI Gateway' },
+  { id: 'openai-compatible', label: 'OpenAI-compatible (self-hosted)' },
+];
+
+export function LlmStep({ w }: { w: WizardController }) {
+  const [busy, setBusy] = useState(false);
+  const isOllama = w.data.llm.provider === 'ollama';
+  const isCustom = w.data.llm.provider === 'openai-compatible';
+  const onTest = async () => {
+    setBusy(true);
+    await w.testLlm();
+    setBusy(false);
+  };
+  return (
+    <div>
+      <StepHeader
+        title="Pick a language model"
+        blurb="The DJ talks between tracks. Ollama running on the host is the homelab default — no API key needed."
+      />
+      <div className="grid gap-3">
+        <Field label="Provider">
+          <Select
+            value={w.data.llm.provider}
+            onChange={e =>
+              w.patch(d => ({ llm: { ...d.llm, provider: e.target.value }, llmTest: { ok: null } }))
+            }
+          >
+            {LLM_PROVIDERS.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Model" hint="e.g. llama3.1:8b · claude-sonnet-4 · gpt-4o-mini">
+          <TextInput
+            value={w.data.llm.model}
+            onChange={e => w.patch(d => ({ llm: { ...d.llm, model: e.target.value }, llmTest: { ok: null } }))}
+          />
+        </Field>
+        {isOllama && (
+          <Field label="Ollama URL" hint="Reachable from the controller container">
+            <TextInput
+              value={w.data.llm.ollamaUrl}
+              onChange={e =>
+                w.patch(d => ({ llm: { ...d.llm, ollamaUrl: e.target.value }, llmTest: { ok: null } }))
+              }
+            />
+          </Field>
+        )}
+        {isCustom && (
+          <Field label="Base URL" hint="e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)">
+            <TextInput
+              value={w.data.llm.baseUrl}
+              onChange={e =>
+                w.patch(d => ({ llm: { ...d.llm, baseUrl: e.target.value }, llmTest: { ok: null } }))
+              }
+            />
+          </Field>
+        )}
+        {!isOllama && (
+          <Field label="API key" hint="Stored in state/secrets.env (mode 0600), not in settings.json">
+            <TextInput
+              type="password"
+              value={w.data.llm.apiKey}
+              onChange={e =>
+                w.patch(d => ({ llm: { ...d.llm, apiKey: e.target.value }, llmTest: { ok: null } }))
+              }
+            />
+          </Field>
+        )}
+        <div>
+          <button
+            type="button"
+            onClick={onTest}
+            disabled={busy || !w.data.llm.model}
+            className="rounded border border-ink bg-ink px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? 'Asking…' : 'Send a test prompt'}
+          </button>
+          <TestPill result={w.data.llmTest} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TTS ───────────────────────────────────────────────────────────────────
+export function TtsStep({ w }: { w: WizardController }) {
+  return (
+    <div>
+      <StepHeader
+        title="Choose a voice engine"
+        blurb="Piper is the default — fast, local, decent. Kokoro is slower but more natural. Cloud routes through OpenAI or ElevenLabs."
+      />
+      <div className="grid gap-3">
+        <Field label="Default engine">
+          <Select
+            value={w.data.tts.defaultEngine}
+            onChange={e =>
+              w.patch(d => ({
+                tts: { ...d.tts, defaultEngine: e.target.value as any },
+              }))
+            }
+          >
+            <option value="piper">Piper (fast, local)</option>
+            <option value="kokoro">Kokoro (natural, local)</option>
+            <option value="cloud">Cloud (OpenAI / ElevenLabs)</option>
+            <option value="chatterbox">Chatterbox (voice cloning, opt-in build)</option>
+          </Select>
+        </Field>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={w.data.tts.cloud.enabled}
+            onChange={e =>
+              w.patch(d => ({
+                tts: { ...d.tts, cloud: { ...d.tts.cloud, enabled: e.target.checked } },
+              }))
+            }
+          />
+          Enable cloud TTS as a fallback
+        </label>
+        {w.data.tts.cloud.enabled && (
+          <>
+            <Field label="Cloud TTS provider">
+              <Select
+                value={w.data.tts.cloud.provider}
+                onChange={e =>
+                  w.patch(d => ({
+                    tts: { ...d.tts, cloud: { ...d.tts.cloud, provider: e.target.value } },
+                  }))
+                }
+              >
+                <option value="openai">OpenAI</option>
+                <option value="elevenlabs">ElevenLabs</option>
+              </Select>
+            </Field>
+            <Field label="API key">
+              <TextInput
+                type="password"
+                value={w.data.tts.cloud.apiKey}
+                onChange={e =>
+                  w.patch(d => ({
+                    tts: { ...d.tts, cloud: { ...d.tts.cloud, apiKey: e.target.value } },
+                  }))
+                }
+              />
+            </Field>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── DJ persona ────────────────────────────────────────────────────────────
+export function DjStep({ w }: { w: WizardController }) {
+  return (
+    <div>
+      <StepHeader
+        title="DJ persona"
+        blurb="The DJ's voice on air. Name your station, set your location for weather, and optionally override the personality."
+      />
+      <div className="grid gap-3">
+        <Field label="Station name">
+          <TextInput
+            value={w.data.dj.stationName}
+            onChange={e => w.patch(d => ({ dj: { ...d.dj, stationName: e.target.value } }))}
+          />
+        </Field>
+        <Field label="Location" hint="Used for weather + 'broadcasting from…' prompts">
+          <TextInput
+            value={w.data.dj.locationName}
+            onChange={e => w.patch(d => ({ dj: { ...d.dj, locationName: e.target.value } }))}
+          />
+        </Field>
+        <Field label="DJ system prompt (optional)" hint="Leave blank for the default. Must contain {name}.">
+          <textarea
+            value={w.data.dj.djPrompt}
+            placeholder="(default — leave blank unless you want to override)"
+            rows={5}
+            onChange={e => w.patch(d => ({ dj: { ...d.dj, djPrompt: e.target.value } }))}
+            className="rounded border border-ink/30 bg-bg px-2 py-1.5 font-mono text-xs focus:border-ink focus:outline-none"
+          />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+// ─── JINGLES ──────────────────────────────────────────────────────────────
+export function JinglesStep({ w }: { w: WizardController }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const onGenerate = async () => {
+    setBusy(true);
+    setResult(null);
+    const r = await w.generateJingles();
+    setResult({
+      ok: r.ok,
+      msg: r.ok
+        ? `Rendered ${r.created || 0} new jingle${(r.created || 0) === 1 ? '' : 's'} (${r.total || 0} total).`
+        : r.error || 'failed',
+    });
+    setBusy(false);
+  };
+  return (
+    <div>
+      <StepHeader
+        title="Generate station idents"
+        blurb='5 default jingles, rendered with your chosen TTS engine. Plays between tracks. You can re-run this later in the admin Jingles panel.'
+      />
+      <button
+        type="button"
+        onClick={onGenerate}
+        disabled={busy}
+        className="rounded border border-ink bg-ink px-4 py-2 text-sm font-medium uppercase tracking-wide text-bg hover:opacity-90 disabled:opacity-40"
+      >
+        {busy ? 'Rendering…' : 'Generate now'}
+      </button>
+      <p className="mt-3 text-xs text-ink/60">
+        Or click <strong>Next</strong> to skip — jingles aren&apos;t required for the station to broadcast.
+      </p>
+      {result && (
+        <div
+          className={
+            'mt-3 rounded px-3 py-2 text-sm ' +
+            (result.ok ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900')
+          }
+        >
+          {result.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── REVIEW + SAVE ─────────────────────────────────────────────────────────
+export function ReviewStep({
+  w,
+  onDone,
+}: {
+  w: WizardController;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const onSave = async () => {
+    setBusy(true);
+    setErr(null);
+    const r = await w.save();
+    if (r.ok) {
+      onDone();
+    } else {
+      setErr(r.error || 'save failed');
+      setBusy(false);
+    }
+  };
+  const rows: Array<[string, string]> = [
+    ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
+    ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
+    ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
+    ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],
+  ];
+  return (
+    <div>
+      <StepHeader
+        title="All set?"
+        blurb="Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600)."
+      />
+      <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-2 text-sm">
+        {rows.map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt className="text-ink/60">{k}</dt>
+            <dd className="text-ink">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {err && <p className="mt-3 text-sm text-red-700">{err}</p>}
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={busy}
+        className="mt-5 rounded border border-ink bg-ink px-4 py-2 text-sm font-medium uppercase tracking-wide text-bg hover:opacity-90 disabled:opacity-40"
+      >
+        {busy ? 'Saving…' : 'Save and finish'}
+      </button>
+    </div>
+  );
+}

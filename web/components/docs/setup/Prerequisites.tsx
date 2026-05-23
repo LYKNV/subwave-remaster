@@ -7,7 +7,7 @@ export default function Prerequisites() {
       eyebrow="SETUP · 01"
       title="Have these ready."
       intro="SUB/WAVE doesn't ship Navidrome or Ollama — it talks to yours. Get them running first if they aren't already, and note the URLs and credentials. The install wizard will ask for them."
-      current="/setup/prerequisites"
+      current="/docs/setup/prerequisites"
     >
       <section className="bs-section">
         <p className="bs-eyebrow">THE CHECKLIST</p>
@@ -65,8 +65,8 @@ export default function Prerequisites() {
         <h2>Pick an install path.</h2>
         <p>
           With Navidrome and an LLM reachable, head to{' '}
-          <Link href="/setup/quick-start" className="bs-link">Quick Start</Link> for
-          the wizard, or <Link href="/setup/manual" className="bs-link">Manual
+          <Link href="/docs/setup/quick-start" className="bs-link">Quick Start</Link> for
+          the wizard, or <Link href="/docs/setup/manual" className="bs-link">Manual
           Install</Link> to run the commands yourself.
         </p>
       </section>

@@ -1,4 +1,4 @@
-import Development from '../../../components/setup/Development';
+import Development from "@/components/docs/setup/Development";
 
 export const metadata = { title: 'SUB/WAVE — Setup · Development' };
 

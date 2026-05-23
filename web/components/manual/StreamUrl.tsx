@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import CodeBlock from '../setup/CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 // Renders the station's own stream URL in a copyable code block. The URL is
 // resolved from the live browser origin after mount, so the guide always

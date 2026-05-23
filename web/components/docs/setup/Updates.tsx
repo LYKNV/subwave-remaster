@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function Updates() {
   return (
@@ -8,7 +8,7 @@ export default function Updates() {
       eyebrow="SETUP · 05"
       title="Updates & help."
       intro="Pulling a new version, rebuilding only what changed, and what to check when the stream goes quiet. Liquidsoap and the Controller COPY source at build time, so docker compose restart does not pick up code changes — you need up -d --build."
-      current="/setup/updates"
+      current="/docs/setup/updates"
     >
       <section className="bs-section">
         <p className="bs-eyebrow">KEEPING IT UP TO DATE</p>

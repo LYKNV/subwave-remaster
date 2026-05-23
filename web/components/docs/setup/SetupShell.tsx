@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import Masthead from '../landing/Masthead';
-import StationFooter from '../landing/StationFooter';
+import Masthead from '@/components/landing/Masthead';
+import StationFooter from '@/components/landing/StationFooter';
 import SetupNav from './SetupNav';
 
 // Shared chrome for every /setup/* page: the broadsheet masthead, a sticky

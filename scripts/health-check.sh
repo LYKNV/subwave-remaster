@@ -17,8 +17,8 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO" || { echo "subwave repo not at $REPO"; exit 2; }
 
 # --- pick the live compose file ---------------------------------------------
-PROD="docker/docker-compose.prod.yml"
-DEV="docker/docker-compose.yml"
+PROD="docker-compose.prod.yml"
+DEV="docker-compose.yml"
 COMPOSE=""
 for f in "$PROD" "$DEV"; do
   if [ -n "$(docker compose -f "$f" ps -q 2>/dev/null)" ]; then

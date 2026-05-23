@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 const PATHS = [
   {
@@ -27,7 +27,7 @@ export default function SetupOverview() {
       title="Run your own SUB/WAVE."
       meta="≈ 10 min · 4 commands · needs Navidrome + an LLM"
       intro="SUB/WAVE points at your Navidrome library and your LLM — a local Ollama box by default, or any hosted provider you prefer. Once it's running, the AI DJ broadcasts from your homelab, plays from your music collection, and answers requests from anyone with the URL."
-      current="/setup"
+      current="/docs/setup"
       heroAside={
         <div className="bs-dj-glyph" aria-hidden="true">
           <div className="bs-dj-vinyl" />
@@ -48,7 +48,7 @@ npm run setup`}</CodeBlock>
           <p className="text-muted">
             The wizard asks <em>dev or production?</em>, prompts for Navidrome and
             Ollama, boots the stack, and renders the station jingles.{' '}
-            <Link href="/setup/quick-start" className="bs-link">
+            <Link href="/docs/setup/quick-start" className="bs-link">
               Full walkthrough →
             </Link>
           </p>
@@ -66,7 +66,7 @@ npm run setup`}</CodeBlock>
         <p>
           SUB/WAVE talks to services it doesn't ship, so a couple of things need
           to be running first.{' '}
-          <Link href="/setup/prerequisites" className="bs-link">Prerequisites</Link>{' '}
+          <Link href="/docs/setup/prerequisites" className="bs-link">Prerequisites</Link>{' '}
           covers them, then pick whichever install path suits you — they all land
           at the same place:
         </p>

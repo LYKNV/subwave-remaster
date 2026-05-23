@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 const ENV_TEMPLATE = `# controller/.env — the keys you must set
 
@@ -29,7 +29,7 @@ export default function ManualInstall() {
       eyebrow="SETUP · 03"
       title="Run the commands yourself."
       intro="The same outcome as the wizard, just without the wizard wrapping it. Useful if you're scripting the install, want a non-standard layout, or just prefer running each command by hand. These six steps land at a public-facing single-host deploy — Caddy on the edge, Cloudflare in front, internal-only Icecast, Controller, and Web."
-      current="/setup/manual"
+      current="/docs/setup/manual"
     >
       <section className="bs-section">
         <div className="bs-step">
@@ -213,7 +213,7 @@ $EDITOR controller/.env`}</CodeBlock>
         <h2>Keep it running.</h2>
         <p>
           The stack is on the air. When a new version lands, head to{' '}
-          <Link href="/setup/updates" className="bs-link">Updates &amp; Help</Link> for the
+          <Link href="/docs/setup/updates" className="bs-link">Updates &amp; Help</Link> for the
           rebuild-only-what-changed workflow and the troubleshooting checklist.
         </p>
       </section>

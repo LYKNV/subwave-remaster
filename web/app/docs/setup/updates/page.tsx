@@ -1,4 +1,4 @@
-import Updates from '../../../components/setup/Updates';
+import Updates from "@/components/docs/setup/Updates";
 
 export const metadata = { title: 'SUB/WAVE — Setup · Updates & Help' };
 

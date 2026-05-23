@@ -118,25 +118,40 @@ of these files in `state/`:
 The web UI polls the controller over HTTP (`/now-playing`, `/state` every 5s).
 Browsers pull audio directly from Icecast.
 
-## Quick start (local dev, Mac smoke test)
-
-The operator CLI's **setup wizard** handles the whole first boot — preflight
-checks, Navidrome + LLM + admin credentials (each probed live), the env files,
-`scripts/setup.sh` (icecast.xml + studio audio), and `docker compose up -d`.
-From the repo root:
+## Quick start (no clone required)
 
 ```bash
-npm install            # CLI runtime deps (the tsx loader)
-npm start -- setup     # interactive wizard — pick "dev"
-npm run dev:web        # web UI on :7700 — a separate, hot-reloading process
+mkdir subwave && cd subwave
+curl -O https://raw.githubusercontent.com/perminder-klair/subwave/main/docker-compose.prod.yml
+curl -O https://raw.githubusercontent.com/perminder-klair/subwave/main/.env.example
+mv .env.example .env
+# Edit .env — set ADMIN_USER, ADMIN_PASS, SITE_URL (three vars, that's it).
+docker compose -f docker-compose.prod.yml up -d
+# Then open https://your-host/setup — the web wizard collects Navidrome,
+# LLM, TTS, DJ persona, and offers to render jingles.
 ```
 
-In dev the wizard runs Icecast + Liquidsoap + Controller in Docker; only the
-Next.js web UI runs as a separate host process. You'll need a reachable
-**Navidrome** instance and an **LLM provider** — the homelab default is a local
-**Ollama** box (no API key needed); the wizard collects and probes both.
+The wizard probes Navidrome and your LLM provider live, persists everything to
+`state/`, and flips the station on-air. Cloud LLM/TTS API keys land in
+`state/secrets.env` (mode 0600); Navidrome creds + the "setup done" flag land
+in `state/setup-config.json`; everything else (DJ persona, jingle ratio,
+shows) goes through the existing `settings.json`.
 
-Running the steps by hand instead — see *Common commands* in
+### Local dev (Mac smoke test)
+
+```bash
+git clone https://github.com/perminder-klair/subwave.git && cd subwave
+./scripts/setup.sh          # scaffolds a 3-var root .env + state/
+docker compose up -d        # Icecast + Liquidsoap + Controller — from repo root
+cd web && npm install && npm run dev   # web UI on :7700 — separate, hot-reloading
+# Then http://localhost:7700/setup to finish configuration.
+```
+
+Dev compose still bind-mounts `radio.liq` and `sounds/` from the repo so edits
+take effect with a `docker compose restart liquidsoap` — no rebuild.
+
+The operator CLI is still around — `npm start` opens the status-aware menu,
+and `npm start -- doctor` runs the diagnostic sweep. See *Common commands* in
 [`CLAUDE.md`](CLAUDE.md).
 
 The same CLI doubles as the console for running the station. Run `npm start`
@@ -161,23 +176,16 @@ npm start -- stop               # docker compose down (confirms first)
 ## Production deploy
 
 Single Linux host, Cloudflare terminating TLS, Caddy routing to four internal
-services. The same setup wizard covers first boot — run it on the host and
-pick **"prod"**:
-
-```bash
-npm install
-npm start -- setup     # prod mode — runs scripts/setup.sh, builds and starts
-                       # the prod stack, waits for /health, offers to render jingles
-```
-
-See **[`DEPLOY.md`](DEPLOY.md)** for the full walkthrough — host prerequisites,
-secrets, Cloudflare setup, updates, and backup.
+services. The [no-clone quickstart above](#quick-start-no-clone-required) is
+the canonical path — `curl` two files, fill in three vars, `docker compose
+up -d`, finish setup in the browser. See **[`DEPLOY.md`](DEPLOY.md)** for host
+prerequisites, Cloudflare setup, updates, and backup.
 
 **Bring your own reverse proxy.** If you already run Traefik, nginx, or your
 own Caddy in your homelab, swap the bundled-Caddy compose for the BYO variant:
 
 ```bash
-docker compose -f docker/docker-compose.byo-proxy.yml up -d
+docker compose -f docker-compose.byo-proxy.yml up -d
 ```
 
 That exposes the web UI on `:7700`, the controller API on `:7701`, and the
@@ -185,9 +193,9 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three �
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-controller`,
-`-liquidsoap`, and `-web`. Both prod compose files pull `:latest` by default;
-pin a version with `SUBWAVE_VERSION=v1.2.3` in `docker/.env`.
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,icecast,controller,liquidsoap,web}`.
+All compose files pull `:latest` by default; pin a version with
+`SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 
 ## Repository layout
 

@@ -1,4 +1,4 @@
-import QuickStart from '../../../components/setup/QuickStart';
+import QuickStart from "@/components/docs/setup/QuickStart";
 
 export const metadata = { title: 'SUB/WAVE — Setup · Quick Start' };
 

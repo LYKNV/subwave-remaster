@@ -20,7 +20,30 @@ SECRETS=/var/sub-wave/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
-mkdir -p /var/sub-wave
+# ---- Bootstrap shared state dirs --------------------------------------------
+# Containers run as different UIDs (root, icecast2, liquidsoap@10000) and all
+# need to read+write the shared state volume. Icecast is first via the compose
+# health gate, so it pre-creates the subdirs with mode 777 before liquidsoap
+# and controller mount over them. Saves operators from running setup.sh just
+# to fix perms on the bind-mount source dirs.
+
+mkdir -p /var/sub-wave \
+         /var/sub-wave/voice \
+         /var/sub-wave/archive \
+         /var/sub-wave/jingles \
+         /var/sub-wave/logs \
+         /var/sub-wave/sessions \
+         /var/sub-wave/sfx
+chmod 777 /var/sub-wave \
+          /var/sub-wave/voice \
+          /var/sub-wave/archive \
+          /var/sub-wave/jingles \
+          /var/sub-wave/logs \
+          /var/sub-wave/sessions \
+          /var/sub-wave/sfx
+# Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
+touch /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
+chmod 666 /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
 
 # ---- Resolve passwords ------------------------------------------------------
 # Precedence: env override > persisted secrets file > freshly generated.

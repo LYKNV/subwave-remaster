@@ -3,7 +3,7 @@
 # other reverse proxy in front of your homelab. The three user-facing services
 # bind directly to host ports and your proxy fronts them.
 #
-# Default host ports (override via docker/.env or your shell):
+# Default host ports (override via root .env or your shell):
 #   ${WEB_PORT:-7700}        → Next.js listener UI
 #   ${CONTROLLER_PORT:-7701} → controller HTTP API
 #   ${ICECAST_PORT:-7702}    → Icecast MP3 broadcast endpoint
@@ -22,31 +22,36 @@
 # baked at build time, not runtime.
 #
 # State persists in <repo>/state by default (override with STATE_DIR). It is a
-# bind mount, so `docker compose down -v` (named-volume wipe) won't touch it —
-# but it lives inside the repo, so keep it clear of `git clean -dffx`.
+# bind mount, so `docker compose down -v` won't touch it.
 
-x-state: &state-mount ${STATE_DIR:-../state}:/var/sub-wave
+x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
   # ICECAST — broadcast endpoint, bound to host for your reverse proxy
   # -------------------------------------------------------------------------
   icecast:
-    image: moul/icecast:latest
+    image: ghcr.io/perminder-klair/subwave-icecast:${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.icecast
     platform: linux/amd64
     container_name: sub-wave-icecast
     restart: unless-stopped
     environment:
-      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?must be set}
-      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:?must be set}
-      - ICECAST_PASSWORD=${ICECAST_RELAY_PASSWORD:?must be set}
-      - ICECAST_HOSTNAME=localhost
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
+      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
+      - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
     ports:
       - "${ICECAST_PORT:-7702}:7702"
     volumes:
-      # Rendered by scripts/setup.sh from icecast.xml.template — keeps secrets
-      # out of the repo and lets the moul/icecast entrypoint's sed run cleanly.
-      - ${STATE_DIR:-../state}/icecast.xml:/etc/icecast2/icecast.xml:ro
+      - *state-mount
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
 
   # -------------------------------------------------------------------------
   # LIQUIDSOAP — mixer, internal only (no public surface)
@@ -54,27 +59,20 @@ services:
   liquidsoap:
     image: ghcr.io/perminder-klair/subwave-liquidsoap:${SUBWAVE_VERSION:-latest}
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.liquidsoap
     container_name: sub-wave-liquidsoap
     restart: unless-stopped
     depends_on:
-      - icecast
+      icecast:
+        condition: service_healthy
     environment:
-      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?must be set}
-      # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=${TZ:-Europe/London}
     extra_hosts:
-      # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
-      # (e.g. NAVIDROME_URL=http://host.docker.internal:4533) without leaking
-      # the lookup to public DNS.
       - "host.docker.internal:host-gateway"
     volumes:
-      - ../liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
-      - ../sounds:/sounds:ro
       - *state-mount
-      - ${STATE_DIR:-../state}/logs:/var/log/liquidsoap
-    command: liquidsoap /etc/liquidsoap/radio.liq
+      - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
 
   # -------------------------------------------------------------------------
   # CONTROLLER — AI DJ brain, bound to host for your reverse proxy
@@ -82,38 +80,29 @@ services:
   controller:
     image: ghcr.io/perminder-klair/subwave-controller:${SUBWAVE_VERSION:-latest}
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.controller
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      - liquidsoap
+      liquidsoap:
+        condition: service_started
+      icecast:
+        condition: service_healthy
     environment:
-      # Enables the production-only admin gate: refuses to boot unless
-      # ADMIN_USER + ADMIN_PASS are set in controller/.env.
       - NODE_ENV=production
-      # Schedule slots are stored by day-of-week + hour; resolveActiveShow()
-      # reads them with date.getHours(). Without TZ the container runs in UTC
-      # and fires shows an hour early during BST, out of sync with the admin UI
-      # (which computes the on-air slot in the browser's timezone).
       - TZ=${TZ:-Europe/London}
-      # In-container path of the *state-mount below. The controller derives
-      # every state file path from this. Note this is distinct from the
-      # host-side STATE_DIR used to interpolate the mount source above.
       - STATE_DIR=/var/sub-wave
-      # In-container path of the repo-bundled static audio mount below.
-      # ensureDefaults() copies the default sound effects from here.
       - SOUNDS_DIR=/sounds
     env_file:
-      - ../controller/.env
+      - ./.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
-      - ../sounds:/sounds:ro
 
   # -------------------------------------------------------------------------
   # WEB — Next.js listener UI, bound to host for your reverse proxy
@@ -121,16 +110,10 @@ services:
   web:
     image: ghcr.io/perminder-klair/subwave-web:${SUBWAVE_VERSION:-latest}
     build:
-      context: ..
+      context: .
       dockerfile: web/Dockerfile
       args:
-        # Public origin for the Open Graph / Twitter share cards, canonical
-        # URLs, robots.txt and the sitemap. Needed at BUILD time for the
-        # statically-rendered routes (robots, sitemap, /listen, /landing,
-        # /manual, /setup) — Next bakes their metadata at build.
         - SITE_URL=${SITE_URL:-}
-        # Google Analytics Measurement ID (e.g. G-XXXXXXXXXX). NEXT_PUBLIC_*
-        # is inlined into the client bundle at BUILD time. Unset → no tracking.
         - NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID:-}
     container_name: sub-wave-web
     restart: unless-stopped
@@ -138,14 +121,7 @@ services:
       - controller
     environment:
       - NODE_ENV=production
-      # Private boxes boot straight into the listener UI at /. Flip to
-      # `landing` for the marketing host. /listen and /landing are always
-      # available regardless.
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
-      # Also needed at RUNTIME: the homepage (/) is force-dynamic, so its
-      # share-card tags render per-request. Set SITE_URL to the same value as
-      # the build arg above (define it once in docker/.env and both pick it
-      # up). Unset → a localhost origin, which breaks link previews.
       - SITE_URL=${SITE_URL:-}
     ports:
       - "${WEB_PORT:-7700}:7700"

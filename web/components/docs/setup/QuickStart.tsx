@@ -1,5 +1,5 @@
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function QuickStart() {
   return (
@@ -7,7 +7,7 @@ export default function QuickStart() {
       eyebrow="SETUP · 02"
       title="The easy way in."
       intro="Two hands-off paths to a running stack. The interactive wizard asks a few questions and does the rest; the agent skill does the same from one sentence in your AI coding tool. Either one ends with the radio on the air."
-      current="/setup/quick-start"
+      current="/docs/setup/quick-start"
     >
       <section className="bs-section">
         <p className="bs-eyebrow">PATH A · INTERACTIVE WIZARD</p>

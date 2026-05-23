@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
 import StreamUrl from './StreamUrl';
-import CodeBlock from '../setup/CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 // Where the "open a network stream" command lives in each VLC build. VLC's
 // menus shift slightly between versions, but these paths have been stable

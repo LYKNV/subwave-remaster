@@ -410,32 +410,57 @@ async function collectNavidrome(): Promise<NavidromeCreds> {
     // retry: loop
   }
 
-  // Loopback hostnames (localhost / 127.0.0.1 / 0.0.0.0 / ::1) don't resolve
-  // to the host from inside the controller container — they resolve to the
-  // container itself. The compose files wire host.docker.internal to the host
-  // gateway via `extra_hosts`, so swap the hostname now rather than letting
-  // the controller fail every Subsonic call until the operator notices.
-  const loopbackMatch = url.match(/^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i);
-  if (loopbackMatch) {
-    const swapped = url.replace(loopbackMatch[2] as string, 'host.docker.internal');
-    warn(
-      `${url} points at your host's loopback. The controller runs in Docker, so this URL would resolve to the controller container itself rather than Navidrome on your host.`,
-    );
-    const ok = exitIfCancelled(await p.confirm({
-      message: `Save as ${swapped} so the container can reach it?`,
-      initialValue: true,
-    }), { backOnCancel: false });
-    if (ok) {
-      url = swapped;
-      muted(`using ${url}`);
-    } else {
-      warn(
-        `Keeping ${url} — the controller will fail to reach Navidrome unless you have a custom routing setup (e.g. host network mode).`,
-      );
-    }
-  }
+  url = await maybeSwapLoopbackForContainer(url, 'Navidrome');
 
   return { url, user, pass };
+}
+
+// Loopback hostnames (localhost / 127.0.0.1 / 0.0.0.0 / ::1) don't resolve
+// to the host from inside the controller container — they resolve to the
+// container itself. The compose files wire host.docker.internal to the host
+// gateway via `extra_hosts`, so we offer to swap the hostname now rather than
+// letting the controller fail every call until the operator notices.
+//
+// Returns the (possibly swapped) URL.
+async function maybeSwapLoopbackForContainer(url: string, serviceLabel: string): Promise<string> {
+  const loopbackMatch = url.match(/^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i);
+  if (!loopbackMatch) return url;
+  const swapped = url.replace(loopbackMatch[2] as string, 'host.docker.internal');
+  warn(
+    `${url} points at your host's loopback. The controller runs in Docker, so this URL would resolve to the controller container itself rather than ${serviceLabel} on your host.`,
+  );
+  const ok = exitIfCancelled(await p.confirm({
+    message: `Save as ${swapped} so the container can reach it?`,
+    initialValue: true,
+  }), { backOnCancel: false });
+  if (ok) {
+    muted(`using ${swapped}`);
+    return swapped;
+  }
+  warn(
+    `Keeping ${url} — the controller will fail to reach ${serviceLabel} unless you have a custom routing setup (e.g. host network mode).`,
+  );
+  return url;
+}
+
+// Detect a reachable Ollama. Tries common loopback URLs from the host with a
+// short timeout each; returns the first one that responds. Used to set a
+// smart initial value for the wizard's Ollama URL prompt — the loopback-swap
+// step rewrites it for the controller container afterwards.
+async function detectOllamaUrl(): Promise<string | null> {
+  const candidates = ['http://localhost:11434', 'http://127.0.0.1:11434'];
+  for (const base of candidates) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 800);
+      const r = await fetch(`${base}/api/tags`, { signal: ctrl.signal });
+      clearTimeout(t);
+      if (r.ok) return base;
+    } catch {
+      // fall through to the next candidate
+    }
+  }
+  return null;
 }
 
 // The provider picker — same eight providers the admin Settings UI offers,
@@ -474,9 +499,14 @@ async function collectLlm(): Promise<LlmChoice> {
   if (choice === 'later') return { provider: null };
 
   if (choice === 'ollama') {
-    const url = exitIfCancelled(await p.text({
+    // Quick probe from the host so the default URL reflects reality. Whatever
+    // we land on is then loopback-swapped to host.docker.internal for the
+    // controller container.
+    const detected = await detectOllamaUrl();
+    if (detected) ok(`Detected Ollama on ${detected}`);
+    let url = exitIfCancelled(await p.text({
       message: 'Ollama server URL',
-      initialValue: 'http://localhost:11434',
+      initialValue: detected || 'http://localhost:11434',
       placeholder: 'http://localhost:11434',
       validate: (v: string) => (!/^https?:\/\//.test(v) ? 'must start with http(s)://' : undefined),
     }), { backOnCancel: false });
@@ -491,6 +521,7 @@ async function collectLlm(): Promise<LlmChoice> {
       validate: (v: string) => (!v ? 'required' : undefined),
     }), { backOnCancel: false });
     await reportProbe('Ollama', () => probeOllama({ url, model }));
+    url = await maybeSwapLoopbackForContainer(url, 'Ollama');
     return { provider: 'ollama', ollamaUrl: url, ollamaModel: model };
   }
 

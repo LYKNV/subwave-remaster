@@ -119,22 +119,27 @@ export async function runSetupCommand(): Promise<void> {
 
   // --- 6. Admin creds + SITE_URL ------------------------------------------
   const admin = await collectAdmin(mode);
-  const siteUrl = await promptSiteUrl(mode);
+  // SITE_URL is purely cosmetic — only used for absolute share-card / OG /
+  // sitemap URLs in the prod web image. In dev there's no public origin to
+  // advertise and the dev compose doesn't reference it at all, so skip the
+  // prompt entirely.
+  const siteUrl = isProdEnv(mode) ? await promptSiteUrl(mode) : '';
 
   // --- 7. Timezone ---------------------------------------------------------
   const tz = await promptTimezone();
 
   // --- 8a. Write the root .env --------------------------------------------
-  // Boot-time config: admin creds, public origin, timezone, homepage mode.
-  // Wins over anything in state/setup-config.json or state/secrets.env when
-  // both are set (env-first precedence is enforced controller-side).
+  // Boot-time config: admin creds, public origin (prod only), timezone,
+  // homepage mode. Wins over anything in state/setup-config.json or
+  // state/secrets.env when both are set (env-first precedence is enforced
+  // controller-side).
   header('Writing .env (repo root)');
   const envValues: Record<string, string> = {
     ADMIN_USER: admin.user,
     ADMIN_PASS: admin.pass,
-    SITE_URL: siteUrl,
     TZ: tz,
   };
+  if (siteUrl) envValues.SITE_URL = siteUrl;
   // Preserve SUBWAVE_HOMEPAGE if already set; otherwise default to `player`.
   const existingRoot = parseEnvFile(ROOT_ENV);
   if (!existingRoot.SUBWAVE_HOMEPAGE) envValues.SUBWAVE_HOMEPAGE = 'player';

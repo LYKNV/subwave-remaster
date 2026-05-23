@@ -1,8 +1,9 @@
 import Link from 'next/link';
+import EditorialReveal from '../landing/EditorialReveal';
 
 export default function Coda() {
   return (
-    <section className="bs-section items-center text-center">
+    <EditorialReveal className="bs-section items-center text-center">
       <p className="bs-eyebrow self-center">END OF FEATURE</p>
       <h2 className="max-w-[20ch]">The station is on air right now.</h2>
       <p className="text-center text-muted">
@@ -16,6 +17,6 @@ export default function Coda() {
           Run your own station →
         </Link>
       </div>
-    </section>
+    </EditorialReveal>
   );
 }

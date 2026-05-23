@@ -1,4 +1,5 @@
 import Figure from './Figure';
+import EditorialReveal from '../landing/EditorialReveal';
 
 const PANELS = [
   {
@@ -53,7 +54,7 @@ const PANELS = [
 
 export default function BehindTheDesk() {
   return (
-    <section className="bs-section">
+    <EditorialReveal className="bs-section">
       <p className="bs-eyebrow">PART FOUR · THE CONSOLE</p>
       <h2>Behind the desk.</h2>
       <p className="text-muted">
@@ -107,6 +108,6 @@ export default function BehindTheDesk() {
           caption="Debug: a health strip, Liquidsoap logs, and recent LLM calls — refreshed live."
         />
       </div>
-    </section>
+    </EditorialReveal>
   );
 }

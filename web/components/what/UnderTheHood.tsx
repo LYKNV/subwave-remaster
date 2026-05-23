@@ -1,4 +1,5 @@
 import { Fragment } from 'react';
+import EditorialReveal from '../landing/EditorialReveal';
 
 const BOXES = [
   { label: 'CONTROLLER', tone: 'default', note: 'node.js' },
@@ -9,7 +10,7 @@ const BOXES = [
 
 export default function UnderTheHood() {
   return (
-    <section className="bs-section">
+    <EditorialReveal className="bs-section">
       <p className="bs-eyebrow">PART FIVE · UNDER THE HOOD</p>
       <h2>Four processes, one box, one stream out.</h2>
 
@@ -66,6 +67,6 @@ export default function UnderTheHood() {
           and you hear whatever is on the air right now, the same as everyone else.
         </p>
       </div>
-    </section>
+    </EditorialReveal>
   );
 }

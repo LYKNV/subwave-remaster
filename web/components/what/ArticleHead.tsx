@@ -1,6 +1,8 @@
+import EditorialReveal from '../landing/EditorialReveal';
+
 export default function ArticleHead() {
   return (
-    <section className="bs-hero">
+    <EditorialReveal className="bs-hero" onMount>
       <div className="bs-hero-head">
         <p className="bs-eyebrow">A REAL INTERNET RADIO STATION</p>
         <h1 className="bs-hero-title">
@@ -20,6 +22,6 @@ export default function ArticleHead() {
         <span aria-hidden="true">·</span>
         <span className="text-vermilion">Open source</span>
       </div>
-    </section>
+    </EditorialReveal>
   );
 }

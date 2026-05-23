@@ -1,4 +1,5 @@
 import Figure from './Figure';
+import EditorialReveal from '../landing/EditorialReveal';
 
 const STEPS = [
   {
@@ -29,7 +30,7 @@ const STEPS = [
 
 export default function MakeARequest() {
   return (
-    <section className="bs-section">
+    <EditorialReveal className="bs-section">
       <p className="bs-eyebrow">PART THREE · REQUESTS</p>
       <h2>Phone the station, like you used to.</h2>
       <p className="text-muted">
@@ -69,6 +70,6 @@ export default function MakeARequest() {
           />
         </div>
       </div>
-    </section>
+    </EditorialReveal>
   );
 }

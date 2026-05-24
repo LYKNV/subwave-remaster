@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.18](https://github.com/perminder-klair/subwave/compare/v0.1.17...v0.1.18) (2026-05-24)
+
+
+### Documentation
+
+* plan to swap Ollama provider to ai-sdk-ollama ([30e27b8](https://github.com/perminder-klair/subwave/commit/30e27b8ebfa209e4dcaded7203633a63a6ed37dd))
+
 ## [0.1.17](https://github.com/perminder-klair/subwave/compare/v0.1.16...v0.1.17) (2026-05-24)
 
 

@@ -41,7 +41,7 @@ docker compose up -d --build controller web
           <div className="bs-eyebrow">USING THE STANDALONE CLI?</div>
           <p>
             If you installed via{' '}
-            <code className="bs-code-inline">curl www.getsubwave.com | sh</code>, two
+            <code className="bs-code-inline">curl cli.getsubwave.com | sh</code>, two
             commands cover both update axes:
           </p>
           <CodeBlock>{`subwave update         # pull new images, recreate changed services

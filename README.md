@@ -121,7 +121,7 @@ Browsers pull audio directly from Icecast.
 ## Quick start (CLI — recommended)
 
 ```bash
-curl -fsSL https://www.getsubwave.com | sh    # installs `subwave` to /usr/local/bin
+curl -fsSL https://cli.getsubwave.com | sh    # installs `subwave` to /usr/local/bin
 subwave init                               # scaffolds ~/subwave with compose + .env
 subwave start                              # docker compose up -d
 subwave setup                              # configure Navidrome, LLM, TTS, DJ persona

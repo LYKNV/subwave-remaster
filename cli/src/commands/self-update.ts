@@ -1,7 +1,7 @@
 // `subwave self-update` — re-runs the install script to fetch the latest
 // release binary in place. Equivalent to:
 //
-//   curl -fsSL https://www.getsubwave.com | sh -s -- --dir <current install dir>
+//   curl -fsSL https://cli.getsubwave.com | sh -s -- --dir <current install dir>
 //
 // We re-exec the installer instead of duplicating its logic here so the
 // download / arch-detect / sudo-fallback path stays in exactly one place.
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { banner, header, ok, err, info, muted, pauseForEnter } from '../ui.ts';
 
-const INSTALLER_URL = process.env.SUBWAVE_INSTALLER_URL ?? 'https://www.getsubwave.com';
+const INSTALLER_URL = process.env.SUBWAVE_INSTALLER_URL ?? 'https://cli.getsubwave.com';
 
 export async function runSelfUpdateCommand(args: { version?: string } = {}): Promise<void> {
   banner('self-update');

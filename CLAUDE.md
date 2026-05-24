@@ -12,7 +12,7 @@ There are three operator entry points: the **standalone `subwave` CLI** (single 
 
 ```bash
 # --- standalone CLI (default — single binary, no clone, no Node host dep) ---
-curl -fsSL https://www.getsubwave.com | sh   # installs /usr/local/bin/subwave
+curl -fsSL https://cli.getsubwave.com | sh   # installs /usr/local/bin/subwave
 subwave init                              # scaffolds ~/subwave with compose + .env
 subwave start                             # docker compose up -d
 subwave setup                             # configure Navidrome / LLM / TTS / DJ

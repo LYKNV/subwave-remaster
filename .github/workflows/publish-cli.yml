@@ -7,9 +7,9 @@ name: Publish CLI binaries
 #   - push of a tag like v1.2.3 → builds + uploads
 #   - manual workflow_dispatch → builds without uploading (smoke test)
 #
-# The install script at install.sh (served from www.getsubwave.com → raw
+# The install script at install.sh (served from cli.getsubwave.com → raw
 # GitHub URL → this repo) downloads the matching binary from the latest
-# release, so an operator running `curl www.getsubwave.com | sh` lands on
+# release, so an operator running `curl cli.getsubwave.com | sh` lands on
 # whatever this workflow last produced.
 #
 # Inputs are all matrix-controlled — no user-supplied data flows into

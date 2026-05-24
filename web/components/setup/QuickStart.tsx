@@ -20,7 +20,7 @@ export default function QuickStart() {
         </p>
         <div className="bs-faststart">
           <p className="bs-eyebrow">THREE COMMANDS</p>
-          <CodeBlock>{`curl -fsSL https://www.getsubwave.com | sh
+          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh
 subwave init
 subwave setup`}</CodeBlock>
           <p className="text-muted">

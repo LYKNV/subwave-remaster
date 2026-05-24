@@ -5,9 +5,9 @@
 # binary from the latest GitHub Release, and places it on PATH.
 #
 # Usage:
-#   curl -fsSL https://www.getsubwave.com | sh
-#   curl -fsSL https://www.getsubwave.com | sh -s -- --version v1.2.3
-#   curl -fsSL https://www.getsubwave.com | sh -s -- --dir ~/.local/bin
+#   curl -fsSL https://cli.getsubwave.com | sh
+#   curl -fsSL https://cli.getsubwave.com | sh -s -- --version v1.2.3
+#   curl -fsSL https://cli.getsubwave.com | sh -s -- --dir ~/.local/bin
 #
 # Supported targets: linux-x64, linux-arm64, darwin-x64, darwin-arm64.
 # Bun-compiled binaries ship as single files — no extraction, no
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
       ;;
     -h|--help)
       cat <<'HELP'
-Usage: curl -fsSL https://www.getsubwave.com | sh [-s -- [options]]
+Usage: curl -fsSL https://cli.getsubwave.com | sh [-s -- [options]]
 
 Options:
   --version <tag>   install a specific release (e.g. v1.2.3). Default: latest

@@ -41,7 +41,7 @@ export default function SetupOverview() {
             Already have Docker, Navidrome, and an LLM reachable? Three commands
             from a fresh machine to an on-air station — the CLI handles the rest.
           </p>
-          <CodeBlock>{`curl -fsSL https://www.getsubwave.com | sh
+          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh
 subwave init
 subwave setup`}</CodeBlock>
           <p className="text-muted">

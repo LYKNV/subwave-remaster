@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.1.7](https://github.com/perminder-klair/subwave/compare/v0.1.6...v0.1.7) (2026-05-24)
+
+
+### Features
+
+* **cli:** add subwave update + tighten web/setup pages for the CLI ([5e94847](https://github.com/perminder-klair/subwave/commit/5e9484758ccc47e8897a9f97302af37c787fca81))
+* **cli:** auto-detect Ollama + loopback-swap for the controller ([5db680c](https://github.com/perminder-klair/subwave/commit/5db680c15d7ad34857a779b72729e7bf40dfa840))
+* **cli:** standalone subwave CLI with init, self-update, and curl|sh installer ([80eda73](https://github.com/perminder-klair/subwave/commit/80eda73d237091acda6b9407715d835c039f4b31))
+* **dev:** hot-reload controller via bind-mounted src + tsx watch ([9129862](https://github.com/perminder-klair/subwave/commit/9129862346edf698723f82d666bcff114ba8a7bb))
+* **docker:** add subwave-caddy image with baked-in Caddyfile ([6a24b15](https://github.com/perminder-klair/subwave/commit/6a24b15ea42c4094677dd5be751d6de2852dc88f))
+* **docker:** add subwave-icecast image with auto-generated secrets ([69edcc2](https://github.com/perminder-klair/subwave/commit/69edcc2097eebab54430e91e066466c9aaf792f1))
+* **docker:** bake radio.liq + sounds/ into liquidsoap and controller images ([ea31ae3](https://github.com/perminder-klair/subwave/commit/ea31ae3caf62360a37b6fa6e76ac36966ffa084f))
+* **infra:** Cloudflare Worker for cli.getsubwave.com installer ([0ea2e3b](https://github.com/perminder-klair/subwave/commit/0ea2e3b21e161d88e91955d1c1592e3a46de8a7b))
+* single-compose deploy + first-run web wizard ([0e6f353](https://github.com/perminder-klair/subwave/commit/0e6f353a65dce539c8c879b4fe3e0a87a2e9e839))
+
+
+### Bug Fixes
+
+* **cli:** auto-recover from root-owned state files via docker chown ([3f1c8f7](https://github.com/perminder-klair/subwave/commit/3f1c8f73fcb5f37cf7b898a71d8f5c9c650adffd))
+* **cli:** default Navidrome to localhost, swap to host.docker.internal post-probe ([869360c](https://github.com/perminder-klair/subwave/commit/869360c86af98a6064d41dbdfcdb08d5424dc48d))
+* **cli:** show dev as the third setup mode option ([840032f](https://github.com/perminder-klair/subwave/commit/840032f19be000f08eaa0278947a52ef7041ee23))
+* **cli:** skip the SITE_URL prompt in dev mode ([d2796e0](https://github.com/perminder-klair/subwave/commit/d2796e0e0626e4b1fb98cba3073aa74b26a1dcdf))
+* **setup:** stop infinite recursion from backticks in setup.sh heredoc ([5bbe210](https://github.com/perminder-klair/subwave/commit/5bbe2100338689ef3eef35ef25f90280544f5789))
+
+
+### Documentation
+
+* **cli:** point installer at cli.getsubwave.com (www.* is the landing page) ([5fcef84](https://github.com/perminder-klair/subwave/commit/5fcef84bc31bd1b21367309937558aab81daae50))
+* **setup:** refresh remaining setup pages + use www.getsubwave.com ([6e7f7a7](https://github.com/perminder-klair/subwave/commit/6e7f7a7d06d784479d6e0966ca117c97b87e56f5))
+* **web:** harden BYO-proxy guidance, drop it from QuickStart ([eaf538f](https://github.com/perminder-klair/subwave/commit/eaf538fa4c8d08d1447e26af52c05bece84615ab))
+
+
+### Refactors
+
+* CLI setup for single-compose, wizard at /onboarding ([c8e87c3](https://github.com/perminder-klair/subwave/commit/c8e87c357c77731257d3e718a8ac7a3adbd54437))
+* **compose:** rename so prod is the default (docker-compose.yml) ([8ec2102](https://github.com/perminder-klair/subwave/commit/8ec21021618de007b48f7b6225bf2ed380c29508))
+
 ## [0.1.6](https://github.com/perminder-klair/subwave/compare/v0.1.5...v0.1.6) (2026-05-23)
 
 

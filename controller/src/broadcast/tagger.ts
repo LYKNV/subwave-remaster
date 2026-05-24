@@ -2,7 +2,7 @@
 // standalone script (music/tag-library.js) spawned as a child process; this
 // module holds the live state shared between the routes that start it
 // (/tag-library) and the ones that report on it (/settings).
-import { spawn } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
 
 type TaggerState = {
@@ -14,6 +14,9 @@ type TaggerState = {
 
 export const tagger: TaggerState = { running: false, startedAt: null, pid: null, lastLog: [] };
 
+// Live handle for stopTagger() — cleared on the exit handler.
+let activeChild: ChildProcess | null = null;
+
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
 // responsible for rejecting the request if `tagger.running` is already true.
 export function startTagger(limit?: number) {
@@ -21,6 +24,7 @@ export function startTagger(limit?: number) {
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
 
   const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: false });
+  activeChild = child;
   tagger.running = true;
   tagger.startedAt = new Date().toISOString();
   tagger.pid = child.pid ?? null;
@@ -33,10 +37,27 @@ export function startTagger(limit?: number) {
   };
   child.stdout.on('data', capture);
   child.stderr.on('data', capture);
-  child.on('exit', (code) => {
+  child.on('exit', (code, signal) => {
     tagger.running = false;
-    tagger.lastLog.push(`[exit ${code}]`);
-    queue.log('scheduler', `tagger finished (exit ${code})`);
+    if (activeChild === child) activeChild = null;
+    tagger.lastLog.push(`[exit ${signal || code}]`);
+    queue.log('scheduler', `tagger finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `tagger started${Number.isFinite(limit) ? ` (limit=${limit})` : ''}`);
+}
+
+// Stop the running tagger by signalling its child. The exit handler above
+// flips `tagger.running` false once the process actually exits.
+// Returns { stopped: true } if a signal was sent, { stopped: false } if no
+// process was running.
+export function stopTagger(): { stopped: boolean } {
+  if (!activeChild || !tagger.running) return { stopped: false };
+  try {
+    activeChild.kill('SIGTERM');
+    queue.log('scheduler', 'tagger stop requested (SIGTERM)');
+    return { stopped: true };
+  } catch (err: any) {
+    queue.log('error', `tagger stop failed: ${err.message}`);
+    return { stopped: false };
+  }
 }

@@ -22,6 +22,7 @@ import { router as sfxRoutes } from './routes/sfx.js';
 import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
+import { router as libraryRoutes } from './routes/library.js';
 import { router as onboardingRoutes } from './routes/onboarding.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
@@ -43,6 +44,7 @@ app.use(sfxRoutes);
 app.use(debugRoutes);
 app.use(statsRoutes);
 app.use(djRoutes);
+app.use(libraryRoutes);
 app.use(onboardingRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)

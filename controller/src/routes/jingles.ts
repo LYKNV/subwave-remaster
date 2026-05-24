@@ -4,7 +4,7 @@ import express from 'express';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
-import { tagger, startTagger } from '../broadcast/tagger.js';
+import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
 export const router = express.Router();
 
@@ -49,4 +49,11 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   const limit = parseInt(req.body?.limit, 10);
   startTagger(limit);
   res.json({ ok: true, tagger });
+});
+
+// Stop the running tagger child (SIGTERM). Returns 409 if no run is active.
+router.post('/tag-library/stop', requireAdmin, (req, res) => {
+  if (!tagger.running) return res.status(409).json({ error: 'tagger is not running', tagger });
+  const result = stopTagger();
+  res.json({ ...result, tagger });
 });

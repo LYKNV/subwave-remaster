@@ -1,64 +1,19 @@
 // One-shot library tagger.
-// Walks the entire Navidrome library, sends each unseen track to Ollama for
+// Walks the entire Navidrome library, sends each unseen track to the LLM for
 // {moods, energy} classification, persists results in state/moods.json.
 // Resumable — already-tagged tracks are skipped, so you can re-run any time.
 //
 // Run:  docker exec sub-wave-controller node src/music/tag-library.js
 //   or  docker exec sub-wave-controller node src/music/tag-library.js --limit 100
+//
+// Per-track classification lives in tagger-core.ts so the inline retag route
+// (controller/src/routes/library.ts → POST /library/retag) can reuse it.
 
-import { z } from 'zod';
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as settings from '../settings.js';
-import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
-import { djObject } from '../llm/sdk.js';
 import { activeModelLabel } from '../llm/provider.js';
-
-// Tag classification goes through the AI SDK (llm/sdk.js → llm/provider.js)
-// like every other model call, so it follows whatever provider/model the admin
-// Settings UI selects. The result is Zod-validated; moods are filtered against
-// MOOD_VOCAB defensively in case the model drifts off the controlled list.
-const TagSchema = z.object({
-  moods: z.array(z.string()).default([]),
-  energy: z.string().nullable().default(null),
-});
-
-const SYSTEM = `You tag music tracks with mood and energy for a personal radio station.
-
-For each track, output ONLY a JSON object:
-{
-  "moods": [1-3 strings, each from this exact list: ${MOOD_VOCAB.join(', ')}],
-  "energy": "low" | "medium" | "high"
-}
-
-Choose moods that reflect how the track FEELS to listen to, not just its genre.
-A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural".
-A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
-A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
-
-If you genuinely cannot tell from the title/artist/album, return {"moods":[],"energy":"medium"}. Do not invent.`;
-
-async function tagOne(song) {
-  const userPrompt =
-    `Title: ${song.title}\n` +
-    `Artist: ${song.artist || '?'}\n` +
-    `Album: ${song.album || '?'}\n` +
-    `Year: ${song.year || '?'}\n` +
-    `Genre: ${song.genre || '?'}`;
-
-  const parsed = await djObject({
-    system: SYSTEM,
-    prompt: userPrompt,
-    schema: TagSchema,
-    temperature: 0.2,
-    kind: 'tag-library',
-  });
-  const moods = Array.isArray(parsed.moods)
-    ? parsed.moods.filter(m => MOOD_VOCAB.includes(m)).slice(0, 3)
-    : [];
-  const energy = ['low', 'medium', 'high'].includes(parsed.energy) ? parsed.energy : null;
-  return { moods, energy };
-}
+import { tagOne } from './tagger-core.js';
 
 async function main() {
   const args = process.argv.slice(2);

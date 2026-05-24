@@ -1,44 +1,70 @@
 'use client';
 
-// Library — /admin/library. The operator searches the Navidrome library and
-// pushes a chosen track straight into the queue (an admin-grade version of
-// the listener request flow, without the LLM matching guesswork). A "Recently
-// added" section surfaces the most recently added music for one-click queuing,
-// and the mood tagger runs the resumable library tagger that classifies tracks.
-import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useState } from 'react';
-import { Search } from 'lucide-react';
+// Library — /admin/library.
+//
+// Three tabs over the same chrome:
+//   • Browse — filters the tagged moods.json index (mood/energy/genre/year/q).
+//   • Search — Navidrome free-text (the legacy /dj/search path).
+//   • Untagged — paginates through library tracks that haven't been tagged yet.
+//   • Recently added — newest album tracks for quick discovery.
+//
+// Each row supports `Queue` (push to the live queue) and, where applicable,
+// `Retag` / `Tag` (single-track LLM classification via /library/retag).
+// A sticky tagger strip at the bottom owns the background batch job.
+
+import type { ChangeEvent, FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Search, RotateCcw } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
 import { Field, FieldLabel } from '../ui/field';
+import { Checkbox } from '../ui/checkbox';
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { cn } from '../../lib/cn';
 
+// ---------------------------------------------------------------------------
+// types
+// ---------------------------------------------------------------------------
 interface Track {
   id: string;
   title?: string;
   artist?: string;
   album?: string;
-  duration?: number;
+  year?: number | string | null;
+  genre?: string | null;
+  duration?: number | null;
+  moods?: string[];
+  energy?: string | null;
+  taggedAt?: string;
 }
 
-interface QueueTrackResponse {
-  track?: Track;
-  queuePosition?: number;
-  error?: string;
+interface BrowseResponse {
+  rows: Track[];
+  total: number;
+  moodVocab: string[];
+  stats: {
+    total: number;
+    byMood: Record<string, number>;
+    byEnergy: Record<string, number>;
+    byGenre: Record<string, number>;
+    updatedAt: string | null;
+  };
 }
 
-interface SearchResponse {
-  results?: Track[];
-  error?: string;
-}
+interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
-interface LibraryStats {
-  total?: number;
-  byMood?: Record<string, number>;
-  updatedAt?: string;
+interface Coverage {
+  tagged: number;
+  total: number | null;
+  percent: number | null;
+  scannedAt: string | null;
+  scanning: boolean;
 }
 
 interface TaggerState {
@@ -48,80 +74,222 @@ interface TaggerState {
   lastLog?: string[];
 }
 
-interface SettingsResponse {
-  libraryStats?: LibraryStats;
-  tagger?: TaggerState;
-}
+interface SettingsResponse { tagger?: TaggerState }
 
+type Tab = 'browse' | 'search' | 'untagged' | 'recent';
+type Sort = 'artist' | 'title' | 'year' | 'taggedAt';
+type Energy = 'any' | 'low' | 'medium' | 'high';
+
+const PAGE_SIZE = 50;
+
+// ---------------------------------------------------------------------------
+// panel
+// ---------------------------------------------------------------------------
 export default function LibraryPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Track[] | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [queuing, setQueuing] = useState<string | null>(null);
-  const [recent, setRecent] = useState<Track[] | null>(null);
-  const [loadingRecent, setLoadingRecent] = useState(false);
-  const [tagState, setTagState] = useState<SettingsResponse | null>(null);
-  const [taggerLimit, setTaggerLimit] = useState('50');
-  const [taggerBusy, setTaggerBusy] = useState(false);
-
   const ready = hydrated && !needsAuth;
 
-  const loadRecent = useCallback(async () => {
+  // shared state
+  const [tab, setTab] = useState<Tab>('browse');
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [tagger, setTagger] = useState<TaggerState | null>(null);
+  const [taggerLimit, setTaggerLimit] = useState('500');
+  const [taggerBusy, setTaggerBusy] = useState(false);
+  const [queuing, setQueuing] = useState<string | null>(null);
+  const [retagging, setRetagging] = useState<string | null>(null);
+
+  // browse state
+  const [moods, setMoods] = useState<string[]>([]);
+  const [energy, setEnergy] = useState<Energy>('any');
+  const [genre, setGenre] = useState<string>('');
+  const [yearFrom, setYearFrom] = useState<string>('');
+  const [yearTo, setYearTo] = useState<string>('');
+  const [q, setQ] = useState<string>('');
+  const [sort, setSort] = useState<Sort>('artist');
+  const [page, setPage] = useState(0);
+  const [browse, setBrowse] = useState<BrowseResponse | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+
+  // genre list (lazy)
+  const [genreList, setGenreList] = useState<{ value: string; songCount: number }[]>([]);
+
+  // search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Track[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  // untagged state
+  const [untagged, setUntagged] = useState<Track[]>([]);
+  const [untaggedCursor, setUntaggedCursor] = useState<string | null>(null);
+  const [untaggedLoading, setUntaggedLoading] = useState(false);
+
+  // recent state
+  const [recent, setRecent] = useState<Track[] | null>(null);
+  const [recentLoading, setRecentLoading] = useState(false);
+
+  // -----------------------------------------------------------------------
+  // polling — coverage (60 s) + tagger status (3 s while running, 10 s idle)
+  // -----------------------------------------------------------------------
+  const loadCoverage = useCallback(async () => {
     if (!ready) return;
-    setLoadingRecent(true);
     try {
-      const r = await adminFetch('/dj/recent?limit=25');
-      const j = (await r.json().catch(() => ({}))) as SearchResponse;
-      if (!r.ok) throw new Error(j.error || `latest tracks failed (${r.status})`);
-      setRecent(Array.isArray(j.results) ? j.results : []);
-    } catch (err) {
-      notify.err(errorMessage(err));
-      setRecent([]);
-    } finally {
-      setLoadingRecent(false);
-    }
+      const r = await adminFetch('/library/coverage');
+      if (!r.ok) return;
+      setCoverage((await r.json()) as Coverage);
+    } catch { /* transient */ }
   }, [adminFetch, ready]);
 
-  useEffect(() => { loadRecent(); }, [loadRecent]);
-
-  // Library stats + tagger progress live on /settings — poll so an in-flight
-  // tagging run reports live progress without a manual refresh.
-  const loadTagState = useCallback(async () => {
+  const loadTagger = useCallback(async () => {
     if (!ready) return;
     try {
       const r = await adminFetch('/settings');
       if (!r.ok) return;
       const j = (await r.json()) as SettingsResponse;
-      setTagState({ libraryStats: j.libraryStats, tagger: j.tagger });
-    } catch { /* transient — next poll retries */ }
+      setTagger(j.tagger || null);
+    } catch { /* transient */ }
   }, [adminFetch, ready]);
 
   useEffect(() => {
     if (!ready) return;
-    loadTagState();
-    const id = setInterval(loadTagState, 3000);
+    loadCoverage();
+    const id = setInterval(loadCoverage, 60_000);
     return () => clearInterval(id);
-  }, [ready, loadTagState]);
+  }, [ready, loadCoverage]);
 
-  const runSearch = async (e?: FormEvent<HTMLFormElement>) => {
-    e?.preventDefault();
-    const q = query.trim();
-    if (!q || !ready) return;
-    setSearching(true);
+  useEffect(() => {
+    if (!ready) return;
+    loadTagger();
+    const interval = tagger?.running ? 3_000 : 10_000;
+    const id = setInterval(loadTagger, interval);
+    return () => clearInterval(id);
+  }, [ready, loadTagger, tagger?.running]);
+
+  // -----------------------------------------------------------------------
+  // browse fetch — debounced on filter change
+  // -----------------------------------------------------------------------
+  const runBrowse = useCallback(async () => {
+    if (!ready) return;
+    setBrowseLoading(true);
     try {
-      const r = await adminFetch(`/dj/search?q=${encodeURIComponent(q)}`);
-      const j = (await r.json().catch(() => ({}))) as SearchResponse;
-      if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
-      setResults(Array.isArray(j.results) ? j.results : []);
+      const params = new URLSearchParams();
+      if (moods.length) params.set('moods', moods.join(','));
+      if (energy !== 'any') params.set('energy', energy);
+      if (genre) params.set('genre', genre);
+      if (yearFrom) params.set('yearFrom', yearFrom);
+      if (yearTo) params.set('yearTo', yearTo);
+      if (q.trim()) params.set('q', q.trim());
+      params.set('sort', sort);
+      params.set('limit', String(PAGE_SIZE));
+      params.set('offset', String(page * PAGE_SIZE));
+      const r = await adminFetch(`/library/browse?${params}`);
+      if (!r.ok) throw new Error(`browse failed (${r.status})`);
+      setBrowse((await r.json()) as BrowseResponse);
     } catch (err) {
       notify.err(errorMessage(err));
-      setResults([]);
+      setBrowse(null);
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, [adminFetch, ready, moods, energy, genre, yearFrom, yearTo, q, sort, page]);
+
+  useEffect(() => {
+    if (!ready || tab !== 'browse') return;
+    const t = setTimeout(runBrowse, 250);
+    return () => clearTimeout(t);
+  }, [ready, tab, runBrowse]);
+
+  // genre dropdown — fetch once
+  useEffect(() => {
+    if (!ready || genreList.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/library/genres');
+        if (!r.ok) return;
+        const j = await r.json() as { genres: { value: string; songCount: number }[] };
+        if (!cancelled) setGenreList(j.genres || []);
+      } catch { /* skip */ }
+    })();
+    return () => { cancelled = true; };
+  }, [ready, adminFetch, genreList.length]);
+
+  // reset to page 0 when any filter (other than page itself) changes
+  useEffect(() => { setPage(0); }, [moods, energy, genre, yearFrom, yearTo, q, sort]);
+
+  // -----------------------------------------------------------------------
+  // search fetch
+  // -----------------------------------------------------------------------
+  const runSearch = async (e?: FormEvent<HTMLFormElement>) => {
+    e?.preventDefault();
+    const text = searchQuery.trim();
+    if (!text || !ready) return;
+    setSearching(true);
+    try {
+      const r = await adminFetch(`/dj/search?q=${encodeURIComponent(text)}`);
+      const j = await r.json().catch(() => ({})) as { results?: Track[]; error?: string };
+      if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
+      setSearchResults(j.results || []);
+    } catch (err) {
+      notify.err(errorMessage(err));
+      setSearchResults([]);
     } finally {
       setSearching(false);
     }
   };
 
+  // -----------------------------------------------------------------------
+  // untagged paging
+  // -----------------------------------------------------------------------
+  const loadUntagged = useCallback(async (cursor: string | null, append: boolean) => {
+    if (!ready) return;
+    setUntaggedLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '50' });
+      if (cursor) params.set('cursor', cursor);
+      const r = await adminFetch(`/library/untagged?${params}`);
+      if (!r.ok) throw new Error(`untagged failed (${r.status})`);
+      const j = await r.json() as UntaggedResponse;
+      setUntagged(prev => (append ? [...prev, ...j.rows] : j.rows));
+      setUntaggedCursor(j.nextCursor);
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setUntaggedLoading(false);
+    }
+  }, [adminFetch, ready]);
+
+  useEffect(() => {
+    if (tab !== 'untagged' || !ready) return;
+    if (untagged.length === 0) loadUntagged(null, false);
+  }, [tab, ready, untagged.length, loadUntagged]);
+
+  // -----------------------------------------------------------------------
+  // recent fetch
+  // -----------------------------------------------------------------------
+  const loadRecent = useCallback(async () => {
+    if (!ready) return;
+    setRecentLoading(true);
+    try {
+      const r = await adminFetch('/dj/recent?limit=50');
+      if (!r.ok) throw new Error(`recent failed (${r.status})`);
+      const j = await r.json() as { results: Track[] };
+      setRecent(j.results || []);
+    } catch (err) {
+      notify.err(errorMessage(err));
+      setRecent([]);
+    } finally {
+      setRecentLoading(false);
+    }
+  }, [adminFetch, ready]);
+
+  useEffect(() => {
+    if (tab !== 'recent' || !ready) return;
+    if (recent === null) loadRecent();
+  }, [tab, ready, recent, loadRecent]);
+
+  // -----------------------------------------------------------------------
+  // row actions
+  // -----------------------------------------------------------------------
   const queueTrack = async (track: Track) => {
     setQueuing(track.id);
     try {
@@ -130,9 +298,9 @@ export default function LibraryPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(track),
       });
-      const j = (await r.json().catch(() => ({}))) as QueueTrackResponse;
+      const j = await r.json().catch(() => ({})) as { queuePosition?: number; error?: string };
       if (!r.ok) throw new Error(j.error || `queue failed (${r.status})`);
-      notify.ok(`queued “${j.track?.title || track.title}” · position ${j.queuePosition}`);
+      notify.ok(`queued “${track.title}” · position ${j.queuePosition}`);
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -140,6 +308,31 @@ export default function LibraryPanel() {
     }
   };
 
+  const retagTrack = async (track: Track) => {
+    setRetagging(track.id);
+    try {
+      const r = await adminFetch('/library/retag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(track),
+      });
+      const j = await r.json() as { moods?: string[]; energy?: string | null; error?: string };
+      if (!r.ok) throw new Error(j.error || `retag failed (${r.status})`);
+      const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
+      notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+      if (tab === 'browse') runBrowse();
+      if (tab === 'untagged') setUntagged(prev => prev.filter(t => t.id !== track.id));
+      loadCoverage();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setRetagging(null);
+    }
+  };
+
+  // -----------------------------------------------------------------------
+  // tagger controls
+  // -----------------------------------------------------------------------
   const startTagger = async () => {
     setTaggerBusy(true);
     try {
@@ -149,10 +342,10 @@ export default function LibraryPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
-      await loadTagState();
+      await loadTagger();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -160,314 +353,581 @@ export default function LibraryPanel() {
     }
   };
 
-  const libraryStats = tagState?.libraryStats;
-  const tagger = tagState?.tagger;
+  const stopTagger = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/tag-library/stop', { method: 'POST' });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `tagger stop failed (${r.status})`);
+      notify.ok('stopping tagger…');
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
 
-  const taggedTotal = libraryStats?.total ?? 0;
-  const moodEntries: [string, number][] = Object.entries(libraryStats?.byMood || {}).sort(
-    (a, b) => b[1] - a[1],
-  );
-  const resultCount = results === null ? null : results.length;
+  // -----------------------------------------------------------------------
+  // derived
+  // -----------------------------------------------------------------------
+  const stats = browse?.stats;
+  const moodVocab = browse?.moodVocab || [];
+  const totalPages = browse ? Math.max(1, Math.ceil(browse.total / PAGE_SIZE)) : 1;
+  const filtersActive =
+    moods.length > 0 || energy !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
+
+  const clearFilters = () => {
+    setMoods([]); setEnergy('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
+    setSort('artist'); setPage(0);
+  };
+
+  const tableRows: Track[] =
+    tab === 'browse' ? (browse?.rows || []) :
+    tab === 'search' ? (searchResults || []) :
+    tab === 'untagged' ? untagged :
+    (recent || []);
+  const tableLoading =
+    tab === 'browse' ? browseLoading :
+    tab === 'search' ? searching :
+    tab === 'untagged' ? untaggedLoading :
+    recentLoading;
 
   return (
-    <div className="grid gap-4">
-      {/* ── HERO SEARCH ─────────────────────────────────────────────────── */}
-      <section className="card">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
-          <div>
-            <Eyebrow className="text-vermilion">library · search · queue</Eyebrow>
-            <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-              Find a track. Queue it instantly.
-            </div>
-            <div className="mt-1 text-[11px] text-muted">
-              Search Navidrome by artist, title, or album — no LLM matching.
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Metric n={taggedTotal.toLocaleString('en-GB')} l="tracks tagged" />
-            <span className="h-8 w-px bg-separator-strong" />
-            <Metric n={moodEntries.length} l="moods" accent />
-          </div>
-        </div>
+    <div className="grid gap-4 pb-24">
+      <KpiStrip coverage={coverage} stats={stats} />
 
-        <div className="p-4">
-          <form onSubmit={runSearch} className="flex gap-2">
-            <InputGroup className="flex-1">
-              <InputGroupAddon>
-                <Search />
-              </InputGroupAddon>
-              <InputGroupInput
-                placeholder="floating points, kingdoms in colour, 2018…"
-                value={query}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
-              />
-            </InputGroup>
-            <Btn lg tone="accent" type="submit" disabled={searching || !query.trim() || !ready}>
-              {searching ? 'Searching…' : 'Search'}
-            </Btn>
-            <Btn lg type="button" onClick={() => { setQuery(''); setResults(null); }} disabled={searching}>
-              Clear
-            </Btn>
-          </form>
-          <div className="mt-3 flex flex-wrap items-center gap-3.5">
-            <span className="caption">filter</span>
-            <Seg
-              value="any"
-              onChange={(id) => setQuery(id === 'any' ? query : id)}
-              options={[
-                { id: 'any', label: 'Any' },
-                { id: 'ambient', label: 'Ambient' },
-                { id: 'slow', label: 'Slow' },
-                { id: 'driving', label: 'Driving' },
-                { id: 'jazz', label: 'Jazz' },
-                { id: 'deep', label: 'Deep' },
-              ]}
-            />
-            <span className="caption ml-3">energy</span>
-            <Seg
-              value="any"
-              options={[
-                { id: 'any', label: 'Any' },
-                { id: 'low', label: 'Low' },
-                { id: 'mid', label: 'Mid' },
-                { id: 'high', label: 'High' },
-              ]}
-            />
-            <span className="ml-auto text-[11px] text-muted">
-              {resultCount === null
-                ? 'search the library to queue a track'
-                : `${resultCount} result${resultCount === 1 ? '' : 's'} · sorted by relevance`}
-            </span>
-          </div>
-        </div>
-      </section>
-
-      {/* ── 2-COL ─────────────────────────────────────────────────────── */}
-      <div className="stack-mobile grid grid-cols-[1fr_240px] items-start gap-4">
-        {/* RESULTS */}
-        <div className="grid gap-4">
-          <Card
-            title="Results"
-            sub={query.trim() ? `for ‘${query.trim()}’` : 'manual queue'}
-            bodyClass="px-3.5 py-1"
-          >
-            {results === null ? (
-              <Empty>search the library to queue a track</Empty>
-            ) : results.length === 0 ? (
-              <Empty>{searching ? 'searching…' : 'no tracks found'}</Empty>
-            ) : (
-              <TrackTable tracks={results} queuing={queuing} onQueue={queueTrack} />
-            )}
-          </Card>
-
-          <Card
-            title="Recently added"
-            sub="latest tracks"
-            right={
-              <Btn sm onClick={loadRecent} disabled={loadingRecent || !ready}>
-                {loadingRecent ? 'Loading…' : 'Refresh'}
-              </Btn>
-            }
-          >
-            {recent === null ? (
-              <Empty>{loadingRecent ? 'loading latest tracks…' : 'recently added tracks appear here'}</Empty>
-            ) : recent.length === 0 ? (
-              <Empty>no recently added tracks</Empty>
-            ) : (
-              <div className="grid gap-2">
-                {recent.map(r => (
-                  <div
-                    key={r.id}
-                    className="grid grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-dashed border-separator-strong py-1.5"
-                  >
-                    <div className="min-w-0 text-[13px]">
-                      <span className="text-ink">{r.title}</span>
-                      <span className="text-muted"> — {r.artist}</span>
-                      {r.album && <span className="text-muted"> · {r.album}</span>}
-                    </div>
-                    {r.duration != null && (
-                      <span className="mono-num text-[10px] text-muted">{fmtDuration(r.duration)}</span>
-                    )}
-                    <Btn sm onClick={() => queueTrack(r)} disabled={!!queuing}>
-                      {queuing === r.id ? 'Queuing…' : 'Queue'}
-                    </Btn>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
-
-        {/* SIDEBAR */}
+      <div className="stack-mobile grid grid-cols-[260px_1fr] items-start gap-4">
         <aside className="grid gap-4">
-          <Card title="Browse" bodyClass="!p-0">
-            <div className="py-1">
-              {[
-                { l: 'Search results', n: resultCount == null ? '—' : resultCount, a: true },
-                { l: 'Recently added', n: recent == null ? '—' : recent.length },
-                { l: 'Tracks tagged', n: taggedTotal.toLocaleString('en-GB') },
-                { l: 'Moods classified', n: moodEntries.length },
-              ].map(x => (
-                <div
-                  key={x.l}
-                  className={cn(
-                    'flex items-center justify-between px-3.5 py-2 text-[12px]',
-                    x.a
-                      ? 'border-l-2 border-[var(--accent)] bg-[var(--ink-soft)]'
-                      : 'border-l-2 border-transparent',
-                  )}
-                >
-                  <span className={x.a ? 'font-bold' : 'font-medium'}>{x.l}</span>
-                  <span className="mono-num text-[10px] text-muted">{x.n}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
+          <TabRail tab={tab} setTab={setTab} />
 
-          <Card title="By mood">
-            {moodEntries.length === 0 ? (
-              <div className="text-[11px] text-muted italic">
-                run the tagger to classify your library
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {moodEntries.map(([m, n], i) => (
-                  <Pill
-                    key={m}
-                    tone={i === 0 ? 'ink' : 'default'}
-                    onClick={() => setQuery(m)}
-                    title={`search “${m}”`}
-                  >
-                    {m}
-                    <span
-                      className={cn(
-                        'mono-num ml-1',
-                        i === 0 ? 'text-ink' : 'text-muted',
-                      )}
-                    >
-                      {n}
-                    </span>
-                  </Pill>
-                ))}
-              </div>
-            )}
-          </Card>
+          {tab === 'browse' && (
+            <BrowseFilters
+              moodVocab={moodVocab}
+              moodCounts={stats?.byMood || {}}
+              energyCounts={stats?.byEnergy || {}}
+              genreList={genreList}
+              moods={moods} setMoods={setMoods}
+              energy={energy} setEnergy={setEnergy}
+              genre={genre} setGenre={setGenre}
+              yearFrom={yearFrom} setYearFrom={setYearFrom}
+              yearTo={yearTo} setYearTo={setYearTo}
+              sort={sort} setSort={setSort}
+              filtersActive={filtersActive}
+              onClear={clearFilters}
+            />
+          )}
 
-          <Card title="Mood tagger">
-            <div className="text-[12px] font-bold text-ink">
-              {taggedTotal} tracks tagged
-            </div>
-            {libraryStats?.updatedAt && (
-              <div className="mt-0.5 text-[10px] text-muted">
-                last update {new Date(libraryStats.updatedAt).toLocaleString('en-GB')}
+          {tab !== 'browse' && (
+            <Card title="About this view" bodyClass="!py-3">
+              <div className="text-[11px] leading-[1.5] text-muted">
+                {tab === 'search' && 'Free-text search against Navidrome — best for finding a specific track to queue right now.'}
+                {tab === 'untagged' && 'Tracks that don\'t yet have moods/energy classified. Tag them one at a time, or kick off the bulk tagger at the bottom of the page.'}
+                {tab === 'recent' && 'The newest tracks added to your Navidrome library.'}
               </div>
-            )}
-            <div className="mt-1.5 text-[11px] leading-[1.5] text-muted">
-              Walks Navidrome album-by-album, classifies each track via Ollama. Resumable —
-              tagged tracks are skipped.
-            </div>
-
-            <Field className="mt-3">
-              <FieldLabel htmlFor="tagger-limit">limit</FieldLabel>
-              <Input
-                id="tagger-limit"
-                type="number"
-                className="mono-num"
-                value={taggerLimit}
-                onChange={e => setTaggerLimit(e.target.value)}
-                disabled={tagger?.running}
-              />
-            </Field>
-            <Btn
-              tone="accent"
-              onClick={startTagger}
-              disabled={taggerBusy || tagger?.running || !ready}
-              className="mt-2.5 w-full justify-center"
-            >
-              {tagger?.running ? 'Running…' : 'Start tagging'}
-            </Btn>
-            {tagger?.running && tagger.startedAt && (
-              <div className="mt-2 text-[10px] text-muted">
-                pid {tagger.pid} · started {new Date(tagger.startedAt).toLocaleTimeString('en-GB')}
-              </div>
-            )}
-
-            {tagger?.lastLog && tagger.lastLog.length > 0 && (
-              <details className="mt-3 border border-separator-strong">
-                <summary className="caption cursor-pointer px-2.5 py-2">
-                  tagger log ({tagger.lastLog.length} lines)
-                </summary>
-                <pre className="term m-0 max-h-60 border-t border-separator-strong">
-                  {tagger.lastLog.join('\n')}
-                </pre>
-              </details>
-            )}
-          </Card>
+            </Card>
+          )}
         </aside>
+
+        <div className="grid gap-4">
+          {tab === 'browse' && (
+            <Card bodyClass="!py-3">
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <InputGroup>
+                  <InputGroupAddon><Search /></InputGroupAddon>
+                  <InputGroupInput
+                    placeholder="filter results by title, artist, or album…"
+                    value={q}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
+                  />
+                </InputGroup>
+                <Btn type="button" onClick={() => runBrowse()} disabled={browseLoading}>
+                  {browseLoading ? 'Loading…' : 'Refresh'}
+                </Btn>
+              </div>
+            </Card>
+          )}
+
+          {tab === 'search' && (
+            <Card bodyClass="!py-3">
+              <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto_auto] gap-2">
+                <InputGroup>
+                  <InputGroupAddon><Search /></InputGroupAddon>
+                  <InputGroupInput
+                    placeholder="floating points, kingdoms in colour, 2018…"
+                    value={searchQuery}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+                  />
+                </InputGroup>
+                <Btn tone="accent" type="submit" disabled={searching || !searchQuery.trim() || !ready}>
+                  {searching ? 'Searching…' : 'Search'}
+                </Btn>
+                <Btn type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} disabled={searching}>
+                  Clear
+                </Btn>
+              </form>
+            </Card>
+          )}
+
+          <Card
+            title={
+              tab === 'browse' ? 'Tracks' :
+              tab === 'search' ? 'Search results' :
+              tab === 'untagged' ? 'Untagged' :
+              'Recently added'
+            }
+            sub={
+              tab === 'browse'
+                ? (browse ? `${browse.total.toLocaleString('en-GB')} match${browse.total === 1 ? '' : 'es'}` : '')
+                : tab === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : '')
+                : tab === 'untagged' ? `${untagged.length} loaded`
+                : (recent ? `${recent.length} tracks` : '')
+            }
+            right={
+              tab === 'recent' ? (
+                <Btn sm onClick={loadRecent} disabled={recentLoading}>{recentLoading ? 'Loading…' : 'Refresh'}</Btn>
+              ) : null
+            }
+            bodyClass="!p-0"
+          >
+            <TrackTable
+              tab={tab}
+              rows={tableRows}
+              loading={tableLoading}
+              queuing={queuing}
+              retagging={retagging}
+              onQueue={queueTrack}
+              onRetag={retagTrack}
+            />
+          </Card>
+
+          {tab === 'browse' && browse && browse.total > PAGE_SIZE && (
+            <div className="flex items-center justify-between text-[11px] text-muted">
+              <span className="mono-num">
+                {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, browse.total)} of {browse.total.toLocaleString('en-GB')}
+              </span>
+              <span className="flex items-center gap-2">
+                <Btn sm disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹ prev</Btn>
+                <span className="mono-num">page {page + 1} of {totalPages}</span>
+                <Btn sm disabled={page + 1 >= totalPages} onClick={() => setPage(p => p + 1)}>next ›</Btn>
+              </span>
+            </div>
+          )}
+
+          {tab === 'untagged' && untaggedCursor && (
+            <div className="flex justify-center">
+              <Btn onClick={() => loadUntagged(untaggedCursor, true)} disabled={untaggedLoading}>
+                {untaggedLoading ? 'Loading…' : 'Load more'}
+              </Btn>
+            </div>
+          )}
+        </div>
       </div>
+
+      <TaggerStrip
+        coverage={coverage}
+        tagger={tagger}
+        limit={taggerLimit}
+        setLimit={setTaggerLimit}
+        busy={taggerBusy}
+        onStart={startTagger}
+        onStop={stopTagger}
+      />
     </div>
   );
 }
 
-interface TrackTableProps {
-  tracks: Track[];
-  queuing: string | null;
-  onQueue: (t: Track) => void;
+// ---------------------------------------------------------------------------
+// KPI strip
+// ---------------------------------------------------------------------------
+function KpiStrip({ coverage, stats }: {
+  coverage: Coverage | null;
+  stats: BrowseResponse['stats'] | undefined;
+}) {
+  const taggedLabel = coverage?.tagged != null
+    ? coverage.tagged.toLocaleString('en-GB')
+    : (stats?.total != null ? stats.total.toLocaleString('en-GB') : '—');
+  const totalLabel = coverage?.total != null
+    ? coverage.total.toLocaleString('en-GB')
+    : (coverage?.scanning ? 'scanning…' : '—');
+  const percentLabel = coverage?.percent != null ? `${coverage.percent}%` : '—';
+  const moodCount = stats ? Object.keys(stats.byMood || {}).length : 0;
+  const lastTag = stats?.updatedAt ? new Date(stats.updatedAt).toLocaleString('en-GB') : '—';
+
+  return (
+    <section className="card">
+      <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
+        <div>
+          <Eyebrow className="text-vermilion">library · browse · tag · queue</Eyebrow>
+          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
+            Manage the music your station plays.
+          </div>
+          <div className="mt-1 text-[11px] text-muted">
+            Filter the tagged index by mood, energy, genre, year, or artist.
+            Re-tag tracks the AI got wrong. Queue anything on demand.
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Metric n={taggedLabel} l="tagged" />
+          <span className="h-8 w-px bg-separator-strong" />
+          <Metric n={totalLabel} l="library" />
+          <span className="h-8 w-px bg-separator-strong" />
+          <Metric n={percentLabel} l="coverage" accent />
+          <span className="h-8 w-px bg-separator-strong" />
+          <Metric n={moodCount} l="moods used" />
+        </div>
+      </div>
+      <div className="px-4 py-2 text-[11px] text-muted">last tag {lastTag}</div>
+    </section>
+  );
 }
 
-function TrackTable({ tracks, queuing, onQueue }: TrackTableProps) {
-  const colsClass = 'grid grid-cols-[24px_1fr_150px_56px_70px] gap-3';
+// ---------------------------------------------------------------------------
+// tab rail
+// ---------------------------------------------------------------------------
+function TabRail({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
+  const items: { id: Tab; label: string; hint: string }[] = [
+    { id: 'browse', label: 'Browse', hint: 'tagged' },
+    { id: 'search', label: 'Search', hint: 'navidrome' },
+    { id: 'untagged', label: 'Untagged', hint: 'needs tags' },
+    { id: 'recent', label: 'Recently added', hint: '' },
+  ];
+  return (
+    <Card bodyClass="!p-0">
+      <div className="py-1">
+        {items.map(it => (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => setTab(it.id)}
+            className={cn(
+              'flex w-full items-center justify-between px-3.5 py-2 text-left text-[12px] transition-colors',
+              tab === it.id
+                ? 'border-l-2 border-[var(--accent)] bg-[var(--ink-soft)] font-bold'
+                : 'border-l-2 border-transparent hover:bg-[var(--ink-soft)]/30',
+            )}
+          >
+            <span>{it.label}</span>
+            {it.hint && <span className="caption text-muted">{it.hint}</span>}
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// browse filters sidebar
+// ---------------------------------------------------------------------------
+interface BrowseFiltersProps {
+  moodVocab: string[];
+  moodCounts: Record<string, number>;
+  energyCounts: Record<string, number>;
+  genreList: { value: string; songCount: number }[];
+  moods: string[]; setMoods: (m: string[]) => void;
+  energy: Energy; setEnergy: (e: Energy) => void;
+  genre: string; setGenre: (g: string) => void;
+  yearFrom: string; setYearFrom: (s: string) => void;
+  yearTo: string; setYearTo: (s: string) => void;
+  sort: Sort; setSort: (s: Sort) => void;
+  filtersActive: boolean;
+  onClear: () => void;
+}
+
+function BrowseFilters(p: BrowseFiltersProps) {
+  const toggleMood = (m: string) => {
+    p.setMoods(p.moods.includes(m) ? p.moods.filter(x => x !== m) : [...p.moods, m]);
+  };
+  const sortedMoods = useMemo(() => {
+    const ranked = [...p.moodVocab];
+    ranked.sort((a, b) => (p.moodCounts[b] || 0) - (p.moodCounts[a] || 0));
+    return ranked;
+  }, [p.moodVocab, p.moodCounts]);
+
+  return (
+    <Card
+      title="Filters"
+      right={p.filtersActive ? (
+        <Btn sm tone="danger" onClick={p.onClear} title="Clear all filters">
+          <RotateCcw size={11} /> clear
+        </Btn>
+      ) : null}
+    >
+      <div>
+        <div className="caption mb-1.5">mood</div>
+        <div className="grid max-h-56 gap-0.5 overflow-y-auto pr-1">
+          {sortedMoods.map(m => {
+            const n = p.moodCounts[m] || 0;
+            const checked = p.moods.includes(m);
+            return (
+              <label
+                key={m}
+                className={cn(
+                  'flex cursor-pointer items-center justify-between gap-2 px-1 py-1 text-[12px]',
+                  checked ? 'text-ink' : 'text-muted hover:text-ink',
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <Checkbox checked={checked} onCheckedChange={() => toggleMood(m)} />
+                  <span>{m}</span>
+                </span>
+                <span className="mono-num text-[10px] text-muted">{n.toLocaleString('en-GB')}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="caption mb-1.5">energy</div>
+        <Seg
+          value={p.energy}
+          onChange={id => p.setEnergy(id as Energy)}
+          options={[
+            { id: 'any', label: 'Any' },
+            { id: 'low', label: `Low${p.energyCounts.low ? ` · ${p.energyCounts.low}` : ''}` },
+            { id: 'medium', label: `Mid${p.energyCounts.medium ? ` · ${p.energyCounts.medium}` : ''}` },
+            { id: 'high', label: `High${p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}` },
+          ]}
+        />
+      </div>
+
+      <div className="mt-4">
+        <Field>
+          <FieldLabel htmlFor="genre">genre</FieldLabel>
+          <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
+            <SelectTrigger id="genre"><SelectValue placeholder="Any genre" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__any">Any genre</SelectItem>
+              {p.genreList.slice(0, 80).map(g => (
+                <SelectItem key={g.value} value={g.value}>
+                  {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+
+      <div className="mt-4">
+        <div className="caption mb-1.5">year</div>
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          <Input
+            type="number"
+            inputMode="numeric"
+            placeholder="from"
+            value={p.yearFrom}
+            onChange={e => p.setYearFrom(e.target.value)}
+          />
+          <span className="text-[10px] text-muted">–</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            placeholder="to"
+            value={p.yearTo}
+            onChange={e => p.setYearTo(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <Field>
+          <FieldLabel htmlFor="sort">sort</FieldLabel>
+          <Select value={p.sort} onValueChange={v => p.setSort(v as Sort)}>
+            <SelectTrigger id="sort"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="artist">Artist / album / title</SelectItem>
+              <SelectItem value="title">Title</SelectItem>
+              <SelectItem value="year">Year (newest first)</SelectItem>
+              <SelectItem value="taggedAt">Recently tagged</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// track table — same chrome across all tabs, action column varies
+// ---------------------------------------------------------------------------
+interface TrackTableProps {
+  tab: Tab;
+  rows: Track[];
+  loading: boolean;
+  queuing: string | null;
+  retagging: string | null;
+  onQueue: (t: Track) => void;
+  onRetag: (t: Track) => void;
+}
+
+function TrackTable(p: TrackTableProps) {
+  const showTags = p.tab === 'browse';
+  const cols = showTags
+    ? 'grid grid-cols-[24px_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1fr)_56px_140px]'
+    : 'grid grid-cols-[24px_minmax(0,1.6fr)_minmax(0,1.2fr)_60px_60px_140px]';
+
+  if (p.loading && p.rows.length === 0) {
+    return <div className="px-4 py-6 text-[12px] text-muted italic">loading…</div>;
+  }
+  if (p.rows.length === 0) {
+    return (
+      <div className="px-4 py-6 text-[12px] text-muted italic">
+        {p.tab === 'browse' && 'no tracks match — try clearing some filters'}
+        {p.tab === 'search' && 'search the library to queue a track'}
+        {p.tab === 'untagged' && 'no untagged tracks found'}
+        {p.tab === 'recent' && 'nothing here yet'}
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div
-        className={cn(
-          colsClass,
-          'border-b border-ink px-1.5 py-2 text-[9px] font-bold tracking-[0.22em] text-muted uppercase',
-        )}
-      >
+      <div className={cn(cols, 'gap-3 border-b border-ink px-3 py-2 text-[9px] font-bold tracking-[0.22em] text-muted uppercase')}>
         <span>#</span>
         <span>title</span>
         <span>album</span>
+        <span>{showTags ? 'tags' : 'year'}</span>
         <span className="text-right">dur</span>
         <span />
       </div>
-      {tracks.map((t, i) => (
+      {p.rows.map((t, i) => (
         <div
           key={t.id}
-          className={cn(
-            colsClass,
-            'items-center border-b border-dashed border-separator-strong px-1.5 py-2 text-[12px]',
-          )}
+          className={cn(cols, 'items-center gap-3 border-b border-dashed border-separator-strong px-3 py-2 text-[12px]')}
         >
-          <span className="mono-num text-[10px] text-muted">
-            {String(i + 1).padStart(2, '0')}
-          </span>
+          <span className="mono-num text-[10px] text-muted">{String(i + 1).padStart(2, '0')}</span>
           <div className="min-w-0">
-            <div className="overflow-hidden text-ellipsis whitespace-nowrap text-ink">
-              {t.title}
-            </div>
-            <div className="text-[11px] text-muted">{t.artist}</div>
+            <div className="overflow-hidden text-ellipsis whitespace-nowrap text-ink">{t.title || '—'}</div>
+            <div className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">{t.artist || '—'}</div>
           </div>
-          <span className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">
-            {t.album || '—'}
-          </span>
+          <span className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">{t.album || '—'}</span>
+          {showTags ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              {(t.moods || []).slice(0, 3).map(m => (
+                <Pill key={m} tone="default" className="text-[10px]">{m}</Pill>
+              ))}
+              {t.energy && <Pill tone="ink" dot className="text-[10px]">{t.energy}</Pill>}
+            </div>
+          ) : (
+            <span className="mono-num text-[11px] text-muted">{t.year || '—'}</span>
+          )}
           <span className="mono-num text-right text-[11px] text-muted">
             {t.duration != null ? fmtDuration(t.duration) : '—'}
           </span>
-          <Btn sm onClick={() => onQueue(t)} disabled={!!queuing}>
-            {queuing === t.id ? 'Queuing…' : 'Queue'}
-          </Btn>
+          <div className="flex items-center justify-end gap-1.5">
+            <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
+              {p.queuing === t.id ? 'Queuing…' : 'Queue'}
+            </Btn>
+            {(p.tab === 'browse' || p.tab === 'untagged') && (
+              <Btn
+                sm
+                tone={p.tab === 'untagged' ? 'accent' : 'solid'}
+                onClick={() => p.onRetag(t)}
+                disabled={!!p.retagging}
+              >
+                {p.retagging === t.id ? '…' : (p.tab === 'untagged' ? 'Tag' : 'Retag')}
+              </Btn>
+            )}
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// tagger strip (sticky bottom)
+// ---------------------------------------------------------------------------
+interface TaggerStripProps {
+  coverage: Coverage | null;
+  tagger: TaggerState | null;
+  limit: string;
+  setLimit: (s: string) => void;
+  busy: boolean;
+  onStart: () => void;
+  onStop: () => void;
+}
+
+function TaggerStrip(p: TaggerStripProps) {
+  const [expanded, setExpanded] = useState(false);
+  const logRef = useRef<HTMLPreElement>(null);
+  const fillRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (expanded && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [expanded, p.tagger?.lastLog?.length]);
+
+  const pct = p.coverage?.percent;
+  const running = p.tagger?.running;
+  // Inline width avoided by mutating .style via the dynamic-style hook.
+  useDynamicStyle(fillRef, { width: pct != null ? `${Math.min(100, pct)}%` : null });
+
+  return (
+    <div className="sticky bottom-3 z-30">
+      <section className="card border-ink shadow-[0_4px_24px_rgba(0,0,0,0.18)]">
+        <div className="grid grid-cols-[1fr_auto] items-center gap-3 p-3">
+          <div className="grid gap-1.5">
+            <div className="flex items-center gap-3 text-[12px]">
+              <span className={cn('h-2 w-2 rounded-full', running ? 'animate-pulse bg-vermilion' : 'bg-muted')} />
+              <span className="font-bold">
+                {p.coverage?.tagged?.toLocaleString('en-GB') || '—'}
+                {' / '}
+                {p.coverage?.total != null ? p.coverage.total.toLocaleString('en-GB') : (p.coverage?.scanning ? 'scanning…' : '—')}
+                {' tagged'}
+              </span>
+              {pct != null && <span className="caption text-muted">{pct}%</span>}
+              {running && p.tagger?.startedAt && (
+                <span className="caption text-muted">
+                  pid {p.tagger.pid} · started {new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}
+                </span>
+              )}
+            </div>
+            {pct != null && (
+              <div className="h-1 w-full overflow-hidden bg-[var(--ink-soft)]">
+                <span ref={fillRef} className="block h-full bg-[var(--accent)]" />
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              inputMode="numeric"
+              className="mono-num w-20"
+              value={p.limit}
+              onChange={e => p.setLimit(e.target.value)}
+              disabled={running}
+              title="how many new tracks to tag this run"
+            />
+            {running ? (
+              <Btn tone="danger" onClick={p.onStop} disabled={p.busy}>Stop</Btn>
+            ) : (
+              <Btn tone="accent" onClick={p.onStart} disabled={p.busy}>Start tagging</Btn>
+            )}
+            <Btn sm onClick={() => setExpanded(e => !e)}>
+              {expanded ? 'hide log' : 'log'}
+            </Btn>
+          </div>
+        </div>
+        {expanded && (
+          <pre
+            ref={logRef}
+            className="term m-0 max-h-48 overflow-y-auto border-t border-separator-strong"
+          >
+            {(p.tagger?.lastLog || []).join('\n') || '(no log output yet)'}
+          </pre>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 function fmtDuration(s: number): string {
   const sec = Math.max(0, Math.round(s));
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-}
-
-function Empty({ children }: { children?: ReactNode }) {
-  return <div className="py-2.5 text-[12px] text-muted italic">{children}</div>;
 }

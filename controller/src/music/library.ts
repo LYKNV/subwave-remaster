@@ -97,9 +97,105 @@ export function stats() {
   const total = Object.keys(store.tracks).length;
   const byMood: Record<string, number> = {};
   const byEnergy: Record<string, number> = {};
+  const byGenre: Record<string, number> = {};
   for (const t of Object.values(store.tracks) as any[]) {
     for (const m of t.moods || []) byMood[m] = (byMood[m] || 0) + 1;
     if (t.energy) byEnergy[t.energy] = (byEnergy[t.energy] || 0) + 1;
+    if (t.genre) byGenre[t.genre] = (byGenre[t.genre] || 0) + 1;
   }
-  return { total, byMood, byEnergy, updatedAt: store.updatedAt };
+  return { total, byMood, byEnergy, byGenre, updatedAt: store.updatedAt };
+}
+
+// In-memory filter over the tagged track index. Powers the admin Library
+// browse panel — pure JS, no Subsonic calls. AND across facets; multiple
+// moods OR within the mood facet. `q` is a case-insensitive substring match
+// against title + artist + album. Returns paginated rows + the unfiltered
+// match total so the UI can show "1–50 of N".
+export interface FilterOpts {
+  moods?: string[];
+  energy?: string | null;
+  genre?: string | null;
+  yearFrom?: number | null;
+  yearTo?: number | null;
+  q?: string | null;
+  sort?: 'artist' | 'title' | 'taggedAt' | 'year';
+  limit?: number;
+  offset?: number;
+}
+
+export interface FilteredRow {
+  id: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: number | string | null;
+  genre?: string | null;
+  duration?: number | null;
+  moods: string[];
+  energy: string | null;
+  taggedAt?: string;
+}
+
+export function filter(opts: FilterOpts = {}) {
+  const moods = (opts.moods || []).filter(Boolean);
+  const energy = opts.energy || null;
+  const genre = opts.genre || null;
+  const yearFrom = Number.isFinite(opts.yearFrom as number) ? (opts.yearFrom as number) : null;
+  const yearTo = Number.isFinite(opts.yearTo as number) ? (opts.yearTo as number) : null;
+  const q = (opts.q || '').trim().toLowerCase();
+  const sort = opts.sort || 'artist';
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
+  const offset = Math.max(0, opts.offset ?? 0);
+
+  const matched: FilteredRow[] = [];
+  for (const [id, t] of Object.entries(store.tracks) as [string, any][]) {
+    if (moods.length && !(t.moods || []).some((m: string) => moods.includes(m))) continue;
+    if (energy && t.energy !== energy) continue;
+    if (genre && t.genre !== genre) continue;
+    const year = numericYear(t.year);
+    if (yearFrom != null && (year === 0 || year < yearFrom)) continue;
+    if (yearTo != null && (year === 0 || year > yearTo)) continue;
+    if (q) {
+      const hay = `${t.title || ''} ${t.artist || ''} ${t.album || ''}`.toLowerCase();
+      if (!hay.includes(q)) continue;
+    }
+    matched.push({
+      id,
+      title: t.title,
+      artist: t.artist,
+      album: t.album,
+      year: t.year ?? null,
+      genre: t.genre ?? null,
+      duration: t.duration ?? null,
+      moods: t.moods || [],
+      energy: t.energy ?? null,
+      taggedAt: t.taggedAt,
+    });
+  }
+
+  const cmp = SORTERS[sort] || SORTERS.artist;
+  matched.sort(cmp);
+
+  return {
+    total: matched.length,
+    rows: matched.slice(offset, offset + limit),
+  };
+}
+
+const SORTERS: Record<string, (a: FilteredRow, b: FilteredRow) => number> = {
+  artist: (a, b) =>
+    cmpStr(a.artist, b.artist) || cmpStr(a.album, b.album) || cmpStr(a.title, b.title),
+  title: (a, b) => cmpStr(a.title, b.title) || cmpStr(a.artist, b.artist),
+  year: (a, b) => numericYear(b.year) - numericYear(a.year) || cmpStr(a.artist, b.artist),
+  taggedAt: (a, b) => cmpStr(b.taggedAt, a.taggedAt),
+};
+
+function cmpStr(a?: string | null, b?: string | null) {
+  return (a || '').localeCompare(b || '', undefined, { sensitivity: 'base' });
+}
+function numericYear(y: number | string | null | undefined): number {
+  if (y == null) return 0;
+  if (typeof y === 'number') return y;
+  const n = parseInt(y, 10);
+  return Number.isFinite(n) ? n : 0;
 }

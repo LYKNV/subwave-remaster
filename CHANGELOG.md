@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.11](https://github.com/perminder-klair/subwave/compare/v0.1.10...v0.1.11) (2026-05-24)
+
+
+### Features
+
+* **cli:** surface incomplete setup as a doctor finding ([fee3466](https://github.com/perminder-klair/subwave/commit/fee346651aa1e8f0c0437802ef899f539b85765a))
+
+
+### Refactors
+
+* **cli:** split init and setup responsibilities cleanly ([c0c1c35](https://github.com/perminder-klair/subwave/commit/c0c1c35823dd92bdc3060b3c5cceeed541f4b423))
+* **onboarding:** default Ollama model to glm-5.1:cloud, drop DJ prompt field ([ccd2ac9](https://github.com/perminder-klair/subwave/commit/ccd2ac974d286f5eba62e791b4ffa30bdc007d45))
+
 ## [0.1.10](https://github.com/perminder-klair/subwave/compare/v0.1.9...v0.1.10) (2026-05-24)
 
 

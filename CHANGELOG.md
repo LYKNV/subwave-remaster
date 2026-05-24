@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/perminder-klair/subwave/compare/v0.1.9...v0.1.10) (2026-05-24)
+
+
+### Documentation
+
+* reflect the new init → start chaining in the install flow ([a263e7f](https://github.com/perminder-klair/subwave/commit/a263e7f14804537d7420d5f20de5704bd2e81fbc))
+
 ## [0.1.9](https://github.com/perminder-klair/subwave/compare/v0.1.8...v0.1.9) (2026-05-24)
 
 

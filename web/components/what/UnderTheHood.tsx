@@ -51,7 +51,7 @@ export default function UnderTheHood() {
 
       <div className="mt-8">
         <div
-          className="bs-dj-glyph float-right my-[2px] mb-2 ml-[14px] w-[190px]"
+          className="bs-dj-glyph mx-auto mb-4 !w-[140px] sm:float-right sm:mx-0 sm:my-[2px] sm:mb-2 sm:ml-[14px] sm:!w-[190px]"
           aria-hidden="true"
         >
           <div className="bs-dj-vinyl" />

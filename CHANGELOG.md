@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/perminder-klair/subwave/compare/v0.1.8...v0.1.9) (2026-05-24)
+
+
+### Features
+
+* **cli:** auto-resolve env in `start` and chain init → start from the installer ([8955951](https://github.com/perminder-klair/subwave/commit/8955951a58affca0e8458b26ce08f8e842739bd7))
+
 ## [0.1.8](https://github.com/perminder-klair/subwave/compare/v0.1.7...v0.1.8) (2026-05-24)
 
 

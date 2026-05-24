@@ -25,7 +25,7 @@ import { Checkbox } from '../ui/checkbox';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
+import { Card, Btn, Eyebrow, Seg, Metric } from './ui';
 import { cn } from '../../lib/cn';
 
 // ---------------------------------------------------------------------------
@@ -556,24 +556,27 @@ function KpiStrip({ coverage, stats }: {
 
   return (
     <section className="card">
-      <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
-        <div>
-          <Eyebrow className="text-vermilion">library · browse · tag · queue</Eyebrow>
-          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-            Manage the music your station plays.
-          </div>
-          <div className="mt-1 text-[11px] text-muted">
-            Filter the tagged index by mood, energy, genre, year, or artist.
-            Re-tag tracks the AI got wrong. Queue anything on demand.
-          </div>
+      <div className="border-b border-ink p-4">
+        <Eyebrow className="text-vermilion">library · browse · tag · queue</Eyebrow>
+        <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
+          Manage the music your station plays.
         </div>
-        <div className="flex items-center gap-3">
+        <div className="mt-1 text-[11px] text-muted">
+          Filter the tagged index by mood, energy, genre, year, or artist.
+          Re-tag tracks the AI got wrong. Queue anything on demand.
+        </div>
+      </div>
+      <div className="grid grid-cols-2 border-b border-ink sm:grid-cols-4">
+        <div className="border-r border-separator-strong p-4">
           <Metric n={taggedLabel} l="tagged" />
-          <span className="h-8 w-px bg-separator-strong" />
+        </div>
+        <div className="border-separator-strong p-4 sm:border-r">
           <Metric n={totalLabel} l="library" />
-          <span className="h-8 w-px bg-separator-strong" />
+        </div>
+        <div className="border-t border-r border-separator-strong p-4 sm:border-t-0">
           <Metric n={percentLabel} l="coverage" accent />
-          <span className="h-8 w-px bg-separator-strong" />
+        </div>
+        <div className="border-t border-separator-strong p-4 sm:border-t-0">
           <Metric n={moodCount} l="moods used" />
         </div>
       </div>
@@ -762,10 +765,7 @@ interface TrackTableProps {
 }
 
 function TrackTable(p: TrackTableProps) {
-  const showTags = p.tab === 'browse';
-  const cols = showTags
-    ? 'grid grid-cols-[24px_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1fr)_56px_140px]'
-    : 'grid grid-cols-[24px_minmax(0,1.6fr)_minmax(0,1.2fr)_60px_60px_140px]';
+  const cols = 'grid grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)_140px]';
 
   if (p.loading && p.rows.length === 0) {
     return <div className="px-4 py-6 text-[12px] text-muted italic">loading…</div>;
@@ -784,37 +784,20 @@ function TrackTable(p: TrackTableProps) {
   return (
     <div>
       <div className={cn(cols, 'gap-3 border-b border-ink px-3 py-2 text-[9px] font-bold tracking-[0.22em] text-muted uppercase')}>
-        <span>#</span>
         <span>title</span>
         <span>album</span>
-        <span>{showTags ? 'tags' : 'year'}</span>
-        <span className="text-right">dur</span>
         <span />
       </div>
-      {p.rows.map((t, i) => (
+      {p.rows.map(t => (
         <div
           key={t.id}
           className={cn(cols, 'items-center gap-3 border-b border-dashed border-separator-strong px-3 py-2 text-[12px]')}
         >
-          <span className="mono-num text-[10px] text-muted">{String(i + 1).padStart(2, '0')}</span>
           <div className="min-w-0">
             <div className="overflow-hidden text-ellipsis whitespace-nowrap text-ink">{t.title || '—'}</div>
             <div className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">{t.artist || '—'}</div>
           </div>
           <span className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">{t.album || '—'}</span>
-          {showTags ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-1">
-              {(t.moods || []).slice(0, 3).map(m => (
-                <Pill key={m} tone="default" className="text-[10px]">{m}</Pill>
-              ))}
-              {t.energy && <Pill tone="ink" dot className="text-[10px]">{t.energy}</Pill>}
-            </div>
-          ) : (
-            <span className="mono-num text-[11px] text-muted">{t.year || '—'}</span>
-          )}
-          <span className="mono-num text-right text-[11px] text-muted">
-            {t.duration != null ? fmtDuration(t.duration) : '—'}
-          </span>
           <div className="flex items-center justify-end gap-1.5">
             <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
               {p.queuing === t.id ? 'Queuing…' : 'Queue'}
@@ -924,10 +907,3 @@ function TaggerStrip(p: TaggerStripProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-function fmtDuration(s: number): string {
-  const sec = Math.max(0, Math.round(s));
-  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-}

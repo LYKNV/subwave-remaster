@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.13](https://github.com/perminder-klair/subwave/compare/v0.1.12...v0.1.13) (2026-05-24)
+
+
+### Bug Fixes
+
+* **landing:** tighten masthead nav bottom padding ([6856661](https://github.com/perminder-klair/subwave/commit/685666130a2745103d1c66856557c321b7b7e854))
+* **landing:** tighten masthead nav bottom padding ([9c99bd9](https://github.com/perminder-klair/subwave/commit/9c99bd9ac9960c9918c87eabd0b4187706c9fa37))
+
 ## [0.1.12](https://github.com/perminder-klair/subwave/compare/v0.1.11...v0.1.12) (2026-05-24)
 
 

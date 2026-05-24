@@ -12,6 +12,25 @@ export function useClock(): Date | null {
   return t;
 }
 
+// Pseudo-random animated spectrum used as a fallback when the real analyser
+// can't attach — notably iOS Safari, where createMediaElementSource on a live
+// HTTP MP3 stream returns silence (WebKit limitation with no app-level
+// workaround short of shipping a WASM MP3 decoder). Values in [0, 1].
+export function useSpectrum(bins = 120, active = true, speed = 60): number[] {
+  const [arr, setArr] = useState<number[]>(() => Array(bins).fill(0.1));
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => {
+      setArr(prev => prev.map((v, i) => {
+        const target = Math.pow(Math.random(), 1.4) * (1 - i / (bins * 2.2));
+        return v + (target - v) * 0.45;
+      }));
+    }, speed);
+    return () => clearInterval(id);
+  }, [active, bins, speed]);
+  return arr;
+}
+
 export interface Analyser {
   ready: boolean;
   read: () => Uint8Array<ArrayBuffer> | null;
@@ -27,7 +46,7 @@ interface WebkitWindow {
 // the first time `active` flips true, then writes per-frame frequency bytes
 // into an internal ref read via `read()`. Returns `{ ready, read }`. If CORS
 // or anything else blocks attachment, `ready` stays false and `read()` returns
-// null — callers should render static bars (no fake reactive animation).
+// null — callers should fall back to `useSpectrum`.
 export function useAnalyser(
   audioRef: RefObject<HTMLAudioElement | null> | null | undefined,
   active: boolean,
@@ -67,10 +86,9 @@ export function useAnalyser(
         setReady(true);
 
         // iOS Safari quirk: createMediaElementSource() on a live HTTP MP3 stream
-        // wires up cleanly but the analyser only ever returns zeros (WebKit
-        // limitation, no app-level workaround for live streams). Probe once
-        // after playback starts — if no samples land in ~600 ms, flip
-        // ready=false so callers render static bars instead.
+        // wires up cleanly but the analyser only ever returns zeros. Probe once
+        // after playback actually starts — if no samples land in ~600 ms, flip
+        // ready=false so the pseudo-random useSpectrum fallback takes over.
         if (probedRef.current) return;
         onPlaying = () => {
           if (probedRef.current || cancelled) return;

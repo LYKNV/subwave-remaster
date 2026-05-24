@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, type RefObject } from 'react';
-import { useAnalyser } from '@/lib/hooks';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useAnalyser, useSpectrum } from '@/lib/hooks';
 import { cn } from '@/lib/cn';
 
 const BARS = 120;
@@ -16,25 +16,16 @@ export default function Waveform({ audioRef, tunedIn, progress }: WaveformProps)
   const { ready, read } = useAnalyser(audioRef, tunedIn);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
+  const fallback = useSpectrum(BARS, tunedIn && !ready, 60);
+  const [, force] = useState(0);
 
-  // Drive bars via rAF when the real analyser is attached. When it isn't —
-  // notably iOS Safari, where createMediaElementSource on a streaming MP3
-  // returns silence — bars stay at their default static height rather than
-  // running a pseudo-random animation that misleads listeners into thinking
-  // the visualisation tracks the music.
+  // Drive real-analyser bars via rAF when available; otherwise the fallback
+  // effect below paints heights from the pseudo-random spectrum. Bar heights
+  // are written via DOM mutation in both paths so the component stays free of
+  // inline style props (issue #50).
   useEffect(() => {
-    const clearHeights = () => {
-      const container = containerRef.current;
-      if (!container) return;
-      const spans = container.querySelectorAll<HTMLSpanElement>('[data-bar]');
-      for (let i = 0; i < spans.length; i++) {
-        const span = spans[i];
-        if (span) span.style.height = '';
-      }
-    };
     if (!ready || !tunedIn) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      clearHeights();
       return;
     }
     const tick = () => {
@@ -54,6 +45,23 @@ export default function Waveform({ audioRef, tunedIn, progress }: WaveformProps)
     tick();
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, [ready, tunedIn, read]);
+
+  // Fallback: paint pseudo-random bar heights when the real analyser hasn't
+  // attached yet (CORS, iOS Safari, paused stream, etc.).
+  useEffect(() => {
+    if (ready && tunedIn) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const spans = container.querySelectorAll<HTMLSpanElement>('[data-bar]');
+    for (let i = 0; i < spans.length; i++) {
+      const span = spans[i];
+      if (span) span.style.height = `${10 + Math.pow(fallback[i] ?? 0.1, 0.7) * 95}%`;
+    }
+  }, [fallback, ready, tunedIn]);
+
+  // When the real analyser is in charge, suppress the fallback array influence;
+  // we still need a single re-render to flip data attributes on mount.
+  useEffect(() => { force(x => x + 1); }, [ready, tunedIn]);
 
   const usingReal = ready && tunedIn;
 

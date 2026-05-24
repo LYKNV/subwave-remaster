@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.15](https://github.com/perminder-klair/subwave/compare/v0.1.14...v0.1.15) (2026-05-24)
+
+
+### Features
+
+* **cli:** fetch TUI binary on demand for standalone installs ([f621d76](https://github.com/perminder-klair/subwave/commit/f621d7669390a1df8b7a3d238fa9f417112dddba))
+* **cli:** fetch TUI binary on demand for standalone installs ([960c90d](https://github.com/perminder-klair/subwave/commit/960c90d04d5932b9f80fdc7e6dfc82a43e59eb34))
+
+
+### Bug Fixes
+
+* **cli:** declare tsx as a devDependency ([2c18532](https://github.com/perminder-klair/subwave/commit/2c185322ebba20a11de89ea7bd65121f24c2d608))
+
 ## [0.1.14](https://github.com/perminder-klair/subwave/compare/v0.1.13...v0.1.14) (2026-05-24)
 
 

@@ -122,26 +122,16 @@ Browsers pull audio directly from Icecast.
 
 ```bash
 curl -fsSL https://cli.getsubwave.com | sh    # installs, then offers to init + start
-subwave setup                              # configure Navidrome, LLM, TTS, DJ persona
+subwave setup                              # connect Navidrome + LLM
 ```
 
-The installer drops the `subwave` binary on your host (no Node needed) and
-asks `Run subwave init now?` — say yes and it walks you through the install
-dir (default `~/subwave`), deployment shape (prod / prod-byo), and admin
-credentials. `init` ends with `Bring the stack up now?` — say yes again and
-`subwave start` runs straight through. Two Enters and you're on-air; finish
-configuration with `subwave setup` in the terminal, or open
-`http://localhost:7700/onboarding` in the browser.
+Two Enter prompts during the installer (`Run subwave init now?`, then
+`Bring the stack up now?`) and the stack is on-air. `subwave setup`
+connects Navidrome and your LLM — or do the same in the browser at
+`http://localhost:7700/onboarding`.
 
-The CLI doesn't need a clone, doesn't need Node on the host, and works from
-anywhere — `subwave status`, `subwave logs controller`, `subwave update`,
-`subwave self-update` all just work.
-
-The configuration wizard probes Navidrome and your LLM provider live, persists
-everything to `state/`, and flips the station on-air. Cloud LLM/TTS API keys
-land in `state/secrets.env` (mode 0600); Navidrome creds + the "setup done"
-flag land in `state/setup-config.json`; everything else (DJ persona, jingle
-ratio, shows) goes through the existing `settings.json`.
+No clone, no Node on the host. `subwave status / logs / doctor / update`
+work from anywhere afterwards.
 
 ## Quick start (no CLI, raw docker)
 

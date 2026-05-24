@@ -98,15 +98,25 @@ export default function WizardShell() {
       <div className="rounded border border-ink/20 bg-bg p-6">{body}</div>
 
       <div className="mt-6 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={w.back}
-          disabled={w.stepIdx === 0}
-          className="rounded border border-ink/40 px-3 py-1.5 text-sm hover:bg-ink/10 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          ← Back
-        </button>
-        {w.step !== 'review' ? (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={w.back}
+            disabled={w.stepIdx === 0}
+            className="rounded border border-ink/40 px-3 py-1.5 text-sm hover:bg-ink/10 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            ← Back
+          </button>
+          {/* Escape hatch lives next to Back so it can't be confused with the
+              primary CTA on the right. Only shown on the review step — earlier
+              steps have a Next button there. */}
+          {w.step === 'review' && (
+            <Link href="/setup" className="bs-link text-xs text-ink/50">
+              read the docs instead
+            </Link>
+          )}
+        </div>
+        {w.step !== 'review' && (
           <button
             type="button"
             onClick={w.next}
@@ -114,12 +124,6 @@ export default function WizardShell() {
           >
             Next →
           </button>
-        ) : (
-          <div className="text-xs text-ink/50">
-            <Link href="/setup" className="bs-link">
-              read the docs instead
-            </Link>
-          </div>
         )}
       </div>
     </div>

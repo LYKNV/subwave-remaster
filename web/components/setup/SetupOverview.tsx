@@ -1,22 +1,22 @@
 import Link from 'next/link';
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 const PATHS = [
   {
     href: '/setup/quick-start',
     label: 'Quick Start',
-    blurb: 'The interactive wizard, or one sentence to your AI coding agent.',
+    blurb: 'The standalone CLI — install once, init / setup / start, done.',
   },
   {
     href: '/setup/manual',
     label: 'Manual Install',
-    blurb: 'The same outcome, command by command, for scripted or non-standard installs.',
+    blurb: 'No CLI on your host — pure docker compose, same outcome.',
   },
   {
     href: '/setup/development',
     label: 'Development',
-    blurb: 'Hacking on SUB/WAVE itself — the two compose files and hot reload.',
+    blurb: 'Hacking on SUB/WAVE itself — the three compose files and hot reload.',
   },
 ];
 
@@ -38,24 +38,32 @@ export default function SetupOverview() {
         <div className="bs-faststart">
           <p className="bs-eyebrow">THE FAST PATH</p>
           <p>
-            Already have Docker, Node 20+, Navidrome, and an LLM reachable? It's
-            four commands — the wizard handles the rest.
+            Already have Docker, Navidrome, and an LLM reachable? Three commands
+            from a fresh machine to an on-air station — the CLI handles the rest.
           </p>
-          <CodeBlock>{`git clone https://github.com/perminder-klair/subwave.git
-cd subwave
-npm install
-npm run setup`}</CodeBlock>
+          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh
+subwave init
+subwave setup`}</CodeBlock>
           <p className="text-muted">
-            The wizard asks <em>dev or production?</em>, prompts for Navidrome and
-            Ollama, boots the stack, and renders the station jingles.{' '}
+            <code className="bs-code-inline">init</code> scaffolds an install
+            dir (default <code className="bs-code-inline">~/subwave</code>) with
+            the compose file and a 3-var{' '}
+            <code className="bs-code-inline">.env</code>;{' '}
+            <code className="bs-code-inline">setup</code> asks{' '}
+            <em>prod or BYO proxy?</em>, prompts for Navidrome and your LLM,
+            boots the stack, and renders the station jingles.{' '}
             <Link href="/setup/quick-start" className="bs-link">
               Full walkthrough →
             </Link>
           </p>
           <p className="text-muted">
-            Once it's running, <code className="bs-code-inline">npm start</code> opens
-            the operator console — a menu for stack status, a diagnostic sweep, logs,
-            restart, and the terminal player.
+            After that,{' '}
+            <code className="bs-code-inline">subwave status / logs / doctor / restart / update</code>{' '}
+            drive the station from anywhere on your shell — no{' '}
+            <code className="bs-code-inline">cd</code> into a project dir, no clone
+            required. Prefer pure <code className="bs-code-inline">docker compose</code>?{' '}
+            <Link href="/setup/manual" className="bs-link">Manual Install</Link>{' '}
+            covers that path.
           </p>
         </div>
       </section>

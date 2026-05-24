@@ -92,9 +92,9 @@ which breaks social previews and search indexing.
 ## 4. First boot
 
 ```bash
-docker compose -f docker/docker-compose.prod.yml up -d --build
-docker compose -f docker/docker-compose.prod.yml ps
-docker compose -f docker/docker-compose.prod.yml logs -f
+docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml ps
+docker compose -f docker-compose.yml logs -f
 ```
 
 Health checks:
@@ -106,7 +106,7 @@ curl -fsSI http://localhost/                  # → 200, Next.js page
 ```
 
 If `/api/health` works but `/stream.mp3` doesn't, check Liquidsoap connected
-to Icecast: `docker compose -f docker/docker-compose.prod.yml logs liquidsoap`
+to Icecast: `docker compose -f docker-compose.yml logs liquidsoap`
 and look for `Source ... started`.
 
 ## 5. Render jingles
@@ -169,19 +169,19 @@ If a deploy goes wrong, roll back:
 ```bash
 git log --oneline -5
 git checkout <previous-sha>
-docker compose -f docker/docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml up -d --build
 ```
 
 ## 8. Operations
 
 ```bash
 # Tail logs
-docker compose -f docker/docker-compose.prod.yml logs -f controller
-docker compose -f docker/docker-compose.prod.yml logs -f liquidsoap
-docker compose -f docker/docker-compose.prod.yml logs -f caddy
+docker compose -f docker-compose.yml logs -f controller
+docker compose -f docker-compose.yml logs -f liquidsoap
+docker compose -f docker-compose.yml logs -f caddy
 
 # Restart just one service
-docker compose -f docker/docker-compose.prod.yml restart controller
+docker compose -f docker-compose.yml restart controller
 
 # Manual skip (controller exposes POST /skip, Caddy proxies it under /api)
 curl -X POST http://localhost/api/skip
@@ -204,7 +204,7 @@ proxy in your homelab, the bundled Caddy will either clash on `:7700` or
 duplicate work you already have. Use the BYO-proxy compose variant instead:
 
 ```bash
-docker compose -f docker/docker-compose.byo-proxy.yml up -d
+docker compose -f docker-compose.byo.yml up -d
 ```
 
 It drops the bundled Caddy and binds each user-facing service directly to a

@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 import { detectCompose, listDeclaredServices, type ComposeFile, type ComposeEnv } from '../compose.ts';
 import { composeLogs } from '../docker.ts';
 import { exitIfCancelled, err, info, muted, p, pauseForEnter, header } from '../ui.ts';
-import { WEB_DEV_LOG } from '../web-dev.ts';
+import { getWebDevLog } from '../web-dev.ts';
 
 const WEB_DEV_SERVICE = 'web (dev)';
 
@@ -77,15 +77,15 @@ async function resolveServices(file: ComposeFile, env: ComposeEnv, arg?: string)
 
 async function tailWebDev(): Promise<void> {
   header('Tailing web (dev)');
-  muted(`source: ${WEB_DEV_LOG}`);
+  muted(`source: ${getWebDevLog()}`);
   muted('Ctrl-C to stop.');
   console.log();
-  if (!existsSync(WEB_DEV_LOG)) {
+  if (!existsSync(getWebDevLog())) {
     info('log file does not exist yet — start the web dev server to create it.');
     return;
   }
   await new Promise<void>((resolveP) => {
-    const child = spawn('tail', ['-n', '200', '-f', WEB_DEV_LOG], { stdio: 'inherit' });
+    const child = spawn('tail', ['-n', '200', '-f', getWebDevLog()], { stdio: 'inherit' });
     child.on('exit', () => resolveP());
   });
 }

@@ -16,7 +16,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Public site origin, baked into the OG/Twitter cards, canonical URLs, robots
 # and sitemap. Next freezes metadata at build time, so this has to be present
 # *here*, not as a runtime container env var. Passed through from compose
-# (docker-compose.prod.yml → web.build.args). Unset → localhost fallback.
+# (docker-compose.yml → web.build.args). Unset → localhost fallback.
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
 # Google Analytics Measurement ID. NEXT_PUBLIC_* vars are inlined into the

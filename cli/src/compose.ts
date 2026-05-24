@@ -9,7 +9,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DOCKER_DIR, REPO_ROOT } from './util.ts';
+import { getSubwaveHome } from './util.ts';
 
 // `prod-byo` is the "bring your own reverse proxy" variant — same as prod
 // but without the bundled Caddy. Treat it as a prod sibling everywhere
@@ -19,15 +19,30 @@ export type ComposeEnv = 'dev' | 'prod' | 'prod-byo' | 'down';
 
 export interface ComposeFile {
   env: Exclude<ComposeEnv, 'down'>;
-  file: string; // path relative to repo root (e.g. "docker/docker-compose.yml")
+  file: string; // path relative to SUBWAVE_HOME (e.g. "docker-compose.yml")
   abs: string;  // absolute path
 }
 
-export const COMPOSE_FILES: ComposeFile[] = [
-  { env: 'prod',     file: 'docker/docker-compose.prod.yml',      abs: resolve(REPO_ROOT, 'docker/docker-compose.prod.yml') },
-  { env: 'prod-byo', file: 'docker/docker-compose.byo-proxy.yml', abs: resolve(REPO_ROOT, 'docker/docker-compose.byo-proxy.yml') },
-  { env: 'dev',      file: 'docker/docker-compose.yml',           abs: resolve(REPO_ROOT, 'docker/docker-compose.yml') },
-];
+// `docker-compose.yml` is the production default (bundled Caddy) so a
+// fresh-host `docker compose up -d` does the right thing. Dev moves to
+// the explicit `.dev.yml`; BYO-proxy variant is `.byo.yml`. Probe order
+// matters: detectCompose() returns the first file with running
+// containers, so list prod first to prefer it on ambiguity.
+//
+// Computed lazily so importing this module doesn't trigger SUBWAVE_HOME
+// resolution — `subwave init` needs to load this file (for the env enum)
+// without yet having a home. Memoised after first call.
+let _composeFiles: ComposeFile[] | null = null;
+export function getComposeFiles(): ComposeFile[] {
+  if (_composeFiles) return _composeFiles;
+  const home = getSubwaveHome();
+  _composeFiles = [
+    { env: 'prod',     file: 'docker-compose.yml',     abs: resolve(home, 'docker-compose.yml') },
+    { env: 'prod-byo', file: 'docker-compose.byo.yml', abs: resolve(home, 'docker-compose.byo.yml') },
+    { env: 'dev',      file: 'docker-compose.dev.yml', abs: resolve(home, 'docker-compose.dev.yml') },
+  ];
+  return _composeFiles;
+}
 
 // `prod` and `prod-byo` differ in routing surface (bundled Caddy vs external
 // proxy fronting host ports) but share every operational concern — admin
@@ -56,12 +71,12 @@ export interface ComposeStatus {
 // (mixed-restart edge case), we trust the most common value.
 export function detectCompose(): ComposeStatus {
   // Find any running container in either project, then read its label.
-  for (const f of COMPOSE_FILES) {
+  for (const f of getComposeFiles()) {
     if (!existsSync(f.abs)) continue;
     const ids = spawnSync(
       'docker',
       ['compose', '-f', f.file, 'ps', '-q'],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
+      { cwd: getSubwaveHome(), encoding: 'utf8' },
     );
     if (ids.status !== 0 || ids.stdout.trim() === '') continue;
 
@@ -69,7 +84,7 @@ export function detectCompose(): ComposeStatus {
     // actually launched with.
     const labelFile = detectConfigFileFromContainers(ids.stdout.trim().split('\n'));
     if (labelFile) {
-      const match = COMPOSE_FILES.find((c) => c.abs === labelFile);
+      const match = getComposeFiles().find((c) => c.abs === labelFile);
       if (match) return { env: match.env, file: match, services: listServices(match) };
     }
     // Fallback: trust the file we asked about. Better than reporting "down".
@@ -106,7 +121,7 @@ function listServices(f: ComposeFile): Record<string, string> {
   const r = spawnSync(
     'docker',
     ['compose', '-f', f.file, 'ps', '--format', 'json', '--all'],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
+    { cwd: getSubwaveHome(), encoding: 'utf8' },
   );
   if (r.status !== 0) return {};
   const out: Record<string, string> = {};
@@ -176,7 +191,7 @@ export function listDeclaredServices(file: ComposeFile): string[] {
   const r = spawnSync(
     'docker',
     ['compose', '-f', file.file, 'config', '--services'],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
+    { cwd: getSubwaveHome(), encoding: 'utf8' },
   );
   if (r.status !== 0) return [];
   return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);

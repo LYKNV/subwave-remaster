@@ -1,14 +1,14 @@
 // Controller HTTP client. Picks the right base URL for the live compose
-// env, attaches admin Basic auth if creds are available in controller/.env,
+// env, attaches admin Basic auth if creds are available in the root .env,
 // and returns parsed JSON.
 //
 // The controller exposes both public (/health, /now-playing, /state) and
 // admin (/settings, /debug, /stats, /dj/*) endpoints. We grab admin creds
-// lazily from controller/.env; if they're missing in dev that's fine
+// lazily from the root .env; if they're missing in dev that's fine
 // (controller skips the auth gate when not in NODE_ENV=production).
 
 import { apiBaseFor, type ComposeEnv } from './compose.ts';
-import { CONTROLLER_ENV, parseEnvFile, fetchErrorReason } from './util.ts';
+import { getLegacyControllerEnv, getRootEnv, parseEnvFile, fetchErrorReason } from './util.ts';
 
 export interface AdminCreds {
   user: string;
@@ -16,9 +16,14 @@ export interface AdminCreds {
 }
 
 export function readAdminCreds(): AdminCreds | null {
-  const env = parseEnvFile(CONTROLLER_ENV);
-  if (env.ADMIN_USER && env.ADMIN_PASS) {
-    return { user: env.ADMIN_USER, pass: env.ADMIN_PASS };
+  // Prefer the root .env (post single-compose). Fall back to the legacy
+  // controller/.env so an upgrading operator who hasn't re-run setup yet still
+  // gets their admin calls authenticated.
+  for (const path of [getRootEnv(), getLegacyControllerEnv()]) {
+    const env = parseEnvFile(path);
+    if (env.ADMIN_USER && env.ADMIN_PASS) {
+      return { user: env.ADMIN_USER, pass: env.ADMIN_PASS };
+    }
   }
   return null;
 }

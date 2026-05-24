@@ -12,8 +12,8 @@ The user has authorised free action on this hot path — `scripts/setup.sh`, `gi
 ## The five facts the workflow turns on
 
 1. **Two compose files, two shapes.**
-   - `docker/docker-compose.yml` — dev variant (Mac smoke-test): Icecast + Liquidsoap + Controller only. Web runs separately via `npm run dev`. State at `../state`.
-   - `docker/docker-compose.prod.yml` — production single-host: adds `web` and `caddy`. **Only Caddy binds a host port.** State at `${STATE_DIR:-<repo>/state}` — repo-local by default, same as dev.
+   - `docker-compose.dev.yml` — dev variant (Mac smoke-test): Icecast + Liquidsoap + Controller only. Web runs separately via `npm run dev`. State at `../state`.
+   - `docker-compose.yml` — production single-host: adds `web` and `caddy`. **Only Caddy binds a host port.** State at `${STATE_DIR:-<repo>/state}` — repo-local by default, same as dev.
    - Detect which is up from `docker compose -f <file> ps`. Caddy maps to host port `${CADDY_PORT:-7700}` (`0.0.0.0:7700->80/tcp` by default). Always read the actual port from `ps`, never hardcode — operators can override via `CADDY_PORT` in `docker/.env`.
 
 2. **Controller and Liquidsoap COPY source at build time, they do not bind-mount it.** `docker compose restart <svc>` reruns the *same baked-in code* and does nothing for source changes. Source changes need `up -d --build <svc>`. This is the single most common deploy mistake.
@@ -45,8 +45,8 @@ Before anything else, figure out which mode you're in. Three possibilities:
 cd "$REPO"
 
 # Are containers up?
-RUNNING_PROD=$(docker compose -f docker/docker-compose.prod.yml ps -q 2>/dev/null)
-RUNNING_DEV=$(docker compose -f docker/docker-compose.yml      ps -q 2>/dev/null)
+RUNNING_PROD=$(docker compose -f docker-compose.yml ps -q 2>/dev/null)
+RUNNING_DEV=$(docker compose -f docker-compose.dev.yml      ps -q 2>/dev/null)
 
 # Has setup.sh been run? (it produces docker/.env and a rendered icecast.xml)
 [ -f docker/.env ] && echo "docker/.env present"
@@ -151,10 +151,10 @@ sudo STATE_DIR=/srv/subwave ./scripts/setup.sh
 
 ```bash
 # Prod (single host with Caddy)
-docker compose -f docker/docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml up -d --build
 
 # OR Dev (no web container, no Caddy — runs npm run dev separately)
-docker compose -f docker/docker-compose.yml up -d --build
+docker compose -f docker-compose.dev.yml up -d --build
 ```
 
 First boot will spend a minute or two pulling images and compiling. Once `controller` reports ready, generate the station idents:
@@ -189,7 +189,7 @@ If any of those are missing, fall back to the initial-setup path — something w
 #### B2 — Up
 
 ```bash
-docker compose -f docker/docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml up -d --build
 ```
 
 `--build` is cheap when nothing changed (BuildKit short-circuits via cache). Including it covers the case where the operator's been editing source between sessions.
@@ -219,11 +219,11 @@ This is the everyday case. Steps 1 through 6 below are the deploy workflow.
 cd "$REPO"
 
 # Which compose file is live? Whichever has containers up.
-docker compose -f docker/docker-compose.prod.yml ps
-docker compose -f docker/docker-compose.yml      ps
+docker compose -f docker-compose.yml ps
+docker compose -f docker-compose.dev.yml      ps
 ```
 
-For the rest of this skill, `COMPOSE` means whichever file is live. Almost always `docker/docker-compose.prod.yml`.
+For the rest of this skill, `COMPOSE` means whichever file is live. Almost always `docker-compose.yml`.
 
 ### Step 2 — See what's incoming
 
@@ -273,7 +273,7 @@ Then rebuild **only** the services from the mapping. Pass them all in one `up -d
 
 ```bash
 # Example: controller and web both changed in prod stack
-docker compose -f docker/docker-compose.prod.yml up -d --build controller web
+docker compose -f docker-compose.yml up -d --build controller web
 ```
 
 Do not use `docker compose restart` for code changes — it will appear to succeed and silently run the old code (see Fact #2).
@@ -282,14 +282,14 @@ If you only need to apply a config change (Caddyfile, compose YAML, env), prefer
 
 ```bash
 # Caddyfile edited - Caddy reloads via mount, just bounce it
-docker compose -f docker/docker-compose.prod.yml restart caddy
+docker compose -f docker-compose.yml restart caddy
 
 # Compose YAML edited - let compose figure out what to recreate
-docker compose -f docker/docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml up -d
 
 # Icecast template edited - re-render, then force-recreate icecast
 ./scripts/setup.sh
-docker compose -f docker/docker-compose.prod.yml up -d --force-recreate icecast
+docker compose -f docker-compose.yml up -d --force-recreate icecast
 ```
 
 ### Step 5 — Verify

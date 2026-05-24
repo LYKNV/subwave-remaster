@@ -14,12 +14,13 @@ export default function Prerequisites() {
         <h2>Three things SUB/WAVE talks to.</h2>
         <ul className="bs-checklist">
           <li>
-            <strong>Docker + Node 20+ on the host.</strong>
+            <strong>Docker on the host.</strong>
             <p>
-              Docker Compose runs the stack (four containers in dev, five in
-              production). Node is only for the{' '}
-              <code className="bs-code-inline">npm run setup</code> wizard and the
-              web dev server — a production deploy can run without it.
+              Docker Compose runs the stack (three containers in dev, five in
+              production). The standalone <code className="bs-code-inline">subwave</code>{' '}
+              CLI is a single Bun-compiled binary with no runtime dependency — no
+              Node needed unless you&apos;re hacking on the source (
+              <Link href="/setup/development" className="bs-link">Development</Link>).
             </p>
           </li>
           <li>

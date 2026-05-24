@@ -1,7 +1,7 @@
 // Operator CLI preferences. Persisted to ~/.config/subwave/cli.json so the
 // next session remembers things like the last-chosen env when both compose
-// files are present. Tiny by design — most state lives in controller/.env
-// and state/settings.json, not here.
+// files are present. Tiny by design — most state lives in the root .env and
+// state/{settings,setup-config}.json, not here.
 //
 // Pattern: load defaults() merged with whatever's on disk. New keys added
 // to defaults() are automatically present in old configs without migration.

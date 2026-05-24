@@ -9,13 +9,17 @@
 import { existsSync, openSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { REPO_ROOT, STATE_DIR } from './util.ts';
+import { getSubwaveHome, getStateDir } from './util.ts';
 import { p, pc, accent, exitIfCancelled, header, ok, warn, muted } from './ui.ts';
 
-const WEB_DIR = resolve(REPO_ROOT, 'web');
-const LOG_DIR = resolve(STATE_DIR, 'logs');
-export const WEB_DEV_LOG = resolve(LOG_DIR, 'web-dev.log');
-export const WEB_DEV_PID = resolve(LOG_DIR, 'web-dev.pid');
+// Lazy path accessors. These all resolve under SUBWAVE_HOME / state/, so
+// evaluating them at module load would force home resolution even on
+// `subwave --version`. Functions defer until the operator actually invokes
+// a dev-mode command.
+function webDir(): string { return resolve(getSubwaveHome(), 'web'); }
+function logDir(): string { return resolve(getStateDir(), 'logs'); }
+export function getWebDevLog(): string { return resolve(logDir(), 'web-dev.log'); }
+export function getWebDevPid(): string { return resolve(logDir(), 'web-dev.pid'); }
 
 export interface PortHolder {
   pid: number;
@@ -76,13 +80,13 @@ export function isWebDevCommand(command: string): boolean {
 }
 
 export function webDepsInstalled(): boolean {
-  return existsSync(resolve(WEB_DIR, 'node_modules'));
+  return existsSync(resolve(webDir(), 'node_modules'));
 }
 
 // `npm install` in web/, inheriting stdio so the operator sees progress.
 export function installWebDeps(): Promise<number> {
   return new Promise((resolveP) => {
-    const child = spawn('npm', ['install'], { cwd: WEB_DIR, stdio: 'inherit' });
+    const child = spawn('npm', ['install'], { cwd: webDir(), stdio: 'inherit' });
     child.on('exit', (code) => resolveP(code ?? 1));
   });
 }
@@ -91,12 +95,12 @@ export function installWebDeps(): Promise<number> {
 // forwards SIGTERM to its child `next dev`, so killing this pid stops the
 // whole tree cleanly.
 export function spawnWebDevDetached(): { pid: number; logFile: string } {
-  mkdirSync(LOG_DIR, { recursive: true });
+  mkdirSync(logDir(), { recursive: true });
   // Append, not truncate — repeated setup runs share one log; the operator
   // can rotate or delete it themselves if it grows.
-  const fd = openSync(WEB_DEV_LOG, 'a');
+  const fd = openSync(getWebDevLog(), 'a');
   const child = spawn('npm', ['run', 'dev'], {
-    cwd: WEB_DIR,
+    cwd: webDir(),
     stdio: ['ignore', fd, fd],
     detached: true,
     // FORCE_COLOR=0 keeps SGR escapes out of the log file.
@@ -106,8 +110,8 @@ export function spawnWebDevDetached(): { pid: number; logFile: string } {
     throw new Error('failed to spawn `npm run dev`');
   }
   child.unref();
-  writeFileSync(WEB_DEV_PID, String(child.pid));
-  return { pid: child.pid, logFile: WEB_DEV_LOG };
+  writeFileSync(getWebDevPid(), String(child.pid));
+  return { pid: child.pid, logFile: getWebDevLog() };
 }
 
 // Poll http://localhost:7700 until it returns any HTTP response, or timeout.
@@ -163,7 +167,7 @@ export function stopWebDev(): { stopped: boolean; reason?: string } {
 }
 
 function cleanupPidFile(): void {
-  try { unlinkSync(WEB_DEV_PID); } catch { /* ignore */ }
+  try { unlinkSync(getWebDevPid()); } catch { /* ignore */ }
 }
 
 // Interactive flow: detect → confirm → install if needed → spawn → wait.
@@ -216,7 +220,7 @@ export async function maybeStartWebDev(opts: { askFirst?: boolean } = {}): Promi
     return 'skipped';
   }
   muted(`pid ${pid} — log: ${logFile}`);
-  muted(`pid file: ${WEB_DEV_PID}`);
+  muted(`pid file: ${getWebDevPid()}`);
 
   const sp = p.spinner();
   sp.start('Waiting for next dev to respond on :7700…');
@@ -225,7 +229,7 @@ export async function maybeStartWebDev(opts: { askFirst?: boolean } = {}): Promi
   });
   sp.stop(ready ? `Web dev on ${accent('http://localhost:7700')}` : pc.yellow('Web dev not responding after 30s — continuing'));
   if (!ready) {
-    warn(`web dev did not respond within 30s. Check ${WEB_DEV_LOG}.`);
+    warn(`web dev did not respond within 30s. Check ${getWebDevLog()}.`);
   }
   return 'running';
 }
@@ -233,7 +237,7 @@ export async function maybeStartWebDev(opts: { askFirst?: boolean } = {}): Promi
 // Read the pid file (best-effort). Returns 0 if absent or unparseable.
 export function readWebDevPid(): number {
   try {
-    const n = Number(readFileSync(WEB_DEV_PID, 'utf8').trim());
+    const n = Number(readFileSync(getWebDevPid(), 'utf8').trim());
     return Number.isFinite(n) ? n : 0;
   } catch {
     return 0;

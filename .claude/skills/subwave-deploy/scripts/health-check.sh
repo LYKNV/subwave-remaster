@@ -25,10 +25,11 @@ REPO=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || (cd "$SCRIP
 cd "$REPO" || { echo "subwave repo not found at $REPO"; exit 2; }
 
 # --- pick the live compose file ---------------------------------------------
-PROD="docker/docker-compose.prod.yml"
-DEV="docker/docker-compose.yml"
+PROD="docker-compose.yml"
+BYO="docker-compose.byo.yml"
+DEV="docker-compose.dev.yml"
 COMPOSE=""
-for f in "$PROD" "$DEV"; do
+for f in "$PROD" "$BYO" "$DEV"; do
   if [ -n "$(docker compose -f "$f" ps -q 2>/dev/null)" ]; then
     COMPOSE="$f"
     break
@@ -36,7 +37,7 @@ for f in "$PROD" "$DEV"; do
 done
 
 if [ -z "$COMPOSE" ]; then
-  echo "No SUB/WAVE containers are running (checked $PROD and $DEV)."
+  echo "No SUB/WAVE containers are running (checked $PROD, $BYO, and $DEV)."
   exit 1
 fi
 

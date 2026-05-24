@@ -22,6 +22,10 @@ import { router as sfxRoutes } from './routes/sfx.js';
 import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
+import { router as onboardingRoutes } from './routes/onboarding.js';
+import { loadSecretsIntoEnv } from './setup/secrets.js';
+import { loadSetupConfig } from './setup/config.js';
+import { getSetupStatus } from './setup/firstRun.js';
 
 // Fail fast in production if the admin gate isn't configured.
 assertAdminConfigured();
@@ -39,6 +43,7 @@ app.use(sfxRoutes);
 app.use(debugRoutes);
 app.use(statsRoutes);
 app.use(djRoutes);
+app.use(onboardingRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 
@@ -47,6 +52,35 @@ app.use(djRoutes);
 // ---------------------------------------------------------------------------
 app.listen(config.server.port, async () => {
   console.log(`SUB/WAVE controller on :${config.server.port}`);
+
+  // Source the wizard-managed secrets file (state/secrets.env) into process.env
+  // before anything else touches the AI SDK. Real env vars (from compose
+  // env_file) always win — secrets.env is the persistence layer for keys the
+  // operator typed into the first-run wizard.
+  try {
+    const { loaded, skipped } = await loadSecretsIntoEnv();
+    if (loaded.length || skipped.length) {
+      console.log(
+        `[secrets] state/secrets.env: loaded=${loaded.length} skipped(env-already-set)=${skipped.length}`,
+      );
+    }
+  } catch (err: any) {
+    console.error('[secrets] load failed:', err.message);
+  }
+
+  // Wizard overlay — Navidrome creds the operator typed in. Env wins; this
+  // only fills in fields that env didn't already provide.
+  try {
+    const sc = await loadSetupConfig();
+    if (sc.navidrome) {
+      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
+      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
+      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
+        config.navidrome.password = sc.navidrome.pass;
+    }
+  } catch (err: any) {
+    console.error('[setup-config] load failed:', err.message);
+  }
 
   // Layer persisted settings over the static config defaults
   try {
@@ -62,6 +96,20 @@ app.listen(config.server.port, async () => {
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
+
+  // First-run banner — operators glancing at `docker compose logs` should
+  // immediately see where to finish setup.
+  try {
+    const status = await getSetupStatus();
+    if (status.needsSetup) {
+      const site = process.env.SITE_URL || `http://localhost:${config.server.port}`;
+      console.log('');
+      console.log('==============================================================');
+      console.log(`  SUB/WAVE needs setup — visit ${site}/onboarding to finish.`);
+      console.log('==============================================================');
+      console.log('');
+    }
+  } catch {}
 
   // Open (or resume) the DJ session before the watcher starts dispatching
   // track changes — the queue and scheduler append turns into it.

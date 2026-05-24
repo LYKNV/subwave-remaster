@@ -8,12 +8,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Pick up STATE_DIR from docker/.env (where setup.sh wrote it) so we don't
+# Pick up STATE_DIR from the root .env (where setup.sh writes it) so we don't
 # have to remember to export it on every run.
-[[ -z "${STATE_DIR:-}" && -f docker/.env ]] && \
-  STATE_DIR=$(grep -E '^STATE_DIR=' docker/.env | cut -d= -f2-)
+[[ -z "${STATE_DIR:-}" && -f .env ]] && \
+  STATE_DIR=$(grep -E '^STATE_DIR=' .env | cut -d= -f2-)
 STATE_DIR="${STATE_DIR:-$(pwd)/state}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.prod.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 COMPOSE="docker compose -f ${COMPOSE_FILE}"
 
 JINGLES=(

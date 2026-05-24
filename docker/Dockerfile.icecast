@@ -1,0 +1,17 @@
+FROM moul/icecast:latest
+
+# Bake our config template (with ${ICECAST_*_PASSWORD} placeholders) and the
+# entrypoint that auto-generates secrets on first boot, writes them to
+# /var/sub-wave/icecast-secrets.env (mode 0600) so liquidsoap and controller
+# can source the same values, then renders the template and execs icecast as
+# the icecast2 user.
+
+COPY docker/icecast.xml.template /etc/icecast2/icecast.xml.template
+COPY docker/icecast-entrypoint.sh /usr/local/bin/sub-wave-icecast-entrypoint
+RUN chmod +x /usr/local/bin/sub-wave-icecast-entrypoint
+
+# Provides shell-level checks for downstream depends_on healthchecks.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=6 \
+    CMD test -f /var/sub-wave/icecast-secrets.env || exit 1
+
+ENTRYPOINT ["/usr/local/bin/sub-wave-icecast-entrypoint"]

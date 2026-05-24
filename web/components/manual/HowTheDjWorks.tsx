@@ -1,5 +1,5 @@
 import ManualPage from './ManualPage';
-import CodeBlock from '../setup/CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function HowTheDjWorks() {
   return (

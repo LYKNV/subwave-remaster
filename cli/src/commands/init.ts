@@ -1,0 +1,190 @@
+// `subwave init` — scaffold a fresh SUB/WAVE install directory.
+//
+// The standalone-CLI entry point. Unlike `subwave setup` (which assumes the
+// stack is already installed somewhere and runs the configuration wizard),
+// `init` is the very first command — it asks where to install, materialises
+// the embedded compose files + a 3-var .env into that directory, and records
+// the home in ~/.config/subwave/config.json so subsequent commands know
+// where to look.
+//
+// After init, the operator runs `subwave start` (which brings docker up)
+// and `subwave setup` (the full wizard for Navidrome / LLM / TTS / DJ).
+
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import crypto from 'node:crypto';
+
+import { COMPOSE_YML, COMPOSE_BYO_YML, ENV_EXAMPLE } from '../assets.ts';
+import { DEFAULT_SUBWAVE_HOME, writeHomeConfig } from '../home.ts';
+import { writeEnvFile } from '../util.ts';
+import {
+  banner, header, ok, warn, err, info, muted, p, pc, exitIfCancelled, pauseForEnter,
+} from '../ui.ts';
+
+type Mode = 'prod' | 'prod-byo';
+
+interface InitAnswers {
+  home: string;
+  mode: Mode;
+  adminUser: string;
+  adminPass: string;
+  siteUrl: string;
+}
+
+export async function runInitCommand(): Promise<void> {
+  banner('install');
+  info('Scaffolds a fresh install directory, writes the compose file + .env, and records the home so future commands know where to look.');
+  muted('After this, run `subwave start` then `subwave setup` to finish configuration.');
+  console.log();
+
+  const answers = await collectAnswers();
+  await scaffold(answers);
+
+  console.log();
+  header('Next');
+  muted(`  subwave start            # bring the stack up at ${answers.home}`);
+  muted('  subwave setup            # configure Navidrome, LLM, TTS, DJ persona');
+  muted('  open http://localhost:7700/onboarding   # or finish setup in the browser');
+  await pauseForEnter();
+}
+
+async function collectAnswers(): Promise<InitAnswers> {
+  // 1. Install directory.
+  const home = exitIfCancelled(await p.text({
+    message: 'Install directory',
+    initialValue: DEFAULT_SUBWAVE_HOME,
+    placeholder: DEFAULT_SUBWAVE_HOME,
+    validate: (v) => {
+      if (!v) return 'Required.';
+      if (!v.startsWith('/') && !v.startsWith('~/')) return 'Use an absolute path or ~/something.';
+      return undefined;
+    },
+  }), { backOnCancel: false });
+  const homeAbs = home.startsWith('~/') ? resolve(homedir(), home.slice(2)) : resolve(home);
+
+  // If the directory already has a compose file, refuse to clobber it.
+  if (existsSync(resolve(homeAbs, 'docker-compose.yml'))) {
+    warn(`${homeAbs} already contains a docker-compose.yml.`);
+    const overwrite = exitIfCancelled(await p.confirm({
+      message: 'Overwrite the existing compose file and .env?',
+      initialValue: false,
+    }), { backOnCancel: false });
+    if (!overwrite) {
+      muted('Aborted — nothing changed.');
+      muted(`(To run commands against this existing install, just \`cd ${homeAbs}\` first or pass --home ${homeAbs}.)`);
+      process.exit(0);
+    }
+  }
+
+  // 2. Mode. Dev isn't an init option — devs use `git clone` + `npm start`,
+  // which doesn't need an init step.
+  const mode = exitIfCancelled(await p.select<Mode>({
+    message: 'Deployment shape',
+    initialValue: 'prod',
+    options: [
+      {
+        value: 'prod',
+        label: 'prod — bundled Caddy on :7700',
+        hint: 'docker-compose.yml · single host port · Cloudflare-fronted',
+      },
+      {
+        value: 'prod-byo',
+        label: 'prod (BYO proxy) — Traefik / nginx / your own Caddy',
+        hint: 'docker-compose.byo.yml · web :7700 · controller :7701 · icecast :7702',
+      },
+    ],
+  }), { backOnCancel: false });
+
+  // 3. Admin credentials. ADMIN_USER + ADMIN_PASS are mandatory in prod
+  // (controller exits without them). Generate ADMIN_PASS for the operator
+  // if they leave it blank — easier to copy from the wizard output than to
+  // remember to `openssl rand -hex 16`.
+  const adminUser = exitIfCancelled(await p.text({
+    message: 'Admin username (gates /admin and /onboarding)',
+    initialValue: 'admin',
+    placeholder: 'admin',
+  }), { backOnCancel: false });
+
+  const adminPass = exitIfCancelled(await p.password({
+    message: 'Admin password (leave blank to generate a random one)',
+  }), { backOnCancel: false }) || crypto.randomBytes(16).toString('hex');
+
+  // 4. SITE_URL. Cosmetic but recommended in prod (drives OG / Twitter
+  // share cards, canonical URLs, sitemap, manifest). Blank is fine — it'll
+  // fall back to a localhost origin, which just means social previews are
+  // broken until the operator sets it.
+  const siteUrl = exitIfCancelled(await p.text({
+    message: 'Public site URL (https://radio.example.com — blank to defer)',
+    initialValue: '',
+    placeholder: 'https://radio.example.com',
+  }), { backOnCancel: false });
+
+  return { home: homeAbs, mode, adminUser, adminPass, siteUrl };
+}
+
+async function scaffold(a: InitAnswers): Promise<void> {
+  header('Scaffolding install');
+
+  // 1. Create the home directory + state/ subtree. State is created with
+  // the operator's UID so icecast/liquidsoap/controller containers (which
+  // mount it) don't need a chown dance on first boot.
+  mkdirSync(a.home, { recursive: true });
+  mkdirSync(resolve(a.home, 'state'), { recursive: true });
+  mkdirSync(resolve(a.home, 'state', 'logs'), { recursive: true });
+  ok(`created ${a.home}/ (state/, state/logs/)`);
+
+  // 2. Write the compose file the operator chose. Both modes get a copy of
+  // docker-compose.byo.yml alongside the default so operators can switch
+  // later without re-running init.
+  const composeMainSrc = a.mode === 'prod-byo' ? COMPOSE_BYO_YML : COMPOSE_YML;
+  writeFileSync(resolve(a.home, 'docker-compose.yml'), composeMainSrc);
+  writeFileSync(resolve(a.home, 'docker-compose.byo.yml'), COMPOSE_BYO_YML);
+  if (a.mode === 'prod-byo') {
+    ok('wrote docker-compose.yml (BYO-proxy variant) + docker-compose.byo.yml');
+  } else {
+    ok('wrote docker-compose.yml (bundled Caddy) + docker-compose.byo.yml');
+  }
+
+  // 3. Write .env from the embedded template, filling in the operator's
+  // answers. writeEnvFile() preserves the template's comments + key order,
+  // which keeps the file friendly to hand-edit later.
+  //
+  // Trick: the template lives inside the install dir as .env.example so
+  // writeEnvFile() can read it back. We write .env.example first, then
+  // call writeEnvFile() against it as the templateFallback.
+  const envExamplePath = resolve(a.home, '.env.example');
+  writeFileSync(envExamplePath, ENV_EXAMPLE);
+  const envValues: Record<string, string> = {
+    ADMIN_USER: a.adminUser,
+    ADMIN_PASS: a.adminPass,
+  };
+  if (a.siteUrl) envValues.SITE_URL = a.siteUrl;
+  writeEnvFileAt(resolve(a.home, '.env'), envValues, envExamplePath);
+  ok(`wrote .env (ADMIN_USER, ADMIN_PASS${a.siteUrl ? ', SITE_URL' : ''})`);
+
+  // 4. Persist the home in ~/.config/subwave/config.json so subsequent
+  // `subwave …` commands resolve to this directory without --home or
+  // SUBWAVE_HOME being set.
+  writeHomeConfig({ home: a.home });
+  ok('recorded install path in ~/.config/subwave/config.json');
+
+  // 5. If the operator let us generate a password, surface it now — once.
+  // No persistence beyond the .env we just wrote.
+  if (!process.env.SUBWAVE_QUIET_GENERATED_PASS) {
+    console.log();
+    info(`admin user: ${pc.bold(a.adminUser)}`);
+    info(`admin pass: ${pc.bold(a.adminPass)}`);
+    muted('Stored in .env at the install dir. Visible to anyone with shell access — protect accordingly.');
+  }
+}
+
+// Local copy of writeEnvFile that doesn't go through util.ts's getRootEnv()
+// (which requires a resolved home — chicken-and-egg during init). The
+// existing util.ts:writeEnvFile takes an explicit path, so we just call it
+// directly; this wrapper is here in case we ever want init-specific behaviour.
+function writeEnvFileAt(path: string, values: Record<string, string>, templateFallback: string): void {
+  // Just delegate. Kept as a separate function so future init-only quirks
+  // have somewhere obvious to land without touching util.ts.
+  return writeEnvFile(path, values, { templateFallback });
+}

@@ -102,6 +102,21 @@ export default function AdminShell({ children }: AdminShellProps) {
     };
   }, [hydrated, auth, adminFetch]);
 
+  // First-run redirect — if the controller reports needsSetup, push the
+  // operator straight into the wizard rather than dropping them on an admin
+  // dashboard that's full of empty panels. Public endpoint, no auth needed.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (pathname?.startsWith('/onboarding')) return;
+    const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+    fetch(`${API}/onboarding/status`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((j: { needsSetup?: boolean } | null) => {
+        if (j?.needsSetup) router.push('/onboarding');
+      })
+      .catch(() => {});
+  }, [hydrated, pathname, router]);
+
   if (!hydrated) {
     return (
       <div className="admin-root paper flex items-center justify-center">

@@ -8,7 +8,7 @@
 //     existing setup.mjs behaviour).
 //   - Poll /health for up to 30 s and report when the stream comes on-air.
 
-import { COMPOSE_FILES, detectCompose, webBaseFor, type ComposeEnv, type ComposeFile } from '../compose.ts';
+import { getComposeFiles, detectCompose, webBaseFor, type ComposeEnv, type ComposeFile } from '../compose.ts';
 import { composeUp } from '../docker.ts';
 import { waitForHealth } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
@@ -106,7 +106,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
 async function pickEnv(arg?: StartableEnv): Promise<ComposeFile | null> {
   // Honour the explicit arg first.
   if (arg) {
-    const match = COMPOSE_FILES.find((f) => f.env === arg);
+    const match = getComposeFiles().find((f) => f.env === arg);
     if (!match) {
       err(`unknown env: ${arg}`);
       return null;
@@ -122,19 +122,19 @@ async function pickEnv(arg?: StartableEnv): Promise<ComposeFile | null> {
       {
         value: 'dev',
         label: 'dev',
-        hint: 'docker-compose.yml · controller :7701 · web dev separately on :7700',
+        hint: 'docker-compose.dev.yml · controller :7701 · web dev separately on :7700',
       },
       {
         value: 'prod',
         label: 'prod',
-        hint: 'docker-compose.prod.yml · Caddy on :7700 · web baked into image',
+        hint: 'docker-compose.yml · Caddy on :7700 · web baked into image',
       },
       {
         value: 'prod-byo',
         label: 'prod (BYO proxy)',
-        hint: 'docker-compose.byo-proxy.yml · web :7700 · controller :7701 · icecast :7702',
+        hint: 'docker-compose.byo.yml · web :7700 · controller :7701 · icecast :7702',
       },
     ],
   }));
-  return COMPOSE_FILES.find((f) => f.env === choice) ?? null;
+  return getComposeFiles().find((f) => f.env === choice) ?? null;
 }

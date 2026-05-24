@@ -77,5 +77,5 @@ The codebase already treats `STATE_DIR` and `SOUNDS_DIR` as the only two host-vs
    - `curl -fsS -I http://127.0.0.1:7702/stream.mp3` returns `200 OK` with `Content-Type: audio/mpeg`.
    - Open `http://127.0.0.1:7700`, hit play, confirm audio.
 2. **Regression test on macOS**: same flow with `launchctl load` instead. Skip Kokoro; verify Piper voice plays.
-3. **Docker regression**: bring up `docker compose -f docker/docker-compose.yml up -d` after the `radio.liq` change. Confirm `now-playing.json` still updates on each track and that voice ducking still fires. Proves the `radio.liq` env defaults didn't break the container path — this is the only existing-user-impacting change in the whole plan.
+3. **Docker regression**: bring up `docker compose -f docker-compose.dev.yml up -d` after the `radio.liq` change. Confirm `now-playing.json` still updates on each track and that voice ducking still fires. Proves the `radio.liq` env defaults didn't break the container path — this is the only existing-user-impacting change in the whole plan.
 4. **`/var/sub-wave` residual check**: grep the running tree for any residual `/var/sub-wave` string lookups outside the documented two — should be zero.

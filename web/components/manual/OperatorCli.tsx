@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
-import CodeBlock from '../setup/CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function OperatorCli() {
   return (
@@ -21,7 +21,7 @@ export default function OperatorCli() {
         <CodeBlock>{`npm start`}</CodeBlock>
         <p className="text-muted">
           First time through? If there&rsquo;s no{' '}
-          <code className="bs-code-inline">controller/.env</code> yet, the console drops you
+          <code className="bs-code-inline">.env</code> yet, the console drops you
           straight into the install wizard — the same one the{' '}
           <Link href="/setup" className="bs-link">setup guide</Link> walks through.
         </p>

@@ -198,7 +198,7 @@ export default function SkillsPanel() {
             <div className="mb-3">
               <V3Alert tone="error" title="API key not set">
                 This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
-                variable set in <code>controller/.env</code>. Until then it stays inert and never
+                variable set in <code>.env</code>. Until then it stays inert and never
                 fires autonomously — even when enabled.
                 {s.keyUrl && (
                   <>

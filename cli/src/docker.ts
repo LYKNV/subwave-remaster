@@ -5,7 +5,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import type { ComposeFile } from './compose.ts';
-import { REPO_ROOT } from './util.ts';
+import { getSubwaveHome } from './util.ts';
 
 function args(file: ComposeFile, rest: string[]): string[] {
   return ['compose', '-f', file.file, ...rest];
@@ -57,7 +57,7 @@ export function composeLogs(file: ComposeFile, services: string[], tail = 200): 
 function run(file: ComposeFile, rest: string[]): Promise<number> {
   return new Promise((resolveP) => {
     const child = spawn('docker', args(file, rest), {
-      cwd: REPO_ROOT,
+      cwd: getSubwaveHome(),
       stdio: 'inherit',
     });
     child.on('exit', (code) => resolveP(code ?? 1));
@@ -81,7 +81,7 @@ export function composeExec(
   timeoutMs = 5000,
 ): { ok: boolean; stdout: string; stderr: string } {
   const r = spawnSync('docker', args(file, ['exec', '-T', service, ...cmd]), {
-    cwd: REPO_ROOT,
+    cwd: getSubwaveHome(),
     encoding: 'utf8',
     timeout: timeoutMs,
   });

@@ -7,6 +7,7 @@ import * as settings from '../settings.js';
 import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
+import { getSetupStatusSync } from '../setup/firstRun.js';
 
 export const router = express.Router();
 
@@ -118,7 +119,11 @@ router.get('/dj', async (req, res) => {
 // GET /state — queue + history + DJ log
 // ---------------------------------------------------------------------------
 router.get('/state', (req, res) => {
-  res.json(queue.snapshot());
+  const snap = queue.snapshot();
+  // `needsSetup` is what the landing page and admin shell key off to redirect
+  // a fresh operator into the wizard. Sync read — relies on the boot-time
+  // config overlay being already applied (or falls back to env-only check).
+  res.json({ ...snap, needsSetup: getSetupStatusSync().needsSetup });
 });
 
 // ---------------------------------------------------------------------------

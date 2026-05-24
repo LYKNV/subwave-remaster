@@ -76,7 +76,7 @@ WEB_PID=$(lsof -nP -iTCP:7700 -sTCP:LISTEN -t 2>/dev/null | head -1)
 
 # Bring down whichever dev stack is up (run from any checkout's docker/ dir —
 # same compose project name, so this targets the running containers).
-docker compose -f <some-checkout>/docker/docker-compose.yml down
+docker compose -f <some-checkout>/docker-compose.dev.yml down
 ```
 
 ### Step 2 — Prep the worktree
@@ -148,6 +148,6 @@ settings on first boot are expected, not faults.
 ## When NOT to use this skill / hand off
 
 - **Main checkout**, not a worktree → use `subwave-control` to start/stop.
-- **Production** (`docker-compose.prod.yml`) → use `subwave-control`.
+- **Production** (`docker-compose.yml` or `docker-compose.byo.yml`) → use `subwave-control`.
 - First-time repo setup, `git pull` + rebuild, jingle generation, config
   changes → use `subwave-deploy`.

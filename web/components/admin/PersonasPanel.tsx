@@ -151,7 +151,7 @@ function cloudIssue(persona: Persona | undefined, data: SettingsResponse | null)
   const envKey = persona.tts.cloudProvider === 'elevenlabs'
     ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
   if (data?.env && !data.env[envKey]) {
-    return `${envKey} is not set in controller/.env.`;
+    return `${envKey} is not set in .env.`;
   }
   return null;
 }

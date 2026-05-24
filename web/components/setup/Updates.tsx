@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function Updates() {
   return (
@@ -25,7 +25,7 @@ export default function Updates() {
             <tr><td><code className="bs-code-inline">liquidsoap/radio.liq</code></td><td>liquidsoap</td></tr>
             <tr><td><code className="bs-code-inline">web/**</code></td><td>web (prod) · hot-reload (dev)</td></tr>
             <tr><td><code className="bs-code-inline">docker/Caddyfile</code></td><td>just <code className="bs-code-inline">restart caddy</code> (mounted)</td></tr>
-            <tr><td><code className="bs-code-inline">docker/docker-compose*.yml</code></td><td><code className="bs-code-inline">up -d</code> (compose decides)</td></tr>
+            <tr><td><code className="bs-code-inline">docker-compose*.yml</code></td><td><code className="bs-code-inline">up -d</code> (compose decides)</td></tr>
             <tr><td>README / TODO / docs</td><td>nothing</td></tr>
           </tbody>
         </table>
@@ -33,23 +33,40 @@ export default function Updates() {
         <p className="mt-4">Typical manual deploy:</p>
         <CodeBlock>{`git pull --ff-only
 # rebuild only what changed (example: controller + web)
-docker compose -f docker/docker-compose.prod.yml up -d --build controller web
+docker compose up -d --build controller web
 # then verify
 ./scripts/health-check.sh`}</CodeBlock>
 
         <div className="bs-callout">
-          <div className="bs-eyebrow">RUNNING FROM GHCR IMAGES?</div>
+          <div className="bs-eyebrow">USING THE STANDALONE CLI?</div>
           <p>
-            If you're pulling prebuilt images from{' '}
-            <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-*</code>{' '}
-            instead of building locally, the rebuild step becomes a pull:
+            If you installed via{' '}
+            <code className="bs-code-inline">curl cli.getsubwave.com | sh</code>, two
+            commands cover both update axes:
           </p>
-          <CodeBlock>{`# pin SUBWAVE_VERSION in docker/.env, then:
-docker compose -f docker/docker-compose.prod.yml pull
-docker compose -f docker/docker-compose.prod.yml up -d`}</CodeBlock>
+          <CodeBlock>{`subwave update         # pull new images, recreate changed services
+subwave self-update    # replace the CLI binary itself with the latest release`}</CodeBlock>
           <p className="text-muted">
-            Same flow if you're on{' '}
-            <code className="bs-code-inline">docker-compose.byo-proxy.yml</code> — just
+            <code className="bs-code-inline">subwave update</code> is a docker
+            pull + up -d wrapper that knows which compose file is live;{' '}
+            <code className="bs-code-inline">self-update</code> re-runs the
+            installer in place.
+          </p>
+        </div>
+
+        <div className="bs-callout">
+          <div className="bs-eyebrow">RUNNING FROM GHCR IMAGES (NO CLI)?</div>
+          <p>
+            If you&apos;re pulling prebuilt images from{' '}
+            <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-*</code>{' '}
+            without the CLI, the rebuild step becomes a pull:
+          </p>
+          <CodeBlock>{`# pin SUBWAVE_VERSION in .env, then:
+docker compose pull
+docker compose up -d`}</CodeBlock>
+          <p className="text-muted">
+            Same flow if you&apos;re on{' '}
+            <code className="bs-code-inline">docker-compose.byo.yml</code> — just
             swap the file flag.
           </p>
         </div>
@@ -72,11 +89,11 @@ docker compose -f docker/docker-compose.prod.yml up -d`}</CodeBlock>
         <ul className="bs-list">
           <li>
             <strong>Controller logs</strong> —{' '}
-            <code className="bs-code-inline">docker compose -f docker/docker-compose.prod.yml logs -f controller</code>
+            <code className="bs-code-inline">docker compose logs -f controller</code>
           </li>
           <li>
             <strong>Liquidsoap logs</strong> —{' '}
-            <code className="bs-code-inline">docker compose -f docker/docker-compose.prod.yml logs -f liquidsoap</code>
+            <code className="bs-code-inline">docker compose logs -f liquidsoap</code>
           </li>
           <li>
             <strong>Operator console</strong> —{' '}

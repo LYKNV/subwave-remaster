@@ -1,5 +1,5 @@
 import SetupPage from './SetupPage';
-import CodeBlock from './CodeBlock';
+import CodeBlock from "@/components/CodeBlock";
 
 export default function Development() {
   return (
@@ -22,23 +22,23 @@ export default function Development() {
           </thead>
           <tbody>
             <tr>
-              <td><code className="bs-code-inline">docker/docker-compose.yml</code></td>
-              <td>icecast · liquidsoap · controller (web runs separately on host)</td>
-              <td><code className="bs-code-inline">./state</code></td>
-            </tr>
-            <tr>
-              <td><code className="bs-code-inline">docker/docker-compose.prod.yml</code></td>
-              <td>+ web (built image) + caddy edge on <code className="bs-code-inline">:7700</code></td>
+              <td><code className="bs-code-inline">docker-compose.yml</code></td>
+              <td>prod — icecast · liquidsoap · controller · web · caddy edge on <code className="bs-code-inline">:7700</code></td>
               <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
             </tr>
             <tr>
-              <td><code className="bs-code-inline">docker/docker-compose.byo-proxy.yml</code></td>
+              <td><code className="bs-code-inline">docker-compose.byo.yml</code></td>
               <td>same as prod minus caddy — web, controller, icecast on host ports{' '}
                 <code className="bs-code-inline">:7700</code> /{' '}
                 <code className="bs-code-inline">:7701</code> /{' '}
                 <code className="bs-code-inline">:7702</code> for your own reverse proxy
               </td>
               <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
+            </tr>
+            <tr>
+              <td><code className="bs-code-inline">docker-compose.dev.yml</code></td>
+              <td>dev — icecast · liquidsoap · controller with <code className="bs-code-inline">tsx watch</code> hot-reload (web runs separately on host)</td>
+              <td><code className="bs-code-inline">./state</code></td>
             </tr>
           </tbody>
         </table>
@@ -74,22 +74,32 @@ npm run dev:web      # terminal 2: Next.js on http://localhost:7700
 npm run rebuild      # rebuilds + recreates the affected containers`}</CodeBlock>
 
         <div className="bs-callout">
-          <div className="bs-eyebrow">THE ONE GOTCHA</div>
+          <div className="bs-eyebrow">DEV HOT-RELOADS · PROD NEEDS A REBUILD</div>
           <p>
-            <strong>Code changes need a rebuild, not a restart.</strong> Both the controller
-            and Liquidsoap Dockerfiles <code className="bs-code-inline">COPY</code> their
-            source at build time — they don't bind-mount it. So{' '}
-            <code className="bs-code-inline">docker compose restart controller</code> will
-            cheerfully rerun the same baked-in code as before.{' '}
+            <strong>In dev,</strong> the controller container bind-mounts{' '}
+            <code className="bs-code-inline">controller/src/</code> and runs under{' '}
+            <code className="bs-code-inline">tsx watch</code>, so edits to{' '}
+            <code className="bs-code-inline">controller/src/**</code> restart the
+            process inside the container automatically.{' '}
+            <code className="bs-code-inline">liquidsoap/radio.liq</code> is bind-mounted
+            too — edits there need{' '}
+            <code className="bs-code-inline">docker compose -f docker-compose.dev.yml restart liquidsoap</code>{' '}
+            but no rebuild.
+          </p>
+          <p className="mt-2">
+            <strong>In prod,</strong> both Dockerfiles{' '}
+            <code className="bs-code-inline">COPY</code> source at build time, so{' '}
+            <code className="bs-code-inline">docker compose restart controller</code>{' '}
+            would rerun the same baked-in code.{' '}
             <code className="bs-code-inline">npm run rebuild</code> (or{' '}
             <code className="bs-code-inline">docker compose up -d --build &lt;service&gt;</code>)
-            is what you want.
+            is what you want when deploying a change.
           </p>
           <p className="mt-2 text-muted">
             The web dev server (<code className="bs-code-inline">npm run dev:web</code>) is
-            exempt — Next.js hot-reloads, so edits to{' '}
-            <code className="bs-code-inline">web/**</code> show up instantly without touching
-            Docker.
+            its own thing — Next.js hot-reloads, so edits to{' '}
+            <code className="bs-code-inline">web/**</code> show up instantly without
+            touching Docker.
           </p>
         </div>
       </section>

@@ -1,20 +1,36 @@
 // Misc helpers. Kept dependency-free so any module can pull these in.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { requireSubwaveHome } from './home.ts';
 
-// Repo root resolved from this file's location. Stable regardless of cwd.
-//   cli/src/util.ts → cli/src → cli → <repo root>
-export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// SUBWAVE_HOME — where the operator's install lives.
+//
+// Lazy + memoised: resolution only happens the first time a path is read,
+// so `subwave init` (which doesn't yet have a home) and `subwave --version`
+// can short-circuit before triggering the resolver. cli.ts strips any
+// `--home <path>` flag from argv and parks it on process.env.SUBWAVE_HOME
+// before any consumer code runs, so the resolver sees a single source of
+// truth.
+let _subwaveHome: string | null = null;
+export function getSubwaveHome(): string {
+  if (_subwaveHome === null) _subwaveHome = requireSubwaveHome().home;
+  return _subwaveHome;
+}
 
-export const DOCKER_DIR = resolve(REPO_ROOT, 'docker');
-export const SCRIPTS_DIR = resolve(REPO_ROOT, 'scripts');
-export const CONTROLLER_ENV = resolve(REPO_ROOT, 'controller', '.env');
-export const CONTROLLER_ENV_EXAMPLE = resolve(REPO_ROOT, 'controller', '.env.example');
-export const STATE_DIR = resolve(REPO_ROOT, 'state');
+// Path accessors. Always call these — never cache the return value at
+// module load time, since that would force home resolution at import time
+// (which breaks `subwave init`, where there's no home yet).
+export function getScriptsDir(): string { return resolve(getSubwaveHome(), 'scripts'); }
+export function getRootEnv(): string { return resolve(getSubwaveHome(), '.env'); }
+export function getRootEnvExample(): string { return resolve(getSubwaveHome(), '.env.example'); }
+export function getStateDir(): string { return resolve(getSubwaveHome(), 'state'); }
+export function getSetupConfigPath(): string { return resolve(getStateDir(), 'setup-config.json'); }
+export function getSecretsEnvPath(): string { return resolve(getStateDir(), 'secrets.env'); }
+export function getLegacyControllerEnv(): string { return resolve(getSubwaveHome(), 'controller', '.env'); }
+export function getLegacyDockerEnv(): string { return resolve(getSubwaveHome(), 'docker', '.env'); }
 
 export function expandHome(p: string): string {
   if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
@@ -100,6 +116,132 @@ export function writeEnvFile(
   let content = out.join('\n');
   if (!content.endsWith('\n')) content += '\n';
   writeFileSync(path, content);
+}
+
+// ─── Wizard overlay helpers (state/setup-config.json + state/secrets.env) ───
+// Mirror the controller-side helpers in controller/src/setup/{config,secrets}.ts
+// so the CLI wizard and the web wizard write the same files in the same shape.
+
+export interface SetupConfig {
+  navidrome?: { url?: string; user?: string; pass?: string };
+  setupCompletedAt?: string;
+}
+
+export function readSetupConfig(): SetupConfig {
+  const p = getSetupConfigPath();
+  if (!existsSync(p)) return {};
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')) as SetupConfig;
+  } catch {
+    return {};
+  }
+}
+
+export function writeSetupConfig(patch: Partial<SetupConfig>): SetupConfig {
+  const current = readSetupConfig();
+  const next: SetupConfig = {
+    ...current,
+    ...patch,
+    navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
+  };
+  const p = getSetupConfigPath();
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileWithRecover(p, JSON.stringify(next, null, 2));
+  return next;
+}
+
+// Wrap writeFileSync with auto-recovery for the common case of root-owned
+// state files. If the browser wizard ran first (or any Docker container
+// touched the file), it'll be owned by uid 0 with mode 0644 — readable from
+// the host but not writable. Detect EACCES, chown the whole state tree to
+// the current host UID via a one-shot Docker container, retry once. If
+// Docker isn't available, surface a clear error with the manual fix.
+function writeFileWithRecover(path: string, contents: string): void {
+  try {
+    writeFileSync(path, contents);
+    return;
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err?.code !== 'EACCES' && err?.code !== 'EPERM') throw err;
+    if (!chownStateDirToCurrentUser()) {
+      throw new Error(
+        `${path} is owned by another user (likely root from a Docker container) and Docker isn't available to fix it. ` +
+        `Fix manually: docker run --rm -v "$PWD/state:/state" alpine chown -R $(id -u):$(id -g) /state`,
+      );
+    }
+    // Retry. If it still fails, propagate (the chown didn't help — bigger
+    // problem like a read-only mount).
+    writeFileSync(path, contents);
+  }
+}
+
+// Shell out to a one-shot Docker container that chowns the state/ tree to
+// the current host UID:GID. Idempotent and safe to call when nothing needs
+// fixing — chown -R on already-owned files is a no-op. Returns true on
+// success, false if Docker isn't on PATH or the chown failed.
+function chownStateDirToCurrentUser(): boolean {
+  if (!have('docker')) return false;
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) return false; // non-POSIX
+  const r = spawnSync(
+    'docker',
+    ['run', '--rm', '-v', `${getStateDir()}:/state`, 'alpine', 'chown', '-R', `${uid}:${gid}`, '/state'],
+    { stdio: 'pipe' },
+  );
+  return r.status === 0;
+}
+
+// Keys the wizard is allowed to write to state/secrets.env. Mirrors
+// controller/src/setup/secrets.ts SECRET_ENV_KEYS — anything else passed
+// in gets silently ignored.
+export const WIZARD_SECRET_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'GOOGLE_GENERATIVE_AI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'AI_GATEWAY_API_KEY',
+  'ELEVENLABS_API_KEY',
+  'SEARCH_API_KEY',
+] as const;
+
+// Merge a batch of API keys into state/secrets.env (mode 0600), preserving
+// any keys the operator added by hand. Same shape the controller's
+// saveSecrets() writes, so the next controller boot picks them up.
+export function writeSecretsEnv(patch: Record<string, string>): void {
+  const p = getSecretsEnvPath();
+  const current: Record<string, string> = {};
+  if (existsSync(p)) {
+    for (const rawLine of readFileSync(p, 'utf8').split('\n')) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).trim();
+      if ((WIZARD_SECRET_KEYS as readonly string[]).includes(key)) {
+        current[key] = line.slice(eq + 1);
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(patch)) {
+    if (!(WIZARD_SECRET_KEYS as readonly string[]).includes(key)) continue;
+    current[key] = value;
+  }
+  const body = [
+    '# SUB/WAVE secrets — written by the install wizard.',
+    '# Sourced by the controller on boot. Mode 0600 enforced below.',
+    '',
+    ...Object.entries(current).map(([k, v]) => `${k}=${v}`),
+    '',
+  ].join('\n');
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileWithRecover(p, body);
+  try {
+    chmodSync(p, 0o600);
+  } catch {
+    // chmod may fail on non-POSIX filesystems (e.g. Windows host) — non-fatal.
+  }
 }
 
 export function formatMs(ms: number): string {

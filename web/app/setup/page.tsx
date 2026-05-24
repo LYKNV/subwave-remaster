@@ -1,4 +1,4 @@
-import SetupOverview from '../../components/setup/SetupOverview';
+import SetupOverview from "@/components/setup/SetupOverview";
 
 export const metadata = { title: 'SUB/WAVE — Setup' };
 

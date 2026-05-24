@@ -8,31 +8,48 @@ SUB/WAVE is a personal internet radio station: one Icecast stream, all listeners
 
 ## Common commands
 
-```bash
-# --- dev (Mac smoke test) ---
-cd docker && docker compose up -d        # Icecast + Liquidsoap + Controller only
-cd web && npm install && npm run dev     # web UI on :7700, separate process
-cd controller && npm install && npm run dev
+There are three operator entry points: the **standalone `subwave` CLI** (single binary, no clone, default for new installs), raw `docker compose` (the no-CLI alternative), and `npm start` (contributor convenience inside a cloned repo). All three drive the same compose files and write to the same `state/` layout.
 
-# --- production (single-host, Caddy edge) ---
-./scripts/setup.sh                       # state defaults to <repo>/state
-docker compose -f docker/docker-compose.prod.yml up -d
-./scripts/generate-jingles.sh            # render Piper station idents
+```bash
+# --- standalone CLI (default — single binary, no clone, no Node host dep) ---
+curl -fsSL https://cli.getsubwave.com | sh   # installs /usr/local/bin/subwave
+subwave init                              # scaffolds ~/subwave with compose + .env
+subwave start                             # docker compose up -d
+subwave setup                             # configure Navidrome / LLM / TTS / DJ
+subwave logs controller                   # tail any service
+subwave self-update                       # re-fetch the binary from the latest release
+
+# --- raw docker (no CLI) ---
+./scripts/setup.sh                       # scaffolds a 3-var root .env + state/
+docker compose up -d                     # docker-compose.yml (bundled Caddy prod) is the default
+# Then visit http://localhost:7700/onboarding to finish Navidrome/LLM/TTS/DJ config.
 ./scripts/update.sh                      # git pull + rebuild + rolling recreate
 
+# --- production (BYO reverse proxy: Traefik / nginx / existing Caddy) ---
+docker compose -f docker-compose.byo.yml up -d
+
+# --- dev (Mac smoke test, requires git clone) ---
+docker compose -f docker-compose.dev.yml up -d     # Icecast + Liquidsoap + Controller (hot-reload via tsx watch)
+cd web && npm install && npm run dev               # web UI on :7700, separate process
+
 # Common one-offs
-docker compose -f docker/docker-compose.prod.yml logs -f controller
+docker compose logs -f controller        # prod default
 curl http://localhost:7700/api/health    # liveness via Caddy edge (prod)
 ```
 
+The CLI resolves its install location via `SUBWAVE_HOME` (priority: `--home` flag → `SUBWAVE_HOME` env → `~/.config/subwave/config.json` → cwd if it has a `docker-compose.yml` → `~/subwave` if it exists → error). That last fallback is what makes `cd subwave-repo && npm start` work for contributors with zero config.
+
 There is no `/skip` endpoint — track-end is the only natural transition. Liquidsoap controls pacing.
 
-**Controller source needs a rebuild, not a restart.** `controller` `COPY`s its source at build time, so `docker compose restart controller` reruns the *same baked-in code*. `liquidsoap` is different: `radio.liq` is bind-mounted (`../liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro` in both compose files), so editing it only needs a restart — `Dockerfile.liquidsoap` itself doesn't `COPY` the script.
+**Compose files live at the repo root**, not under `docker/`. Run `docker compose ...` from the repo root; the legacy `cd docker && docker compose ...` pattern is gone (one root `.env` is all the configuration surface there is for boot — everything else lives in `state/settings.json` and is managed by the wizard + admin UI).
+
+**Dev controller hot-reloads; prod controller needs a rebuild.** In the dev compose, `controller/src/` and `controller/scripts/` are bind-mounted into the container and the command is overridden to `tsx watch`, so edits restart the process in-place — no `docker compose build`. In **prod** the controller image `COPY`s source at build time, so `docker compose restart controller` reruns the *same baked-in code* and any change needs `up -d --build controller`. `liquidsoap` mirrors this split: `radio.liq` is bind-mounted in the dev compose only, so dev edits just need a restart; prod bakes it into the image and needs a rebuild + recreate.
 
 ```bash
-cd docker && docker compose up -d --build controller     # after any controller/src/** change
-cd docker && docker compose restart liquidsoap           # after radio.liq edits — bind-mounted, no rebuild
-cd docker && docker compose up -d --build liquidsoap     # only after Dockerfile.liquidsoap changes
+docker compose -f docker-compose.dev.yml restart controller  # rarely needed in dev — tsx watch handles src/** edits
+docker compose up -d --build controller     # after controller/src/** in PROD
+docker compose -f docker-compose.dev.yml restart liquidsoap  # after radio.liq edits in DEV — bind-mounted, no rebuild
+docker compose up -d --build liquidsoap     # after radio.liq edits in PROD
 ```
 
 `web` is a Next.js dev server in local mode (`npm run dev`), so it hot-reloads — no rebuild needed for UI changes during dev. Production builds the web image; treat it like the others there.
@@ -61,7 +78,7 @@ Anything that needs to flow between the controller and Liquidsoap must go throug
 
 Source is grouped by domain. `server.js`, `config.js`, `settings.js`, and `context.js` sit at the root; everything else lives under `routes/`, `middleware/`, `music/`, `broadcast/`, `audio/`, `llm/`, and `skills/`.
 
-- `server.js` — thin Express entry point: applies middleware and mounts the route modules, then runs the startup block. **`routes/`** splits the API by surface — `public.js` (`GET /health`, `/now-playing`, `/state`, `/dj`, `/cover/:id`), `request.js` (`POST /request`), `settings.js` (`GET /POST /settings`, `POST /restart-mixer`, `POST /auto-pick`), `jingles.js` (`GET /POST /DELETE /jingles[/:filename]`, `POST /tag-library`), `debug.js` (`GET /debug`). **`middleware/`** holds `cors.js`, `auth.js` (the `requireAdmin` Basic-auth gate via `ADMIN_USER` + `ADMIN_PASS`, plus the prod-mandatory startup check), and `ratelimit.js`. CORS is wide open (`*`). **In production (`NODE_ENV=production`, set by `docker-compose.prod.yml`) the gate is mandatory** — the controller exits on startup if `ADMIN_USER`/`ADMIN_PASS` aren't set, because the admin surface is too revealing to expose unauthenticated.
+- `server.js` — thin Express entry point: applies middleware and mounts the route modules, then runs the startup block. **`routes/`** splits the API by surface — `public.js` (`GET /health`, `/now-playing`, `/state`, `/dj`, `/cover/:id`), `request.js` (`POST /request`), `settings.js` (`GET /POST /settings`, `POST /restart-mixer`, `POST /auto-pick`), `jingles.js` (`GET /POST /DELETE /jingles[/:filename]`, `POST /tag-library`), `debug.js` (`GET /debug`). **`middleware/`** holds `cors.js`, `auth.js` (the `requireAdmin` Basic-auth gate via `ADMIN_USER` + `ADMIN_PASS`, plus the prod-mandatory startup check), and `ratelimit.js`. CORS is wide open (`*`). **In production (`NODE_ENV=production`, set by `docker-compose.yml` and `docker-compose.byo.yml`) the gate is mandatory** — the controller exits on startup if `ADMIN_USER`/`ADMIN_PASS` aren't set, because the admin surface is too revealing to expose unauthenticated.
 - `broadcast/queue.js` — in-memory `upcoming`/`history`/`djLog` plus `drainToLiquidsoap()`, the single writer of `next.txt` (and, via `tts.speak`, `say.txt` for request intros). `announce()` is the single writer of `say.txt` / `intro.txt` for scheduled segments — it picks the target file based on kind (`'link'` → `intro.txt`, everything else → `say.txt`). **All track playback goes through `queue.push()`; all spoken segments go through `queue.announce()`.** Request-intro TTS is written ~250 ms before the track URI so Liquidsoap picks up the voice file first.
 - **LLM layer (`llm/`)** — every model call goes through the Vercel AI SDK (`ai` package), so the provider is swappable:
   - `llm/provider.js` — provider registry. Resolves an AI SDK `LanguageModel` from `settings.llm` (`provider` ∈ `ollama` | `openai-compatible` | `anthropic` | `openai` | `google` | `deepseek` | `openrouter` | `gateway`; `model`; optional `apiKey`). `ollama` is the homelab default and needs no key. `openai-compatible` targets any self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio…) via `llm.baseUrl` — it uses the `/v1/chat/completions` endpoint (`provider.chat(id)`), since these servers don't implement the Responses API. Switching provider in the admin UI reroutes every call — no redeploy, no call-site change.
@@ -85,7 +102,7 @@ Source is grouped by domain. `server.js`, `config.js`, `settings.js`, and `conte
 - `broadcast/liquidsoap-control.js` — opens a telnet socket to Liquidsoap on port 1234 and issues the custom `restart` server command, which calls `shutdown()` and lets the container's restart policy bring it back ~3 s later with the new `liquidsoap_*.txt` values applied.
 - `music/library.js` / `music/tag-library.js` — `moods.json` store + standalone tagger (`npm run tag [-- --limit N]`). Resumable, saves every 25 tags.
 - `broadcast/jingles.js` — pre-rendered TTS stinger management. Writes WAVs into `${STATE_DIR}/jingles/`, rewrites `jingles.m3u`, and updates `jingles.json` (metadata). The `default-id` ident is protected from deletion. `broadcast/tagger.js` tracks the background tag-library child process for the `/tag-library` and `/settings` routes.
-- `config.js` — single source of truth for env-derived config. Defaults point at `localhost`; override every URL via `controller/.env`.
+- `config.ts` — single source of truth for env-derived config. Defaults point at `localhost`; override every URL via the root `.env`. After `settings.load()` (and after `loadSetupConfig()` for the wizard overlay), `server.ts` mutates `config.*` to apply persisted values — env always wins, settings/wizard overlay fills the gaps.
 
 ### Liquidsoap (`liquidsoap/radio.liq`)
 
@@ -110,7 +127,8 @@ Next.js 15 App Router with Tailwind. Routes:
 - `/` — `PlayerApp` or `Landing`, chosen at request time by `SUBWAVE_HOMEPAGE` (`player` default, `landing` for the marketing host).
 - `/listen` — always the player.
 - `/landing` — always the broadsheet.
-- `/setup` — interactive onboarding walkthrough.
+- `/setup` — setup-guide docs (Overview, Prerequisites, Quick Start, Manual Install, Development, Updates).
+- `/onboarding` — interactive first-run wizard (the in-browser counterpart to `npm run setup`).
 - `/admin`, `/admin/settings`, `/admin/debug` — admin shell. **Single sign-in gate** (`AdminShell` + `useAdminAuth` in `web/lib/adminAuth.js`) replaces the old in-player Settings modal and the standalone `/debug` route. Credentials are cached in `localStorage` as `base64(user:pass)` and dropped on sign-out.
 
 PWA-installable: `app/manifest.js`, `app/icon.js` + `apple-icon.js`, `app/icons/[size]/route.js` for Android adaptive sizes, `app/screenshots/[variant]/route.js` for install-dialog previews (rendered via `next/og` ImageResponse — beware Satori's constraints: only flex/block/none/-webkit-box `display` values, divs with multiple children need an explicit `display: flex`). `web/public/sw.js` is a minimal service worker (just enough to avoid a /sw.js 404 on install). `useMediaSession` wires the OS lock-screen / headphone / car-display controls; **skip is intentionally omitted** on the listener side so a stray AirPods double-tap doesn't skip the song for every listener.
@@ -119,13 +137,22 @@ Polling: `useStationFeed` hits `/now-playing` + `/state` every 5s. Stream URL an
 
 ### Docker layout
 
-Three compose files, three deployment shapes:
+Three compose files at the repo root, three deployment shapes:
 
-- **`docker/docker-compose.yml`** — "Mac local smoke-test variant". Icecast + Liquidsoap + Controller only. Web UI runs separately via `npm run dev`. State is `../state` (repo-local bind mount). Used for local development.
-- **`docker/docker-compose.prod.yml`** — production single-host deploy with bundled Caddy. Adds `web` (built from `web/Dockerfile`, Next.js standalone output) and `caddy` (edge router). **Only Caddy binds a host port (`${CADDY_PORT:-7700}:80`)** — Icecast, Controller, Liquidsoap, and Web are internal-only and reachable via the proxy. State path is `${STATE_DIR:-<repo>/state}` — repo-local by default, same as the dev stack; override with `STATE_DIR` to relocate it. Cloudflare is expected to terminate TLS in front; Caddy has `auto_https off`. The `controller` service is forced into `NODE_ENV=production`, which makes the admin auth gate mandatory — the container will exit on boot if `ADMIN_USER`/`ADMIN_PASS` aren't in `controller/.env`.
-- **`docker/docker-compose.byo-proxy.yml`** — production deploy for hosts that already run Traefik, nginx, or their own Caddy. Identical to the prod file but with the bundled Caddy removed; `web`, `controller`, and `icecast` bind directly to host ports (`${WEB_PORT:-7700}`, `${CONTROLLER_PORT:-7701}`, `${ICECAST_PORT:-7702}`) for the operator's reverse proxy to front. `liquidsoap` stays internal. The web image still expects same-origin `/api` and `/stream.mp3` (it's baked at build time), so the operator's proxy should replicate the route table in `docker/Caddyfile` against a single hostname; split hostnames need a custom web rebuild with `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_STREAM_URL`.
+- **`docker-compose.yml`** — production single-host deploy with bundled Caddy. **This is the default** (`docker compose up -d` on a fresh host does the right thing). Includes Icecast, Liquidsoap, Controller, `web` (built from `web/Dockerfile`, Next.js standalone output), and `caddy` (edge router). **Only Caddy binds a host port (`${CADDY_PORT:-7700}:80`)** — Icecast, Controller, Liquidsoap, and Web are internal-only and reachable via the proxy. State path is `${STATE_DIR:-./state}` — repo-local by default; override with `STATE_DIR` to relocate it. Cloudflare is expected to terminate TLS in front; Caddy has `auto_https off`. The `controller` service is forced into `NODE_ENV=production`, which makes the admin auth gate mandatory — the container will exit on boot if `ADMIN_USER`/`ADMIN_PASS` aren't in the root `.env`. Caddyfile, radio.liq, and sounds/ are baked into images here, not bind-mounted.
+- **`docker-compose.byo.yml`** — production deploy for hosts that already run Traefik, nginx, or their own Caddy. Identical to the default prod file but with the bundled Caddy removed; `web`, `controller`, and `icecast` bind directly to host ports (`${WEB_PORT:-7700}`, `${CONTROLLER_PORT:-7701}`, `${ICECAST_PORT:-7702}`) for the operator's reverse proxy to front. `liquidsoap` stays internal. The web image still expects same-origin `/api` and `/stream.mp3` (it's baked at build time), so the operator's proxy should replicate the route table in `docker/Caddyfile` against a single hostname; split hostnames need a custom web rebuild with `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_STREAM_URL`.
+- **`docker-compose.dev.yml`** — "Mac local smoke-test variant". Icecast + Liquidsoap + Controller only. Web UI runs separately via `npm run dev`. State is `./state` (repo-local bind mount). Used for local development. Keeps bind mounts for `./liquidsoap/radio.liq`, `./sounds`, and `./controller/src` so dev edits don't need a rebuild (controller runs under `tsx watch`).
 
-**Image-first pulls, source-build fallback.** Both prod compose files (`docker-compose.prod.yml` and `docker-compose.byo-proxy.yml`) reference `ghcr.io/perminder-klair/subwave-{controller,liquidsoap,web}:${SUBWAVE_VERSION:-latest}` alongside the existing `build:` block. `docker compose up -d` pulls by default; `docker compose build && docker compose up -d` rebuilds locally from source. Pin a release with `SUBWAVE_VERSION` in `docker/.env`. The dev compose file (`docker-compose.yml`) is unchanged — it still always builds from source. Publishing is driven by `.github/workflows/publish-images.yml`, which builds the three images on tag pushes (`v*`) and on manual `workflow_dispatch`.
+**Image-first pulls, source-build fallback.** Every service references `ghcr.io/perminder-klair/subwave-{caddy,icecast,controller,liquidsoap,web}:${SUBWAVE_VERSION:-latest}` alongside a `build:` block. `docker compose up -d` pulls by default; `docker compose build && docker compose up -d` rebuilds locally from source. Pin a release with `SUBWAVE_VERSION` in the root `.env`. Publishing is driven by `.github/workflows/publish-images.yml`, which builds the five images on tag pushes (`v*`) and on manual `workflow_dispatch`.
+
+**Auto-generated Icecast secrets.** The `subwave-icecast` image bakes `icecast.xml.template` and an entrypoint that resolves `ICECAST_*_PASSWORD` with this precedence: env override → persisted `state/icecast-secrets.env` → freshly generated random hex. Resolved values are written back to `state/icecast-secrets.env` (mode 0644 so liquidsoap's uid 10000 can read it). The icecast service has a compose `healthcheck:` on the secrets file's existence, and liquidsoap + controller `depends_on: { condition: service_healthy }` — so the shared-secret handshake completes before downstream services start. To rotate: delete `state/icecast-secrets.env` and restart **all three** of icecast, liquidsoap, and controller (the latter two cache the env at process start).
+
+**Single config surface.** Three required env vars in the root `.env` are all you need to boot: `ADMIN_USER`, `ADMIN_PASS`, `SITE_URL`. Everything else (Navidrome creds, LLM provider/key, TTS engine, DJ persona, station name) is collected by one of two converging wizards:
+
+- **`npm run setup`** — terminal CLI under `cli/src/commands/setup.ts` (Clack prompts, interactive, deeper probes).
+- **`/onboarding`** — browser wizard under `web/components/onboarding/*` talking to `controller/src/routes/onboarding.ts` (no clone, no Node needed — the path operators reach after a `curl`-and-`docker compose up` install).
+
+Both write to the same persistence layer: Navidrome creds + the setup-complete timestamp go to `state/setup-config.json`; cloud LLM/TTS API keys go to `state/secrets.env` (mode 0600, sourced into `process.env` on controller boot via `controller/src/setup/secrets.ts`); everything else flows through `settings.update()` into `state/settings.json`. Env vars from the root `.env` always win — the wizard surfaces only fill in fields env doesn't supply. `controller/src/setup/firstRun.ts` decides `needsSetup` (true when neither env nor `setup-config.json` provide Navidrome creds); `/state` exposes that boolean so the player + AdminShell can redirect a fresh operator into `/onboarding`.
 
 The shared `/var/sub-wave` mount in **both** the Liquidsoap and Controller containers is what makes the file-based IPC work — they must always be mounted to the same host path.
 

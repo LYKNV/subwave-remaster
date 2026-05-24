@@ -15,7 +15,7 @@ import {
   streamUrlFor,
   type ComposeEnv,
 } from '../compose.ts';
-import { REPO_ROOT } from '../util.ts';
+import { getSubwaveHome } from '../util.ts';
 import {
   exitIfCancelled,
   header,
@@ -29,17 +29,21 @@ import {
   setMenuMode,
 } from '../ui.ts';
 
-const TUI_DIR = resolve(REPO_ROOT, 'tui');
-const TUI_BIN = resolve(TUI_DIR, 'bin', 'subwave-tui.js');
+// TUI lives in the cloned-repo `tui/` dir. Lazy so importing this file
+// doesn't trigger home resolution (e.g. when cli.ts dispatches a non-play
+// command). Standalone-CLI installs don't have the TUI — runPlayCommand
+// checks isCloneMode() and surfaces a helpful error.
+function tuiDir(): string { return resolve(getSubwaveHome(), 'tui'); }
+function tuiBin(): string { return resolve(tuiDir(), 'bin', 'subwave-tui.js'); }
 
 export interface PlayOpts {
   envArg?: Exclude<ComposeEnv, 'down'>;
 }
 
 export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
-  if (!existsSync(TUI_BIN)) {
+  if (!existsSync(tuiBin())) {
     header('TUI not found');
-    err(`expected the terminal player at ${TUI_BIN}`);
+    err(`expected the terminal player at ${tuiBin()}`);
     await pauseForEnter();
     return;
   }
@@ -69,7 +73,7 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
 
   // The TUI carries its own dependency tree (ink, react). It's a separate
   // package, so a fresh checkout won't have node_modules until installed.
-  if (!existsSync(resolve(TUI_DIR, 'node_modules'))) {
+  if (!existsSync(resolve(tuiDir(), 'node_modules'))) {
     warn('the terminal player has no node_modules yet — it needs `npm install` first.');
     const doInstall = exitIfCancelled(await p.confirm({
       message: 'Run `npm install` in tui/ now?',
@@ -79,7 +83,7 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
       await pauseForEnter();
       return;
     }
-    const r = spawnSync('npm', ['install'], { cwd: TUI_DIR, stdio: 'inherit' });
+    const r = spawnSync('npm', ['install'], { cwd: tuiDir(), stdio: 'inherit' });
     if (r.status !== 0) {
       err('npm install failed — see output above.');
       await pauseForEnter();
@@ -104,8 +108,8 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
     await new Promise<void>((resolveP) => {
       const child = spawn(
         'node',
-        [TUI_BIN, '--api', apiUrl, '--stream', streamUrl],
-        { cwd: TUI_DIR, stdio: 'inherit' },
+        [tuiBin(), '--api', apiUrl, '--stream', streamUrl],
+        { cwd: tuiDir(), stdio: 'inherit' },
       );
       child.on('exit', () => resolveP());
     });

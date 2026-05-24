@@ -646,7 +646,7 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
             <>The controller has <code>{envVar}</code> set — this provider is ready to use.</>
           ) : (
             <>
-              Set <code>{envVar}</code> in <code>controller/.env</code> and restart the controller.
+              Set <code>{envVar}</code> in <code>.env</code> and restart the controller.
               API keys are configured through the environment, not the admin UI.
             </>
           )}
@@ -1365,7 +1365,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
                 />
                 <div className="field-hint">
                   Stored alongside the other admin settings. Falls back to
-                  <code> SEARCH_API_KEY</code> in <code>controller/.env</code> when blank — set
+                  <code> SEARCH_API_KEY</code> in <code>.env</code> when blank — set
                   one or the other, not both.
                 </div>
               </div>
@@ -1662,7 +1662,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, d
             <div className="mt-1">
               The built-in effects work without a key. An ElevenLabs API key is only needed to
               generate <em>new</em> effects below. Set <code>ELEVENLABS_API_KEY</code> in{' '}
-              <code>controller/.env</code> (or set the cloud TTS provider to ElevenLabs with a key
+              <code>.env</code> (or set the cloud TTS provider to ElevenLabs with a key
               entered), then restart the controller.
             </div>
           </div>

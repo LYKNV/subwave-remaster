@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.14](https://github.com/perminder-klair/subwave/compare/v0.1.13...v0.1.14) (2026-05-24)
+
+
+### Bug Fixes
+
+* **admin:** keep /admin/debug expansions from blowing out viewport ([37764b2](https://github.com/perminder-klair/subwave/commit/37764b2f2fa96489fdc6949adffc558471a14962))
+
 ## [0.1.13](https://github.com/perminder-klair/subwave/compare/v0.1.12...v0.1.13) (2026-05-24)
 
 

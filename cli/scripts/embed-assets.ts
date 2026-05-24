@@ -61,12 +61,24 @@ function main(): void {
     parts.push(`export const ${a.name} = \`${encode(body)}\`;`);
     parts.push('');
   }
+  // Embed cli/package.json's version. The runtime readFileSync trick in
+  // cli.ts doesn't survive `bun build --compile` (the bundled binary has no
+  // package.json at runtime), so `--version` previously printed "unknown".
+  // Bake the string in at embed time — release-please bumps this in lockstep
+  // with the git tag, so the embedded version always matches the release the
+  // binary came from.
+  const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'cli', 'package.json'), 'utf8')) as { version: string };
+  parts.push('// cli/package.json#version (embedded so the compiled binary can self-identify');
+  parts.push('// — used by `subwave --version` and by the TUI release fetch URL).');
+  parts.push(`export const CLI_VERSION = \`${encode(pkg.version)}\`;`);
+  parts.push('');
+
   writeFileSync(OUT_FILE, parts.join('\n'));
   const sizes = ASSETS.map((a) => {
     const abs = resolve(REPO_ROOT, a.source);
     return `${a.source} (${readFileSync(abs, 'utf8').length} bytes)`;
   });
-  process.stdout.write(`embedded ${ASSETS.length} files → ${OUT_FILE}\n`);
+  process.stdout.write(`embedded ${ASSETS.length} files + CLI_VERSION=${pkg.version} → ${OUT_FILE}\n`);
   for (const s of sizes) process.stdout.write(`  ${s}\n`);
 }
 

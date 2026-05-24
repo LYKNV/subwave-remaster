@@ -29,7 +29,7 @@ Usage:
   subwave restart [svc]    rebuild / restart a service (dev adds \`web-dev\`)
   subwave logs [svc|all]   tail docker compose logs (dev adds \`web-dev\`)
   subwave update           pull new images + recreate changed services
-  subwave play [dev|prod]  open the terminal player (TUI, cloned-repo only)
+  subwave play [dev|prod]  open the terminal player (TUI; auto-fetched on first run)
   subwave listen [dev|prod] open the web player in a browser
   subwave admin [dev|prod] open the admin console in a browser
   subwave self-update      replace the installed binary with the latest release
@@ -55,18 +55,11 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === '--version' || cmd === '-v') {
-    // Read package.json next to this file's directory at runtime so the
-    // version stays accurate without a build step. Doesn't touch SUBWAVE_HOME.
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const here = resolve(fileURLToPath(import.meta.url), '..', '..');
-    try {
-      const pkg = JSON.parse(readFileSync(resolve(here, 'package.json'), 'utf8'));
-      process.stdout.write(`${pkg.version}\n`);
-    } catch {
-      process.stdout.write('unknown\n');
-    }
+    // Embedded at build time by cli/scripts/embed-assets.ts (release-please
+    // bumps cli/package.json in lockstep with the git tag, so this stays
+    // accurate across releases). Doesn't touch SUBWAVE_HOME.
+    const { CLI_VERSION } = await import('./assets.ts');
+    process.stdout.write(`${CLI_VERSION}\n`);
     return;
   }
   if (cmd === 'init') {

@@ -11,7 +11,12 @@
     "start": "node bin/subwave-tui.js",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:linux-x64":    "bun build src/main.tsx --compile --target=bun-linux-x64    --outfile=dist/subwave-tui-linux-x64",
+    "build:linux-arm64":  "bun build src/main.tsx --compile --target=bun-linux-arm64  --outfile=dist/subwave-tui-linux-arm64",
+    "build:darwin-x64":   "bun build src/main.tsx --compile --target=bun-darwin-x64   --outfile=dist/subwave-tui-darwin-x64",
+    "build:darwin-arm64": "bun build src/main.tsx --compile --target=bun-darwin-arm64 --outfile=dist/subwave-tui-darwin-arm64",
+    "build:all": "npm run build:linux-x64 && npm run build:linux-arm64 && npm run build:darwin-x64 && npm run build:darwin-arm64"
   },
   "engines": {
     "node": ">=18"
@@ -21,6 +26,7 @@
     "ink-text-input": "^6.0.0",
     "meow": "^13.2.0",
     "react": "^19.2.0",
+    "react-devtools-core": "^7.0.1",
     "tsx": "^4.19.2"
   },
   "devDependencies": {

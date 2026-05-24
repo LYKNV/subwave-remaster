@@ -1,14 +1,25 @@
 // `subwave play [dev|prod]` — launch the terminal player (TUI) pointed at
-// the running stack. The TUI is its own package under /tui/; this command
-// resolves the right controller + Icecast URLs for the live compose env
-// and hands off to `tui/bin/subwave-tui.js`.
+// the running stack.
 //
-// The TUI is a full-screen Ink app — once spawned it owns the terminal
-// until the listener quits, then control returns here (or to the menu).
+// Two backends, picked by what's actually on disk:
+//
+//  - Clone-mode (contributors): `<home>/tui/package.json` is present, the
+//    TUI source tree is checked out. Run it the old way — `node
+//    bin/subwave-tui.js` under the tsx loader, hot edits to src/ take
+//    effect on the next launch.
+//
+//  - Standalone (operators who installed via `curl … | sh`): no tui/ dir.
+//    Fetch the version-pinned `subwave-tui-<platform>-<arch>` binary from
+//    the matching GitHub release into `<home>/tui/bin/subwave-tui` and
+//    spawn it. Cached forever; redownloaded when the operator runs
+//    `subwave self-update` (which bumps CLI_VERSION → the cached path
+//    points at the old version and miss-then-fetch fires again).
 
-import { existsSync } from 'node:fs';
-import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, chmodSync, createWriteStream, statSync, renameSync, unlinkSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import {
   detectCompose,
   apiBaseFor,
@@ -16,6 +27,7 @@ import {
   type ComposeEnv,
 } from '../compose.ts';
 import { getSubwaveHome } from '../util.ts';
+import { CLI_VERSION } from '../assets.ts';
 import {
   exitIfCancelled,
   header,
@@ -29,23 +41,139 @@ import {
   setMenuMode,
 } from '../ui.ts';
 
-// TUI lives in the cloned-repo `tui/` dir. Lazy so importing this file
-// doesn't trigger home resolution (e.g. when cli.ts dispatches a non-play
-// command). Standalone-CLI installs don't have the TUI — runPlayCommand
-// checks isCloneMode() and surfaces a helpful error.
+// Owner/repo for the GitHub release that holds the compiled TUI binaries.
+// Same release tag as the CLI binary that this code is bundled into.
+const RELEASE_REPO = 'perminder-klair/subwave';
+
 function tuiDir(): string { return resolve(getSubwaveHome(), 'tui'); }
-function tuiBin(): string { return resolve(tuiDir(), 'bin', 'subwave-tui.js'); }
+function tuiBinDir(): string { return resolve(tuiDir(), 'bin'); }
+function tuiCloneEntry(): string { return resolve(tuiBinDir(), 'subwave-tui.js'); }
+function tuiCompiledBin(): string { return resolve(tuiBinDir(), 'subwave-tui'); }
+
+// Clone-mode = the operator is running from a `git clone` checkout. The
+// `tui/package.json` (alongside controller/ and web/) is what distinguishes
+// it from a standalone install, mirroring isCloneMode() in home.ts.
+function isCloneTui(): boolean {
+  return existsSync(resolve(tuiDir(), 'package.json')) && existsSync(tuiCloneEntry());
+}
+
+// node_modules check — only relevant for clone-mode. Standalone installs
+// run the bundled binary which carries its own deps.
+function cloneNodeModulesPresent(): boolean {
+  return existsSync(resolve(tuiDir(), 'node_modules'));
+}
+
+// Resolve the platform/arch slug bun --compile uses for asset names. The
+// CLI binary that's running was itself built for one of these; assume the
+// TUI binary follows the same convention. Returns null on unsupported
+// host platforms (Windows, BSDs, …) so the caller can surface a clear
+// error instead of fetching a 404.
+function resolveAssetSlug(): string | null {
+  const plat = process.platform;
+  const arch = process.arch;
+  if (plat === 'linux'  && arch === 'x64')   return 'linux-x64';
+  if (plat === 'linux'  && arch === 'arm64') return 'linux-arm64';
+  if (plat === 'darwin' && arch === 'x64')   return 'darwin-x64';
+  if (plat === 'darwin' && arch === 'arm64') return 'darwin-arm64';
+  return null;
+}
+
+function releaseAssetUrl(slug: string): string {
+  // Escape hatch for local testing — point at any HTTP-reachable binary
+  // (e.g. `python3 -m http.server` serving tui/dist) before the release
+  // workflow has actually published a v<CLI_VERSION> asset. The substituted
+  // value can be a full URL or a template containing {slug}.
+  const override = process.env.SUBWAVE_TUI_DOWNLOAD_URL;
+  if (override) return override.replace('{slug}', slug);
+  return `https://github.com/${RELEASE_REPO}/releases/download/v${CLI_VERSION}/subwave-tui-${slug}`;
+}
+
+// Download the matching TUI binary from the GitHub release into
+// `<home>/tui/bin/subwave-tui`. Streamed to a `.partial` file first so a
+// killed download doesn't leave a half-written executable behind that
+// looks valid on the next run.
+async function fetchTuiBinary(slug: string): Promise<void> {
+  const url = releaseAssetUrl(slug);
+  const out = tuiCompiledBin();
+  const partial = `${out}.partial`;
+
+  mkdirSync(tuiBinDir(), { recursive: true });
+  if (existsSync(partial)) unlinkSync(partial);
+
+  info(`fetching subwave-tui-${slug} from release v${CLI_VERSION}`);
+  muted(url);
+
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok || !res.body) {
+    throw new Error(
+      `download failed (${res.status} ${res.statusText}). ` +
+      `Either v${CLI_VERSION} hasn't been released yet, or the matching TUI ` +
+      `asset is missing. URL: ${url}`,
+    );
+  }
+
+  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(partial));
+
+  // Sanity check — Bun-compiled binaries are tens of MB. Anything under 1MB
+  // is almost certainly a 404 HTML page that slipped through with a 200 (or
+  // a release asset redirect we mishandled).
+  const size = statSync(partial).size;
+  if (size < 1_000_000) {
+    unlinkSync(partial);
+    throw new Error(`downloaded asset is suspiciously small (${size} bytes) — refusing to install`);
+  }
+
+  renameSync(partial, out);
+  chmodSync(out, 0o755);
+  info(`installed → ${out}  (${(size / (1024 * 1024)).toFixed(1)} MB)`);
+}
 
 export interface PlayOpts {
   envArg?: Exclude<ComposeEnv, 'down'>;
 }
 
 export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
-  if (!existsSync(tuiBin())) {
-    header('TUI not found');
-    err(`expected the terminal player at ${tuiBin()}`);
-    await pauseForEnter();
-    return;
+  // Decide which on-disk TUI we'll launch. Clone-mode wins so contributors
+  // editing src/ get their changes; standalone falls through to the fetched
+  // binary (downloading it first if needed).
+  type Backend =
+    | { kind: 'clone' }
+    | { kind: 'compiled'; path: string };
+  let backend: Backend;
+
+  if (isCloneTui()) {
+    backend = { kind: 'clone' };
+  } else {
+    const slug = resolveAssetSlug();
+    if (!slug) {
+      header('TUI not available on this platform');
+      err(`compiled binaries exist only for linux/macOS on x64/arm64 — detected ${process.platform}/${process.arch}.`);
+      muted('clone the repo and run the Node-based TUI manually, or run subwave from a supported host.');
+      await pauseForEnter();
+      return;
+    }
+    if (!existsSync(tuiCompiledBin())) {
+      header('Terminal player needs a one-time download');
+      info(`Subwave will fetch the TUI binary (~60–100 MB) into ${tuiBinDir()}.`);
+      muted('subsequent launches are instant; rerun `subwave self-update` to refresh.');
+      const proceed = exitIfCancelled(await p.confirm({
+        message: 'Download it now?',
+      }));
+      if (!proceed) {
+        muted('skipped — `subwave play` is unavailable until the download completes.');
+        await pauseForEnter();
+        return;
+      }
+      try {
+        await fetchTuiBinary(slug);
+      } catch (e) {
+        err(e instanceof Error ? e.message : String(e));
+        muted('check your internet connection, then try `subwave play` again.');
+        await pauseForEnter();
+        return;
+      }
+    }
+    backend = { kind: 'compiled', path: tuiCompiledBin() };
   }
 
   // Which stack are we listening to? Explicit arg wins; otherwise follow
@@ -71,9 +199,10 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
     }
   }
 
-  // The TUI carries its own dependency tree (ink, react). It's a separate
-  // package, so a fresh checkout won't have node_modules until installed.
-  if (!existsSync(resolve(tuiDir(), 'node_modules'))) {
+  // Clone-mode TUI carries its own dep tree. A fresh checkout has no
+  // node_modules until installed — offer to do it. Standalone binary
+  // skips this entirely.
+  if (backend.kind === 'clone' && !cloneNodeModulesPresent()) {
     warn('the terminal player has no node_modules yet — it needs `npm install` first.');
     const doInstall = exitIfCancelled(await p.confirm({
       message: 'Run `npm install` in tui/ now?',
@@ -83,6 +212,7 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
       await pauseForEnter();
       return;
     }
+    const { spawnSync } = await import('node:child_process');
     const r = spawnSync('npm', ['install'], { cwd: tuiDir(), stdio: 'inherit' });
     if (r.status !== 0) {
       err('npm install failed — see output above.');
@@ -96,6 +226,7 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
 
   header('Terminal player');
   info(`env=${env} · api=${apiUrl}`);
+  if (backend.kind === 'compiled') muted(`binary: ${backend.path}`);
   muted('q / Ctrl-C inside the player returns here.');
   console.log();
 
@@ -106,12 +237,15 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
   if (wasMenu) setMenuMode(false);
   try {
     await new Promise<void>((resolveP) => {
-      const child = spawn(
-        'node',
-        [tuiBin(), '--api', apiUrl, '--stream', streamUrl],
-        { cwd: tuiDir(), stdio: 'inherit' },
-      );
+      const [cmd, args]: [string, string[]] = backend.kind === 'clone'
+        ? ['node', [tuiCloneEntry(), '--api', apiUrl, '--stream', streamUrl]]
+        : [backend.path, ['--api', apiUrl, '--stream', streamUrl]];
+      const child = spawn(cmd, args, { cwd: tuiDir(), stdio: 'inherit' });
       child.on('exit', () => resolveP());
+      child.on('error', (e) => {
+        err(`failed to launch TUI: ${e.message}`);
+        resolveP();
+      });
     });
   } finally {
     if (wasMenu) setMenuMode(true);

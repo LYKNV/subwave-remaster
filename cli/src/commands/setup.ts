@@ -1,39 +1,45 @@
-// `subwave setup` — the install wizard.
+// `subwave setup` — the configuration wizard.
 //
-// Walks the operator through prerequisites, credentials, and first boot.
-// In the single-compose world this is one of two converging install paths:
-// the operator can also finish setup in the browser wizard at /setup. Both
-// flows write to the same persistence layer:
+// Configures an already-running stack: collects Navidrome + LLM + timezone,
+// probes them live, and persists into the layers the controller reads on
+// boot. The browser counterpart at /onboarding writes to the same files,
+// so the two paths are interchangeable.
 //
-//   .env                      — ADMIN_USER, ADMIN_PASS, SITE_URL, TZ, etc.
+// Boundary with `subwave init`:
+//   - init  → filesystem scaffolding + boot-critical .env (ADMIN_USER,
+//             ADMIN_PASS, SITE_URL, deployment shape) + optionally starts
+//             the stack.
+//   - setup → configuration that runs against the live controller: Navidrome
+//             creds, LLM provider/model/key, timezone, jingles.
+//
+// Setup REQUIRES a running stack (it POSTs /settings and renders jingles
+// through /jingles). If no stack is up, it exits with a pointer to
+// `subwave start` rather than starting one itself.
+//
+// Persistence layers (shared with /onboarding):
+//   .env                      — TZ (setup-owned); ADMIN_USER, ADMIN_PASS,
+//                                SITE_URL written by init and only read here.
 //   state/setup-config.json   — Navidrome creds + setupCompletedAt
 //   state/secrets.env (0600)  — cloud LLM/TTS API keys
 //   POST /settings            — LLM provider/model (live)
 //
 // Flow:
-//   1. Mode (dev / prod / prod-byo)
+//   1. Preconditions — .env has admin creds, stack is up
 //   2. Preflight (node, docker, docker daemon)
-//   3. STATE_DIR (prod only)
-//   4. Navidrome (URL/user/pass) + reachability probe
-//   5. LLM choice + API key + probe
-//   6. Admin credentials (REQUIRED in prod) + SITE_URL
-//   7. Timezone
-//   8. Write root .env (template-aware) + Navidrome → setup-config.json
-//      + API keys → secrets.env (0600)
-//   9. Shell to scripts/setup.sh — state dir perms, web/.env.local
-//  10. docker compose up -d  (compose lives at repo root now)
-//  11. waitForHealth
-//  12. POST /settings to apply the LLM choice (so the operator's first DJ
-//      action uses the right provider, no admin-UI detour)
-//  13. Optionally render jingles
-//  14. Dev only: optionally start `npm run dev` (web UI) in the background
-//  15. Endpoints summary
+//   3. Navidrome (URL/user/pass) + reachability probe
+//   4. LLM choice + API key + probe
+//   5. Timezone
+//   6. Write root .env (TZ + SUBWAVE_HOMEPAGE if missing)
+//   7. Navidrome → state/setup-config.json
+//   8. Cloud LLM API key → state/secrets.env (0600)
+//   9. State dir perms (standalone install only)
+//  10. POST /settings to apply the LLM choice
+//  11. Optionally render jingles
+//  12. Endpoints summary
 //
 // Probes (cli/src/probes.ts) are warn-not-fail — the operator can keep
 // going if the network isn't ready yet.
 
-import crypto from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import {
@@ -48,9 +54,9 @@ import {
   writeSetupConfig,
   have,
 } from '../util.ts';
-import { getComposeFiles, isProdEnv, webBaseFor, streamUrlFor, apiBaseFor, type ComposeEnv } from '../compose.ts';
-import { dockerDaemonOk, composeUp } from '../docker.ts';
-import { makeClient, waitForHealth } from '../api.ts';
+import { detectCompose, getComposeFiles, webBaseFor, streamUrlFor, apiBaseFor, type ComposeEnv } from '../compose.ts';
+import { dockerDaemonOk } from '../docker.ts';
+import { makeClient } from '../api.ts';
 import {
   probeSubsonic,
   probeOllama,
@@ -60,9 +66,6 @@ import {
   type ProbeResult,
 } from '../probes.ts';
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, muted } from '../ui.ts';
-import { maybeStartWebDev, type WebDevState } from '../web-dev.ts';
-
-type Mode = 'dev' | 'prod' | 'prod-byo';
 
 // LLM providers — kept in step with the controller's LLM_PROVIDERS list
 // (controller/src/settings.ts) and the admin Settings UI provider picker.
@@ -97,56 +100,56 @@ interface LlmChoice {
 }
 
 export async function runSetupCommand(): Promise<void> {
-  banner('install wizard');
+  banner('configuration wizard');
 
-  // --- 1. Mode -------------------------------------------------------------
-  const mode = await pickMode();
+  // --- 1. Preconditions ---------------------------------------------------
+  // (a) .env must have ADMIN_USER + ADMIN_PASS — those are init's
+  // responsibility now. Without them the controller exits at boot in prod,
+  // so refusing here is the same gate, surfaced earlier.
+  const existingRoot = parseEnvFile(getRootEnv());
+  const legacy = parseEnvFile(getLegacyControllerEnv());
+  const hasAdmin = (existingRoot.ADMIN_USER && existingRoot.ADMIN_PASS) ||
+                   (legacy.ADMIN_USER && legacy.ADMIN_PASS);
+  if (!hasAdmin) {
+    err('No admin credentials found in .env.');
+    muted('→ Run `subwave init` first — it scaffolds the install and writes ADMIN_USER + ADMIN_PASS.');
+    process.exit(2);
+  }
+
+  // (b) The stack must be up — setup POSTs /settings and renders jingles
+  // through /jingles, both of which need the controller alive. Cold-start
+  // is `subwave start`'s job, not ours.
+  const current = detectCompose();
+  if (current.env === 'down') {
+    err('Stack is not running.');
+    muted('→ Run `subwave start` first, then re-run `subwave setup`.');
+    process.exit(2);
+  }
+  const mode = current.env;
 
   // --- 2. Preflight --------------------------------------------------------
   await preflight();
 
-  // --- 3. STATE_DIR (prod-style modes only) -------------------------------
-  let stateDir = resolve(getSubwaveHome(), 'state');
-  if (isProdEnv(mode)) {
-    stateDir = await promptStateDir();
-  }
-
-  // --- 4. Navidrome --------------------------------------------------------
+  // --- 3. Navidrome --------------------------------------------------------
   const navidrome = await collectNavidrome();
 
-  // --- 5. LLM --------------------------------------------------------------
+  // --- 4. LLM --------------------------------------------------------------
   const llm = await collectLlm();
 
-  // --- 6. Admin creds + SITE_URL ------------------------------------------
-  const admin = await collectAdmin(mode);
-  // SITE_URL is purely cosmetic — only used for absolute share-card / OG /
-  // sitemap URLs in the prod web image. In dev there's no public origin to
-  // advertise and the dev compose doesn't reference it at all, so skip the
-  // prompt entirely.
-  const siteUrl = isProdEnv(mode) ? await promptSiteUrl(mode) : '';
-
-  // --- 7. Timezone ---------------------------------------------------------
+  // --- 5. Timezone ---------------------------------------------------------
   const tz = await promptTimezone();
 
-  // --- 8a. Write the root .env --------------------------------------------
-  // Boot-time config: admin creds, public origin (prod only), timezone,
-  // homepage mode. Wins over anything in state/setup-config.json or
-  // state/secrets.env when both are set (env-first precedence is enforced
-  // controller-side).
+  // --- 6. Write the root .env ---------------------------------------------
+  // Setup only owns TZ and (one-time) SUBWAVE_HOMEPAGE. Admin creds and
+  // SITE_URL come from init and are preserved by writeEnvFile's
+  // existing-keys-win behaviour when not in our values map.
   header('Writing .env (repo root)');
-  const envValues: Record<string, string> = {
-    ADMIN_USER: admin.user,
-    ADMIN_PASS: admin.pass,
-    TZ: tz,
-  };
-  if (siteUrl) envValues.SITE_URL = siteUrl;
-  // Preserve SUBWAVE_HOMEPAGE if already set; otherwise default to `player`.
-  const existingRoot = parseEnvFile(getRootEnv());
+  const envValues: Record<string, string> = { TZ: tz };
   if (!existingRoot.SUBWAVE_HOMEPAGE) envValues.SUBWAVE_HOMEPAGE = 'player';
   writeEnvFile(getRootEnv(), envValues, { templateFallback: getRootEnvExample() });
   ok(`wrote ${pc.dim('.env')} (${Object.keys(envValues).length} keys)`);
 
-  // --- 8b. Persist Navidrome creds to state/setup-config.json ------------
+  // --- 7. Persist Navidrome creds to state/setup-config.json --------------
   // Same target the browser wizard writes to. The controller falls back to
   // this file when NAVIDROME_* env vars are blank; env still wins when set.
   writeSetupConfig({
@@ -155,7 +158,7 @@ export async function runSetupCommand(): Promise<void> {
   });
   ok(`wrote ${pc.dim('state/setup-config.json')} (Navidrome creds + setupCompletedAt)`);
 
-  // --- 8c. Persist cloud API keys to state/secrets.env (mode 0600) -------
+  // --- 8. Persist cloud API keys to state/secrets.env (mode 0600) --------
   // Sourced into process.env on controller boot. We never write secrets to
   // .env (world-readable) or settings.json — they live in their own 0600 file.
   if (llm.provider && llm.apiKey && llm.provider in CLOUD_ENV_VAR) {
@@ -164,80 +167,28 @@ export async function runSetupCommand(): Promise<void> {
     ok(`wrote ${pc.dim('state/secrets.env')} (${k}, mode 0600)`);
   }
 
-  // --- 9. Bash bootstrap (state dir perms, web/.env.local) ----------------
-  // scripts/setup.sh is much smaller in the single-compose world; it just
-  // ensures state/ has the right permissions and seeds web/.env.local for
-  // native `npm run dev`. Icecast passwords are generated by the icecast
-  // image on first boot; the renderer for icecast.xml is gone too.
-  const bashEnv = isProdEnv(mode)
-    ? { ...process.env, STATE_DIR: stateDir }
-    : { ...process.env };
-  await runBashSetup(bashEnv);
+  // --- 9. State dir perms (standalone install only) -----------------------
+  // Idempotent — safe even when running setup against an already-configured
+  // install. Container UIDs vary, so chmod 777 is the simplest fix.
+  await runBashSetup({ ...process.env });
 
-  // --- 10. (legacy step removed) docker/.env no longer exists in the
-  // single-compose layout — TZ + SUBWAVE_HOMEPAGE went into the root .env
-  // above and compose interpolates them straight from there.
-
-  // --- 11. Bring the stack up ---------------------------------------------
-  const composeEnv: ComposeEnv = mode;
-  const file = getComposeFiles().find((f) => f.env === mode);
-  if (!file) {
-    err(`unknown mode: ${mode}`);
-    return;
-  }
-  // Dev compose tags `sub-wave-liquidsoap:local` and has no `image:` on the
-  // controller, so it must build locally on first install. Prod / prod-byo
-  // reference published `ghcr.io/perminder-klair/subwave-*` images — pull
-  // them instead of rebuilding from source. `--pull always` forces a fresh
-  // pull on prod so a previously-built local image (e.g. from an earlier
-  // setup run, which may have baked in a stale web/.env.local) doesn't keep
-  // masking the upstream GHCR release. Operators hacking on the code can
-  // force a rebuild later via `subwave restart <svc> --build`.
-  const wantBuild = mode === 'dev';
-  const wantPull = mode === 'dev' ? undefined : ('always' as const);
-  header(`Starting ${mode} stack`);
-  const flags = `${wantBuild ? ' --build' : ''}${wantPull ? ` --pull ${wantPull}` : ''}`;
-  muted(`docker compose -f ${file.file} up -d${flags}`);
-  console.log();
-  const upCode = await composeUp(file, { build: wantBuild, pull: wantPull });
-  if (upCode !== 0) {
-    err(`docker compose exited ${upCode}`);
-    muted('→ inspect: `subwave logs <service>`. Resolve and re-run setup.');
-    return;
-  }
-
-  // --- 12. Wait for /health -----------------------------------------------
-  const sp = p.spinner();
-  sp.start('Waiting for controller to report on-air…');
-  const healthy = await waitForHealth(composeEnv, 30_000, (ms) => {
-    sp.message(`Waiting… ${Math.floor(ms / 1000)}s`);
-  });
-  sp.stop(healthy ? 'Controller on-air' : pc.yellow('Not on-air after 30s — continuing'));
-  if (!healthy) {
-    warn('Controller did not report on-air within 30s. The stack may still be coming up — check `subwave logs controller`.');
-  }
-
-  // --- 13. POST /settings to apply LLM choice ----------------------------
+  // --- 10. POST /settings to apply LLM choice ----------------------------
+  // Stack is guaranteed up (precondition above), so the call should succeed.
   if (llm.provider) {
-    await applyLlmSetting(composeEnv, llm);
+    await applyLlmSetting(mode, llm);
   }
 
-  // --- 14. Optionally render jingles --------------------------------------
+  // --- 11. Optionally render jingles --------------------------------------
   const wantsJingles = exitIfCancelled(await p.confirm({
     message: 'Generate station jingles now? (Piper TTS, ~30 s)',
     initialValue: false,
   }), { backOnCancel: false });
   if (wantsJingles) {
-    await renderJingles(file.file, bashEnv);
+    const composeFile = getComposeFiles().find((f) => f.env === mode);
+    if (composeFile) await renderJingles(composeFile.file, { ...process.env });
   }
 
-  // --- 15. Dev only: start the web dev server -----------------------------
-  let webDevState: WebDevState = 'skipped';
-  if (mode === 'dev') {
-    webDevState = await maybeStartWebDev();
-  }
-
-  // --- 16. Summary --------------------------------------------------------
+  // --- 12. Summary --------------------------------------------------------
   header('Endpoints');
   if (mode === 'prod') {
     muted(`Site:    ${accent(webBaseFor('prod'))}`);
@@ -254,70 +205,17 @@ export async function runSetupCommand(): Promise<void> {
   } else {
     muted(`Controller:  ${accent('http://localhost:7701')}`);
     muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}`);
-    if (webDevState === 'running') {
-      muted(`Web (dev):   ${accent('http://localhost:7700')}  ${pc.dim('(running — log: state/logs/web-dev.log, pid: state/logs/web-dev.pid)')}`);
-    } else {
-      muted(`Web (dev):   ${accent('http://localhost:7700')}  (separate: `+ pc.dim('`npm --prefix web run dev`') + ')');
-    }
+    muted(`Web (dev):   ${accent('http://localhost:7700')}  (separate: ` + pc.dim('`npm --prefix web run dev`') + ')');
   }
 
   console.log();
   ok('Setup complete.');
-  muted(`Try ${pc.dim('`npm start -- status`')} or ${pc.dim('`npm start -- doctor`')}.`);
-  console.log();
-  muted(`Open the terminal player: ${accent('npm start -- play')}`);
+  muted(`Try ${pc.dim('`subwave status`')} or ${pc.dim('`subwave doctor`')}.`);
 }
 
 // ---------------------------------------------------------------------------
 // Step implementations
 // ---------------------------------------------------------------------------
-
-async function pickMode(): Promise<Mode> {
-  // If a previous install left a .env (or the legacy controller/.env) behind,
-  // the operator is re-running setup. Surface that — collectAdmin /
-  // collectNavidrome pre-fill from whichever source they find.
-  const root = parseEnvFile(getRootEnv());
-  const legacy = parseEnvFile(getLegacyControllerEnv());
-  const existingSource = Object.keys(root).length > 0
-    ? '.env'
-    : Object.keys(legacy).length > 0
-      ? 'controller/.env (legacy)'
-      : null;
-  if (existingSource) {
-    const count = Object.keys(root).length || Object.keys(legacy).length;
-    muted(`Existing ${existingSource} detected (${count} keys). You can keep the values or reconfigure as you go.`);
-  }
-
-  // Dev mode needs the cloned source (controller/, web/, scripts/) — hide it
-  // from operators on a standalone-CLI install where those don't exist.
-  const { isCloneMode } = await import('../home.ts');
-  const cloneMode = isCloneMode(getSubwaveHome());
-  const options: Array<{ value: Mode; label: string; hint: string }> = [
-    {
-      value: 'prod',
-      label: 'prod — server deploy with bundled Caddy',
-      hint: 'docker-compose.yml · Caddy :7700 · web baked into image',
-    },
-    {
-      value: 'prod-byo',
-      label: 'prod (BYO proxy) — Traefik / nginx / your own Caddy',
-      hint: 'docker-compose.byo.yml · web :7700 · controller :7701 · icecast :7702',
-    },
-  ];
-  if (cloneMode) {
-    options.push({
-      value: 'dev',
-      label: 'dev — local hacking',
-      hint: 'docker-compose.dev.yml · controller :7701 · web on :7700 separately',
-    });
-  }
-
-  return exitIfCancelled(await p.select<Mode>({
-    message: 'How are you running SUB/WAVE?',
-    initialValue: 'prod',
-    options,
-  }), { backOnCancel: false });
-}
 
 async function preflight(): Promise<void> {
   header('Preflight');
@@ -347,22 +245,6 @@ async function preflight(): Promise<void> {
     err('Resolve the failed prerequisites and re-run `subwave setup`.');
     process.exit(1);
   }
-}
-
-async function promptStateDir(): Promise<string> {
-  const defaultDir = resolve(getSubwaveHome(), 'state');
-  const chosen = exitIfCancelled(await p.text({
-    message: 'STATE_DIR (shared volume for icecast + liquidsoap + controller)',
-    initialValue: defaultDir,
-    placeholder: defaultDir,
-  }), { backOnCancel: false });
-  if (!canWrite(chosen)) {
-    err(`${chosen} is not writable by this user.`);
-    muted('Re-run setup with sufficient permissions (e.g. as the owner of that directory),');
-    muted('or pick a path your user can write to.');
-    process.exit(1);
-  }
-  return chosen;
 }
 
 interface NavidromeCreds { url: string; user: string; pass: string; }
@@ -586,65 +468,6 @@ async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: s
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
 }
 
-interface AdminCreds { user: string; pass: string; }
-
-async function collectAdmin(mode: Mode): Promise<AdminCreds> {
-  header('Admin credentials');
-  if (isProdEnv(mode)) {
-    muted('REQUIRED in prod — the controller exits at boot without these.');
-  } else {
-    muted('Recommended even in dev (gates /settings, /debug, /jingles, /restart-mixer).');
-  }
-  // Root .env wins; fall back to legacy controller/.env for upgraders.
-  const existing = {
-    ...parseEnvFile(getLegacyControllerEnv()),
-    ...parseEnvFile(getRootEnv()),
-  };
-  const user = exitIfCancelled(await p.text({
-    message: 'Admin user',
-    initialValue: existing.ADMIN_USER || 'subwave',
-    validate: (v: string) => (!v ? 'required' : undefined),
-  }), { backOnCancel: false });
-  const generated = crypto.randomBytes(16).toString('hex');
-  const pass = exitIfCancelled(await p.password({
-    message: existing.ADMIN_PASS && existing.ADMIN_PASS !== 'changeme'
-      ? 'Admin password (enter to keep existing)'
-      : `Admin password (enter to use generated: ${pc.dim(generated)})`,
-    mask: '*',
-  }), { backOnCancel: false }) ||
-    (existing.ADMIN_PASS && existing.ADMIN_PASS !== 'changeme'
-      ? existing.ADMIN_PASS
-      : generated);
-  return { user, pass };
-}
-
-// SITE_URL is required in the root .env in the single-compose world: it
-// determines absolute URLs (OG tags, manifest, sitemap, share cards) at
-// both build and runtime. In dev a localhost origin is fine; in prod the
-// operator should know their public hostname before booting.
-async function promptSiteUrl(mode: Mode): Promise<string> {
-  header('Public site URL');
-  const existing = parseEnvFile(getRootEnv()).SITE_URL;
-  const defaultUrl =
-    existing ||
-    (mode === 'dev' ? 'http://localhost:7700' : '');
-  if (mode === 'dev') {
-    muted('Used for absolute URLs (OG tags, sitemap). Localhost is fine in dev.');
-  } else {
-    muted('Used for absolute URLs (OG tags, sitemap, share cards). Set to your public origin.');
-  }
-  return exitIfCancelled(await p.text({
-    message: 'SITE_URL',
-    initialValue: defaultUrl,
-    placeholder: 'https://radio.example.com',
-    validate: (v: string) => {
-      if (!v) return isProdEnv(mode) ? 'required in prod' : undefined;
-      if (!/^https?:\/\//.test(v)) return 'must start with http(s)://';
-      return undefined;
-    },
-  }), { backOnCancel: false });
-}
-
 async function promptTimezone(): Promise<string> {
   const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   return exitIfCancelled(await p.text({
@@ -764,18 +587,6 @@ async function applyLlmSetting(env: ComposeEnv, llm: LlmChoice): Promise<void> {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
-
-function canWrite(path: string): boolean {
-  try {
-    if (!existsSync(path)) {
-      mkdirSync(path, { recursive: true });
-    }
-    accessSync(path, constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function reportProbe(label: string, run: () => Promise<ProbeResult>): Promise<void> {
   const sp = p.spinner();

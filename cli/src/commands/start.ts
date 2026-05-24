@@ -21,7 +21,7 @@ import {
   type ComposeFile,
 } from '../compose.ts';
 import { composeUp } from '../docker.ts';
-import { waitForHealth } from '../api.ts';
+import { waitForHealth, checkNeedsSetup } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
 import { ok, warn, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { maybeStartWebDev } from '../web-dev.ts';
@@ -109,6 +109,22 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     } else {
       muted('  web dev server (separate): `npm --prefix web run dev`  on http://localhost:7700');
     }
+  }
+
+  // If the controller reports the operator hasn't finished configuration
+  // yet, surface the two paths prominently. Without this, fresh installs
+  // see the "stack ready" URL and miss that no music will actually play
+  // until Navidrome + LLM are connected. Skipped silently once setup is
+  // done, so returning operators don't get nagged on every start.
+  const needsSetup = healthy ? await checkNeedsSetup(target.env) : null;
+  if (needsSetup === true) {
+    console.log();
+    header('Finish setup');
+    muted('The stack is running but not configured yet — no music plays until');
+    muted('Navidrome + your LLM are connected. Pick either path:');
+    console.log();
+    info(`Terminal:  ${pc.bold('subwave setup')}`);
+    info(`Browser:   ${pc.bold(`${webBaseFor(target.env)}/onboarding`)}`);
   }
 
   await pauseForEnter();

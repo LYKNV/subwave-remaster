@@ -96,6 +96,18 @@ export function makeClient(env: ComposeEnv): ApiClient {
   };
 }
 
+// Returns true if the operator still needs to finish the configuration
+// wizard (Navidrome + LLM not yet persisted). Returns null on any error —
+// the caller treats null as "don't know, stay quiet" rather than nagging
+// when the controller isn't responsive enough to give a clean answer.
+// Endpoint is unauthenticated (controller/src/routes/onboarding.ts:53).
+export async function checkNeedsSetup(env: ComposeEnv): Promise<boolean | null> {
+  const client = makeClient(env);
+  const r = await client.get<{ needsSetup?: boolean }>('/onboarding/status', { timeoutMs: 2000 });
+  if (!r.ok || r.body == null || typeof r.body.needsSetup !== 'boolean') return null;
+  return r.body.needsSetup;
+}
+
 // Poll /health until it returns { status: 'on-air' } or until timeout.
 // Used by `subwave start` after `docker compose up -d` to give the operator
 // a confident "controller is alive" signal before the prompt returns.

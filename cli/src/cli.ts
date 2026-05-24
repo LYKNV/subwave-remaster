@@ -105,12 +105,16 @@ async function main(): Promise<void> {
 
   // First-run inside an existing install: no .env yet. The legacy
   // controller/.env is checked too so a partial upgrade doesn't fall back
-  // into setup unnecessarily.
+  // into the init error unnecessarily. `init` itself is exempt — it's the
+  // command that creates .env. Everything else bails with a pointer.
   const haveEnv = existsSync(getRootEnv()) || existsSync(getLegacyControllerEnv());
-  if (!haveEnv && cmd !== 'setup') {
-    process.stderr.write(`No .env found at ${resolved.home} — running setup wizard first.\n\n`);
-    await runSetupCommand();
-    return;
+  if (!haveEnv && cmd !== 'init') {
+    process.stderr.write(
+      `No .env found at ${resolved.home}.\n\n` +
+      'Run `subwave init` to scaffold the install (compose files + admin creds + .env),\n' +
+      'then re-run this command.\n',
+    );
+    process.exit(2);
   }
 
   switch (cmd) {

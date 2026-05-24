@@ -5,7 +5,11 @@
 
 import net from 'node:net';
 
-const HOST = process.env.LIQUIDSOAP_HOST || 'liquidsoap';
+// Liquidsoap shares a container with icecast2 under the `broadcast` service
+// (see docker-compose.yml). The legacy `liquidsoap` hostname is still honoured
+// for operators with a pinned override in their .env, but the default reflects
+// the merged image.
+const HOST = process.env.LIQUIDSOAP_HOST || 'broadcast';
 const PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
 
 export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {

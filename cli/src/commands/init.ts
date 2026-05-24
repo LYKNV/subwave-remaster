@@ -103,7 +103,7 @@ async function collectAnswers(): Promise<InitAnswers> {
       {
         value: 'prod-byo',
         label: 'prod (BYO proxy) — Traefik / nginx / your own Caddy',
-        hint: 'docker-compose.byo.yml · web :7700 · controller :7701 · icecast :7702',
+        hint: 'docker-compose.byo.yml · web :7700 · controller :7701 · broadcast :7702',
       },
     ],
   }), { backOnCancel: false });
@@ -139,8 +139,8 @@ async function scaffold(a: InitAnswers): Promise<void> {
   header('Scaffolding install');
 
   // 1. Create the home directory + state/ subtree. State is created with
-  // the operator's UID so icecast/liquidsoap/controller containers (which
-  // mount it) don't need a chown dance on first boot.
+  // the operator's UID so broadcast/controller containers (which mount it)
+  // don't need a chown dance on first boot.
   mkdirSync(a.home, { recursive: true });
   mkdirSync(resolve(a.home, 'state'), { recursive: true });
   mkdirSync(resolve(a.home, 'state', 'logs'), { recursive: true });

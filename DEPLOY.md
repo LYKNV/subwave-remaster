@@ -2,16 +2,15 @@
 
 Production deploy of SUB/WAVE on a single Linux host.
 Cloudflare in front terminates TLS; Caddy on the host serves plain HTTP on
-`:80` and routes to the four internal services (web, controller, icecast,
-liquidsoap).
+`:80` and routes to the three internal services (web, controller, broadcast).
 
 ```
 Internet ── HTTPS ──▶ Cloudflare ── HTTP ──▶ host :7700 (Caddy)
                                                 ├── /          → web:7700
                                                 ├── /api/*     → controller:7701
-                                                └── /stream.mp3 → icecast:7702
-                                                                  ▲
-                                                          liquidsoap (internal)
+                                                └── /stream.mp3 → broadcast:7702
+                                                                  (icecast2 + liquidsoap
+                                                                   in one container)
 ```
 
 ## 1. Host prerequisites
@@ -106,8 +105,9 @@ curl -fsSI http://localhost/                  # → 200, Next.js page
 ```
 
 If `/api/health` works but `/stream.mp3` doesn't, check Liquidsoap connected
-to Icecast: `docker compose -f docker-compose.yml logs liquidsoap`
-and look for `Source ... started`.
+to Icecast: `docker compose -f docker-compose.yml logs broadcast`
+and look for `Source ... started`. (Both processes log to the same container,
+so a single `logs broadcast` interleaves icecast2 and liquidsoap output.)
 
 ## 5. Render jingles
 
@@ -156,12 +156,12 @@ gives you real listener IPs in logs.
 
 This runs:
 1. `git pull --ff-only`
-2. `docker compose pull --ignore-buildable` (refresh base images: Caddy, Icecast, Liquidsoap, Node)
+2. `docker compose pull --ignore-buildable` (refresh base images: Caddy, Broadcast, Node)
 3. `docker compose build --pull` (rebuild controller and web)
 4. `docker compose up -d --remove-orphans` — only services whose image or
    config actually changed get recreated. Listeners on `/stream.mp3` only
-   notice a hiccup if Liquidsoap or Icecast restart (rare — they're pinned
-   image versions).
+   notice a hiccup if the broadcast container restarts (rare — it's a
+   pinned image version).
 5. `docker image prune -f`
 
 If a deploy goes wrong, roll back:
@@ -177,7 +177,7 @@ docker compose -f docker-compose.yml up -d --build
 ```bash
 # Tail logs
 docker compose -f docker-compose.yml logs -f controller
-docker compose -f docker-compose.yml logs -f liquidsoap
+docker compose -f docker-compose.yml logs -f broadcast
 docker compose -f docker-compose.yml logs -f caddy
 
 # Restart just one service
@@ -233,10 +233,9 @@ and `stream.example.com`), you'll have to rebuild the `web` image with
 `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_STREAM_URL` set — those values are
 baked into the client bundle at build time, not read at runtime.
 
-Everything else in this guide still applies — secrets in `controller/.env` +
-`docker/.env`, `./scripts/setup.sh` for state and the icecast XML, jingle
-rendering, updates, and backup. Skip section 6 (Cloudflare + Caddy firewall);
-your own proxy handles that.
+Everything else in this guide still applies — root `.env`, `./scripts/setup.sh`
+to bootstrap state, jingle rendering, updates, and backup. Skip section 6
+(Cloudflare + Caddy firewall); your own proxy handles that.
 
 ## 10. Backup
 

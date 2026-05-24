@@ -8,7 +8,8 @@
 #   ${CONTROLLER_PORT:-7701} → controller HTTP API
 #   ${ICECAST_PORT:-7702}    → Icecast MP3 broadcast endpoint
 #
-# Liquidsoap stays internal-only — it has no public surface.
+# Liquidsoap stays internal-only — it lives inside the broadcast container
+# alongside icecast and has no public surface.
 #
 # The web UI assumes same-origin routing for /api and /stream.mp3 by default
 # (it's baked into the image at build time). To keep that working, point your
@@ -28,51 +29,36 @@ x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint, bound to host for your reverse proxy
+  # BROADCAST — icecast2 + liquidsoap in one container
   # -------------------------------------------------------------------------
-  icecast:
-    image: ghcr.io/perminder-klair/subwave-icecast:${SUBWAVE_VERSION:-latest}
+  # The icecast HTTP port is bound to the host so the operator's reverse
+  # proxy can front /stream.mp3. Liquidsoap is internal to this container.
+  broadcast:
+    image: ghcr.io/perminder-klair/subwave-broadcast:${SUBWAVE_VERSION:-latest}
     build:
       context: .
-      dockerfile: docker/Dockerfile.icecast
+      dockerfile: docker/Dockerfile.broadcast
     platform: linux/amd64
-    container_name: sub-wave-icecast
+    container_name: sub-wave-broadcast
     restart: unless-stopped
     environment:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
+      - TZ=${TZ:-Europe/London}
     ports:
       - "${ICECAST_PORT:-7702}:7702"
-    volumes:
-      - *state-mount
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  # -------------------------------------------------------------------------
-  # LIQUIDSOAP — mixer, internal only (no public surface)
-  # -------------------------------------------------------------------------
-  liquidsoap:
-    image: ghcr.io/perminder-klair/subwave-liquidsoap:${SUBWAVE_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.liquidsoap
-    container_name: sub-wave-liquidsoap
-    restart: unless-stopped
-    depends_on:
-      icecast:
-        condition: service_healthy
-    environment:
-      - TZ=${TZ:-Europe/London}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
       - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # CONTROLLER — AI DJ brain, bound to host for your reverse proxy
@@ -86,9 +72,7 @@ services:
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      liquidsoap:
-        condition: service_started
-      icecast:
+      broadcast:
         condition: service_healthy
     environment:
       - NODE_ENV=production
@@ -127,4 +111,4 @@ services:
       - "${WEB_PORT:-7700}:7700"
     # Same-origin (/api, /stream.mp3) is the default baked into the image.
     # Your external proxy is responsible for routing those paths to controller
-    # and icecast — see the header comment for the route table.
+    # and broadcast — see the header comment for the route table.

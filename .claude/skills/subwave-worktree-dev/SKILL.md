@@ -31,18 +31,18 @@ a worktree checkout:
 | `web/.env.local` | Dev API/stream URL overrides (`NEXT_PUBLIC_API_URL` etc.). Without it the web UI defaults to same-origin `/api` and cannot reach the controller. |
 | `docker/.env` | Compose variable substitution. |
 | `web/node_modules` | Needed by `npm run dev`. |
-| `state/` | Bind-mounted into the containers; `state/icecast.xml` is mounted straight into the icecast container. A worktree's `state/` is empty. |
+| `state/` | Bind-mounted into the containers. A worktree's `state/` is empty. |
 
 `state/` is scaffolded **fresh** — directory structure only. Settings, sessions,
 queue, and library mood data are *not* copied, so the worktree station boots
-clean and the controller writes its own defaults. The sole copied file is
-`state/icecast.xml`: it is a rendered config carrying the Icecast passwords and
-cannot be regenerated without the operator's inputs.
+clean and the controller writes its own defaults. The broadcast container
+generates its own `state/icecast-secrets.env` on first boot, so worktrees no
+longer need to copy any rendered icecast config — there isn't one.
 
 ## Two load-bearing facts
 
 1. **One stack at a time.** Both compose files use fixed container names
-   (`sub-wave-icecast`, …) and host ports (Web `7700`, Controller `7701`,
+   (`sub-wave-broadcast`, …) and host ports (Web `7700`, Controller `7701`,
    Icecast `7702`). A worktree stack and the main-checkout stack collide — stop
    whatever is running before starting another.
 2. **Controller changes need `--build`, web changes do not.** The `controller`
@@ -119,7 +119,7 @@ curl -sf http://localhost:7701/health                               # expect {"s
 curl -sf -o /dev/null -w '%{http_code}\n' http://localhost:7700      # expect 200
 ```
 
-If `/health` fails, peek at `docker compose logs --tail=30 controller liquidsoap`
+If `/health` fails, peek at `docker compose logs --tail=30 controller broadcast`
 and surface the error. A fresh `state/` is normal — an empty queue and default
 settings on first boot are expected, not faults.
 
@@ -128,8 +128,8 @@ settings on first boot are expected, not faults.
 - **Web/UI change** — nothing to do; `npm run dev` hot-reloads it.
 - **Controller source change** — rebuild just that service:
   `cd <worktree-path>/docker && docker compose up -d --build controller`.
-- **`liquidsoap/radio.liq` change** — it is bind-mounted; just
-  `docker compose restart liquidsoap`.
+- **`liquidsoap/radio.liq` change** — it is bind-mounted in dev; just
+  `docker compose restart broadcast`.
 
 ## Allowed without confirmation
 

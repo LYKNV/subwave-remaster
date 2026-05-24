@@ -1,8 +1,8 @@
 # Caddy edge router for SUB/WAVE production.
 # Cloudflare terminates TLS in front, so we speak plain HTTP on :80 only.
 # All listener-facing traffic lands here and is routed to internal services
-# by URL prefix. Icecast, controller, web, and liquidsoap have no host
-# port bindings — they're only reachable through this proxy.
+# by URL prefix. Broadcast (icecast2 + liquidsoap), controller, and web
+# have no host port bindings — they're only reachable through this proxy.
 {
 	auto_https off
 	# Trust Cloudflare's X-Forwarded-* headers so logs and rate-limits see real IPs.
@@ -25,7 +25,7 @@
 	# flush_interval -1 disables buffering so the audio stream stays live.
 	# Query strings (e.g. ?t=12345 cache-busters) pass through automatically.
 	handle /stream.mp3 {
-		reverse_proxy icecast:7702 {
+		reverse_proxy broadcast:7702 {
 			flush_interval -1
 			transport http {
 				read_buffer 16KB

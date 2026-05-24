@@ -9,8 +9,8 @@
 // docker-compose.yml
 export const COMPOSE_YML = `# SUB/WAVE — production orchestration.
 # Only Caddy is exposed on the host. Cloudflare terminates TLS in front.
-# Icecast, Liquidsoap, Controller, and Web are all internal-only and reachable
-# via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
+# Broadcast (icecast2 + liquidsoap), Controller, and Web are all internal-only
+# and reachable via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
 #
 # Image-first: every service pulls its baked image from GHCR by default. The
 # build: blocks let \`docker compose build\` rebuild locally from a checkout,
@@ -37,7 +37,7 @@ services:
     depends_on:
       - web
       - controller
-      - icecast
+      - broadcast
     ports:
       - "\${CADDY_PORT:-7700}:80"
     volumes:
@@ -45,46 +45,29 @@ services:
       - caddy-config:/config
 
   # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint (internal only)
+  # BROADCAST — icecast2 endpoint + liquidsoap mixer in one container
   # -------------------------------------------------------------------------
-  icecast:
-    image: ghcr.io/perminder-klair/subwave-icecast:\${SUBWAVE_VERSION:-latest}
+  # The supervisor entrypoint resolves ICECAST_*_PASSWORD on first boot
+  # (writing them to state/icecast-secrets.env for visibility), then launches
+  # icecast2 and liquidsoap together. If either process dies the container
+  # exits and compose restarts the pair as a unit.
+  broadcast:
+    image: ghcr.io/perminder-klair/subwave-broadcast:\${SUBWAVE_VERSION:-latest}
     build:
       context: .
-      dockerfile: docker/Dockerfile.icecast
+      dockerfile: docker/Dockerfile.broadcast
     platform: linux/amd64
-    container_name: sub-wave-icecast
+    container_name: sub-wave-broadcast
     restart: unless-stopped
     environment:
       # All three are optional — leave blank in .env and the image generates
       # random values on first boot, persisting them to state/icecast-secrets.env.
-      # To rotate: delete that file, restart icecast + liquidsoap + controller.
+      # To rotate: delete that file and restart broadcast + controller (the
+      # controller doesn't actually source the file, but a settings reload
+      # picks up any URL change cleanly).
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
-    volumes:
-      - *state-mount
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  # -------------------------------------------------------------------------
-  # LIQUIDSOAP — mixer, pulls from queue file, broadcasts to Icecast
-  # -------------------------------------------------------------------------
-  liquidsoap:
-    image: ghcr.io/perminder-klair/subwave-liquidsoap:\${SUBWAVE_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.liquidsoap
-    container_name: sub-wave-liquidsoap
-    restart: unless-stopped
-    depends_on:
-      icecast:
-        condition: service_healthy
-    environment:
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
@@ -95,6 +78,12 @@ services:
     volumes:
       - *state-mount
       - \${STATE_DIR:-./state}/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # CONTROLLER — AI DJ brain
@@ -108,9 +97,7 @@ services:
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      liquidsoap:
-        condition: service_started
-      icecast:
+      broadcast:
         condition: service_healthy
     environment:
       # Enables the production-only admin gate: refuses to boot unless
@@ -176,7 +163,8 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production orchestration without 
 #   \${CONTROLLER_PORT:-7701} → controller HTTP API
 #   \${ICECAST_PORT:-7702}    → Icecast MP3 broadcast endpoint
 #
-# Liquidsoap stays internal-only — it has no public surface.
+# Liquidsoap stays internal-only — it lives inside the broadcast container
+# alongside icecast and has no public surface.
 #
 # The web UI assumes same-origin routing for /api and /stream.mp3 by default
 # (it's baked into the image at build time). To keep that working, point your
@@ -196,51 +184,36 @@ x-state: &state-mount \${STATE_DIR:-./state}:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint, bound to host for your reverse proxy
+  # BROADCAST — icecast2 + liquidsoap in one container
   # -------------------------------------------------------------------------
-  icecast:
-    image: ghcr.io/perminder-klair/subwave-icecast:\${SUBWAVE_VERSION:-latest}
+  # The icecast HTTP port is bound to the host so the operator's reverse
+  # proxy can front /stream.mp3. Liquidsoap is internal to this container.
+  broadcast:
+    image: ghcr.io/perminder-klair/subwave-broadcast:\${SUBWAVE_VERSION:-latest}
     build:
       context: .
-      dockerfile: docker/Dockerfile.icecast
+      dockerfile: docker/Dockerfile.broadcast
     platform: linux/amd64
-    container_name: sub-wave-icecast
+    container_name: sub-wave-broadcast
     restart: unless-stopped
     environment:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      - TZ=\${TZ:-Europe/London}
     ports:
       - "\${ICECAST_PORT:-7702}:7702"
-    volumes:
-      - *state-mount
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  # -------------------------------------------------------------------------
-  # LIQUIDSOAP — mixer, internal only (no public surface)
-  # -------------------------------------------------------------------------
-  liquidsoap:
-    image: ghcr.io/perminder-klair/subwave-liquidsoap:\${SUBWAVE_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.liquidsoap
-    container_name: sub-wave-liquidsoap
-    restart: unless-stopped
-    depends_on:
-      icecast:
-        condition: service_healthy
-    environment:
-      - TZ=\${TZ:-Europe/London}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
       - \${STATE_DIR:-./state}/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # CONTROLLER — AI DJ brain, bound to host for your reverse proxy
@@ -254,9 +227,7 @@ services:
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      liquidsoap:
-        condition: service_started
-      icecast:
+      broadcast:
         condition: service_healthy
     environment:
       - NODE_ENV=production
@@ -295,13 +266,13 @@ services:
       - "\${WEB_PORT:-7700}:7700"
     # Same-origin (/api, /stream.mp3) is the default baked into the image.
     # Your external proxy is responsible for routing those paths to controller
-    # and icecast — see the header comment for the route table.
+    # and broadcast — see the header comment for the route table.
 `;
 
 // docker-compose.dev.yml
 export const COMPOSE_DEV_YML = `# SUB/WAVE — dev compose (local smoke test).
-# Runs: Icecast + Liquidsoap + Controller. The Next.js listener UI runs
-# separately via \`cd web && npm run dev\` so JSX changes hot-reload.
+# Runs: Broadcast (icecast2 + liquidsoap) + Controller. The Next.js listener
+# UI runs separately via \`cd web && npm run dev\` so JSX changes hot-reload.
 #
 # State + sounds + radio.liq are bind-mounted from the repo so dev cycles
 # don't need image rebuilds. The prod composes bake them into images instead.
@@ -310,50 +281,26 @@ x-state: &state-mount ./state:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint, exposed for direct dev access
+  # BROADCAST — icecast2 + liquidsoap in one container
   # -------------------------------------------------------------------------
-  icecast:
-    image: ghcr.io/perminder-klair/subwave-icecast:\${SUBWAVE_VERSION:-latest}
+  # Icecast HTTP exposed on :7702 for direct dev access (curl the stream,
+  # hit /status-json.xsl, etc.). Liquidsoap is internal to this container.
+  broadcast:
+    image: ghcr.io/perminder-klair/subwave-broadcast:\${SUBWAVE_VERSION:-latest}
     build:
       context: .
-      dockerfile: docker/Dockerfile.icecast
+      dockerfile: docker/Dockerfile.broadcast
     platform: linux/amd64
-    container_name: sub-wave-icecast
+    container_name: sub-wave-broadcast
     restart: unless-stopped
     ports:
       - "7702:7702"
     environment:
       # All three are optional — leave blank in .env and the image generates
-      # random values on first boot, writing them to state/icecast-secrets.env
-      # so liquidsoap reads the same values.
+      # random values on first boot, writing them to state/icecast-secrets.env.
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
-    volumes:
-      - *state-mount
-    healthcheck:
-      # The entrypoint writes the secrets file before exec'ing icecast, so the
-      # file's existence is the cleanest "ready for liquidsoap" signal.
-      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  # -------------------------------------------------------------------------
-  # LIQUIDSOAP — pulls from queue file, broadcasts to Icecast
-  # -------------------------------------------------------------------------
-  liquidsoap:
-    image: ghcr.io/perminder-klair/subwave-liquidsoap:\${SUBWAVE_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.liquidsoap
-    container_name: sub-wave-liquidsoap
-    restart: unless-stopped
-    depends_on:
-      icecast:
-        condition: service_healthy
-    environment:
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
@@ -367,6 +314,12 @@ services:
       - ./sounds:/sounds:ro
       - *state-mount
       - ./state/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # CONTROLLER — the AI DJ brain
@@ -380,9 +333,7 @@ services:
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      liquidsoap:
-        condition: service_started
-      icecast:
+      broadcast:
         condition: service_healthy
     environment:
       - TZ=\${TZ:-Europe/London}
@@ -458,11 +409,12 @@ SITE_URL=
 # ICECAST_PORT=7702
 
 # ───────── Icecast secrets ─────────
-# Leave blank — the icecast image auto-generates these on first boot and
+# Leave blank — the broadcast image auto-generates these on first boot and
 # writes them to state/icecast-secrets.env. Override here only if you need
 # specific passwords (e.g. broadcasting to an external relay).
-# To rotate: delete state/icecast-secrets.env and restart all three of
-# icecast, liquidsoap, and controller (the latter two cache env at startup).
+# To rotate: delete state/icecast-secrets.env and restart broadcast +
+# controller. (The merged container holds both icecast and liquidsoap, so
+# the old three-way restart is collapsed into one bounce.)
 # ICECAST_SOURCE_PASSWORD=
 # ICECAST_ADMIN_PASSWORD=
 # ICECAST_RELAY_PASSWORD=

@@ -90,7 +90,7 @@ there is no socket or RPC channel between them.
    Browser / PWA ◀── audio ───────────────────┘
    (Next.js web UI :7700, polls controller for now-playing)
 
-   Production: Cloudflare ─HTTPS─▶ host :80 (Caddy) ─▶ web · controller · icecast
+   Production: Cloudflare ─HTTPS─▶ host :80 (Caddy) ─▶ web · controller · broadcast
 ```
 
 ### The four processes
@@ -98,8 +98,7 @@ there is no socket or RPC channel between them.
 | Process | What it does |
 |---|---|
 | **Controller** (`controller/`, Node/Express) | The brain. Runs the AI DJ — picks tracks, writes links/idents, matches listener requests, runs the cron scheduler, renders TTS. Exposes the HTTP API. |
-| **Liquidsoap** (`liquidsoap/radio.liq`) | The mixing desk. Builds the audio pipeline: request queue → auto-playlist, crossfades, ducks voice over music, mixes jingles, brick-wall limiter, encodes to MP3. |
-| **Icecast** | The transmitter. Serves the single `/stream.mp3` mount to every listener. |
+| **Broadcast** (`docker/Dockerfile.broadcast`) | One container, two processes. **Liquidsoap** (`liquidsoap/radio.liq`) is the mixing desk: request queue → auto-playlist, crossfades, ducks voice over music, mixes jingles, brick-wall limiter, encodes to MP3. **Icecast2** is the transmitter that serves the single `/stream.mp3` mount to every listener. A tiny supervisor entrypoint launches both and exits if either dies. |
 | **Web UI** (`web/`, Next.js 15) | The receiver. Player, marketing landing page, setup walkthrough, and an admin shell for settings/debug. PWA-installable with OS lock-screen controls. |
 
 ### File-based IPC
@@ -157,14 +156,14 @@ The CLI just saves you the curl-and-edit dance and gives you `subwave logs`,
 ```bash
 git clone https://github.com/perminder-klair/subwave.git && cd subwave
 ./scripts/setup.sh                                  # scaffolds a 3-var root .env + state/
-docker compose -f docker-compose.dev.yml up -d      # Icecast + Liquidsoap + Controller
+docker compose -f docker-compose.dev.yml up -d      # Broadcast (icecast2 + liquidsoap) + Controller
 cd web && npm install && npm run dev                # web UI on :7700 — separate, hot-reloading
 # Then http://localhost:7700/onboarding to finish configuration.
 ```
 
 Dev compose bind-mounts `controller/src/`, `radio.liq`, and `sounds/` from the
 repo. Controller runs under `tsx watch` so `src/**` edits hot-reload inside
-the container; `radio.liq` edits just need a `docker compose -f docker-compose.dev.yml restart liquidsoap`.
+the container; `radio.liq` edits just need a `docker compose -f docker-compose.dev.yml restart broadcast`.
 
 The standalone `subwave` CLI works inside the cloned repo too — `cd subwave &&
 subwave start dev` does the right thing. The contributor convenience is `npm
@@ -181,7 +180,7 @@ npm start -- setup              # first-boot wizard — Navidrome, LLM, admin, e
 npm start -- status             # compose env, services, now-playing, recent events
 npm start -- doctor             # full diagnostic sweep
 npm start -- start dev          # docker compose up -d (dev or prod)
-npm start -- restart liquidsoap # plain restart (radio.liq is bind-mounted)
+npm start -- restart broadcast  # plain restart (radio.liq is bind-mounted in dev)
 npm start -- restart controller # rebuild + recreate (source is COPY-d at build)
 npm start -- logs controller    # tail one service
 npm start -- play               # SUB/WAVE TUI — the terminal player
@@ -210,7 +209,7 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three �
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,icecast,controller,liquidsoap,web}`.
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`.
 All compose files pull `:latest` by default; pin a version with
 `SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 

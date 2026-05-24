@@ -6,7 +6,7 @@ import { header, ok, warn, err, info, muted, pc, p, pauseForEnter } from '../ui.
 
 export async function runDoctorCommand(): Promise<void> {
   const s = p.spinner();
-  s.start('Probing host, compose, controller, icecast, state…');
+  s.start('Probing host, compose, controller, broadcast, state…');
   const report = await runDoctor();
   s.stop('Diagnostics complete');
 

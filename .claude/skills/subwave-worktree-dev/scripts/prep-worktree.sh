@@ -13,9 +13,8 @@
 # scaffolds a FRESH state/ directory — structure only. It deliberately does NOT
 # copy settings.json, session.json, queue.json, moods.json, or any archived
 # sessions/jingles/voice files, so the worktree station boots clean and the
-# controller writes its own defaults. The one exception is state/icecast.xml:
-# that is a rendered config (carries the Icecast passwords) and cannot be
-# regenerated without the operator's inputs, so it is copied as-is.
+# controller writes its own defaults. The broadcast container generates its
+# own state/icecast-secrets.env on first boot, so there's nothing to copy.
 #
 # Usage:
 #   prep-worktree.sh [worktree-path]   # worktree-path defaults to $PWD
@@ -94,18 +93,11 @@ mkdir -p "$STATE"/logs "$STATE"/voice "$STATE"/jingles "$STATE"/sessions "$STATE
 # after its first container run; this just front-loads it.)
 chmod -R a+rwX "$STATE"
 
-# icecast.xml — rendered config with the Icecast source/admin passwords.
-# Regenerating it needs the operator's password inputs (subwave-deploy /
-# setup.sh territory), so copy main's. The icecast container bind-mounts this
-# file directly; if it is missing the container cannot boot.
-if [ ! -f "$STATE/icecast.xml" ]; then
-  if [ -f "$MAIN/state/icecast.xml" ]; then
-    cp "$MAIN/state/icecast.xml" "$STATE/icecast.xml"
-    echo "[prep] copied state/icecast.xml (rendered config — required by the icecast container)"
-  else
-    echo "[prep] WARNING: $MAIN/state/icecast.xml is missing — run setup.sh in main first (subwave-deploy)" >&2
-  fi
-fi
+# icecast-secrets.env — the broadcast container generates this on first boot
+# if it doesn't exist (mode 0644 so liquidsoap inside the same container can
+# source it), so worktrees don't need to copy anything. The file is just
+# three ICECAST_*_PASSWORD lines; a fresh worktree gets fresh passwords on
+# first `docker compose up -d`. Nothing to scaffold here.
 
 # Liquidsoap starts BEFORE the controller, so these must exist at boot or
 # radio.liq errors on the missing read. The controller would otherwise write

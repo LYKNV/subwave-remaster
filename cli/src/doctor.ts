@@ -270,7 +270,7 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
       label: '/stream.mp3',
       status: 'fail',
       detail: reason,
-      hint: 'Icecast may be down. Check `subwave logs icecast`.',
+      hint: 'Icecast may be down. Check `subwave logs broadcast`.',
     }];
   }
 }
@@ -472,7 +472,7 @@ function checkLogs(compose: ComposeStatus): Finding[] {
 
   // Fallback: tail it from inside the liquidsoap container.
   if (tail === null && compose.env !== 'down' && compose.file) {
-    const r = composeExec(compose.file, 'liquidsoap', [
+    const r = composeExec(compose.file, 'broadcast', [
       'tail', '-c', String(TAIL_BYTES), '/var/log/liquidsoap/radio.log',
     ]);
     if (r.ok) tail = r.stdout;

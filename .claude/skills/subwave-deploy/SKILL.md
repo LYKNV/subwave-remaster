@@ -12,17 +12,17 @@ The user has authorised free action on this hot path — `scripts/setup.sh`, `gi
 ## The five facts the workflow turns on
 
 1. **Two compose files, two shapes.**
-   - `docker-compose.dev.yml` — dev variant (Mac smoke-test): Icecast + Liquidsoap + Controller only. Web runs separately via `npm run dev`. State at `../state`.
+   - `docker-compose.dev.yml` — dev variant (Mac smoke-test): Broadcast (icecast2 + liquidsoap) + Controller only. Web runs separately via `npm run dev`. State at `./state`.
    - `docker-compose.yml` — production single-host: adds `web` and `caddy`. **Only Caddy binds a host port.** State at `${STATE_DIR:-<repo>/state}` — repo-local by default, same as dev.
    - Detect which is up from `docker compose -f <file> ps`. Caddy maps to host port `${CADDY_PORT:-7700}` (`0.0.0.0:7700->80/tcp` by default). Always read the actual port from `ps`, never hardcode — operators can override via `CADDY_PORT` in `docker/.env`.
 
-2. **Controller and Liquidsoap COPY source at build time, they do not bind-mount it.** `docker compose restart <svc>` reruns the *same baked-in code* and does nothing for source changes. Source changes need `up -d --build <svc>`. This is the single most common deploy mistake.
+2. **Controller and Broadcast COPY their assets at build time, they do not bind-mount them in prod.** `docker compose restart <svc>` reruns the *same baked-in code/config* and does nothing for source changes. Source changes need `up -d --build <svc>`. This is the single most common deploy mistake. (Liquidsoap lives inside the broadcast image, so `radio.liq` edits in prod also need `--build broadcast`, not a plain restart.)
 
 3. **Web in dev is hot-reloaded** (Next.js `npm run dev`); web in prod is a built standalone image and needs `--build` on any `web/**` change.
 
-4. **The IPC between Controller and Liquidsoap is file-based** through the shared `state/` (mounted at `/var/sub-wave`). When you recreate one of them, in-flight `next.txt`/`say.txt`/`now-playing.json` may be mid-write — accept a few-second blip; don't keep recreating to "fix" it. **But there is a worse failure here, and it has bitten in production:** a near-simultaneous recreate of *both* `controller` and `liquidsoap` (which is exactly what `up -d --build controller web` triggers, because the `depends_on` graph also recreates `liquidsoap`) can have Liquidsoap pick up a bad/empty IPC request and **wedge a source into a `fail`/`blank` loop**. The result is silent but invisible: `/api/health` still says `on-air`, `/stream.mp3` still flows bytes, `/api/now-playing` still rotates tracks — but the audio is digital silence (~-91 dB). The cure is a plain `docker compose ... restart` (no rebuild — code is already baked in); it clears the wedged source state. The detector is an **audio-level probe**, not the health endpoint — see Step 5.
+4. **The IPC between Controller and Broadcast (liquidsoap side) is file-based** through the shared `state/` (mounted at `/var/sub-wave`). When you recreate one of them, in-flight `next.txt`/`say.txt`/`now-playing.json` may be mid-write — accept a few-second blip; don't keep recreating to "fix" it. **But there is a worse failure here, and it has bitten in production:** a near-simultaneous recreate of *both* `controller` and `broadcast` (which is exactly what `up -d --build controller web` triggers, because the `depends_on` graph also recreates `broadcast`) can have Liquidsoap pick up a bad/empty IPC request and **wedge a source into a `fail`/`blank` loop**. The result is silent but invisible: `/api/health` still says `on-air`, `/stream.mp3` still flows bytes, `/api/now-playing` still rotates tracks — but the audio is digital silence (~-91 dB). The cure is a plain `docker compose ... restart` (no rebuild — code is already baked in); it clears the wedged source state. The detector is an **audio-level probe**, not the health endpoint — see Step 5.
 
-5. **Compose dependency ordering will recreate more than you asked for.** Asking to recreate `controller` and `web` will also recreate `liquidsoap` because of the `depends_on` graph. That's fine — same image, no source change means no behaviour change. Don't be surprised by it and don't fight it.
+5. **Compose dependency ordering will recreate more than you asked for.** Asking to recreate `controller` and `web` will also recreate `broadcast` because of the `depends_on` graph. That's fine — same image, no source change means no behaviour change. Don't be surprised by it and don't fight it.
 
 ## Workflow
 
@@ -247,13 +247,14 @@ Run through the diff and bucket files into actions. Mapping table (paths are rel
 | `controller/src/**`                       | rebuild + recreate `controller`           |
 | `controller/Dockerfile*`                  | rebuild + recreate `controller`           |
 | `controller/package*.json`                | rebuild + recreate `controller`           |
-| `liquidsoap/radio.liq`                    | `docker compose ... restart liquidsoap` — radio.liq is bind-mounted in both compose files, no rebuild needed |
-| `liquidsoap/Dockerfile*`                  | rebuild + recreate `liquidsoap`           |
+| `liquidsoap/radio.liq`                    | DEV: `docker compose ... restart broadcast` — radio.liq is bind-mounted in dev. PROD: rebuild + recreate `broadcast` (baked into the image). |
+| `docker/Dockerfile.broadcast`             | rebuild + recreate `broadcast`            |
+| `docker/broadcast-entrypoint.sh`          | rebuild + recreate `broadcast`            |
 | `web/**` (prod stack)                     | rebuild + recreate `web`                  |
 | `web/**` (dev stack, separate `npm run dev`) | no docker action — hot-reloads in user's terminal |
-| `docker/Caddyfile`                        | `docker compose ... restart caddy` (no rebuild — Caddy reloads from mount) |
+| `docker/Caddyfile`                        | rebuild + recreate `caddy` (Caddyfile is baked into the image — no host bind mount in prod) |
 | `docker/docker-compose*.yml`              | `docker compose ... up -d` (compose re-applies; will only recreate what diff-affected services) |
-| `docker/icecast.xml*` or its template     | re-run `scripts/setup.sh` to re-render `state/icecast.xml`, then `up -d --force-recreate icecast` |
+| `docker/icecast.xml.template`             | rebuild + recreate `broadcast` (template is baked into the image; the supervisor re-renders it at every container start) |
 | `scripts/setup.sh`                        | safe to re-run (idempotent) — useful when state-dir layout changes |
 | `scripts/**` (other), `state/**` (excluding code), `*.md`, `README.md`, `CLAUDE.md`, `.env.example`, `TODO.md` | no action needed |
 | `.env` at repo root or `docker/.env`      | `docker compose ... up -d` to pick up new env values (compose detects env-changes and recreates affected services) |
@@ -281,15 +282,14 @@ Do not use `docker compose restart` for code changes — it will appear to succe
 If you only need to apply a config change (Caddyfile, compose YAML, env), prefer the minimal command:
 
 ```bash
-# Caddyfile edited - Caddy reloads via mount, just bounce it
-docker compose -f docker-compose.yml restart caddy
+# Caddyfile edited - it's baked into the image, so rebuild + recreate
+docker compose -f docker-compose.yml up -d --build caddy
 
 # Compose YAML edited - let compose figure out what to recreate
 docker compose -f docker-compose.yml up -d
 
-# Icecast template edited - re-render, then force-recreate icecast
-./scripts/setup.sh
-docker compose -f docker-compose.yml up -d --force-recreate icecast
+# Icecast template edited - it's baked into the broadcast image, rebuild
+docker compose -f docker-compose.yml up -d --build broadcast
 ```
 
 ### Step 5 — Verify
@@ -302,7 +302,7 @@ Run the bundled health-check script — it batches the canonical probes:
 
 What healthy looks like:
 
-- All five containers (`caddy`, `controller`, `icecast`, `liquidsoap`, `web` in prod; the dev subset otherwise) `Up` with no `(unhealthy)` or restarting.
+- All four containers (`caddy`, `controller`, `broadcast`, `web` in prod; the dev subset otherwise — dev has no `caddy` and `web` runs as a host-side `npm run dev`) `Up` with no `(unhealthy)` or restarting.
 - `GET /api/health` → `{"status":"on-air"}`.
 - `GET /api/now-playing` → an object with `nowPlaying.title` and `nowPlaying.artist` populated (silence is a yellow flag, not necessarily failed — the stream may just be between tracks), `context.dominantMood` set, and a sane `weather` block.
 - **The audio-level probe reports a non-silent `mean_volume`.** The script captures a few seconds of `/stream.mp3` and measures it with `ffmpeg volumedetect`. Real broadcast audio sits around −8 to −16 dB; a wedged/silent stream reads ~−91 dB. **This is the only check that proves the stream carries sound** — `/api/health` and byte flow do not (see Fact #4). If the probe says `SILENT`, the deploy is *not* done: `docker compose -f <COMPOSE> restart` to clear the wedged Liquidsoap source, then re-run the probe.

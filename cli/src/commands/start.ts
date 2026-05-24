@@ -54,7 +54,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     saveConfig(cfg);
   }
 
-  // Dev compose tags `sub-wave-liquidsoap:local` and has no `image:` on the
+  // Dev compose tags `sub-wave-broadcast:local` and has no `image:` on the
   // controller, so it must build locally. Prod / prod-byo reference
   // published `ghcr.io/perminder-klair/subwave-*` images — pull them
   // instead of rebuilding. `--pull always` on prod forces a fresh pull so

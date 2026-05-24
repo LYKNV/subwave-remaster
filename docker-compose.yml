@@ -1,7 +1,7 @@
 # SUB/WAVE — production orchestration.
 # Only Caddy is exposed on the host. Cloudflare terminates TLS in front.
-# Icecast, Liquidsoap, Controller, and Web are all internal-only and reachable
-# via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
+# Broadcast (icecast2 + liquidsoap), Controller, and Web are all internal-only
+# and reachable via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
 #
 # Image-first: every service pulls its baked image from GHCR by default. The
 # build: blocks let `docker compose build` rebuild locally from a checkout,
@@ -28,7 +28,7 @@ services:
     depends_on:
       - web
       - controller
-      - icecast
+      - broadcast
     ports:
       - "${CADDY_PORT:-7700}:80"
     volumes:
@@ -36,46 +36,29 @@ services:
       - caddy-config:/config
 
   # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint (internal only)
+  # BROADCAST — icecast2 endpoint + liquidsoap mixer in one container
   # -------------------------------------------------------------------------
-  icecast:
-    image: ghcr.io/perminder-klair/subwave-icecast:${SUBWAVE_VERSION:-latest}
+  # The supervisor entrypoint resolves ICECAST_*_PASSWORD on first boot
+  # (writing them to state/icecast-secrets.env for visibility), then launches
+  # icecast2 and liquidsoap together. If either process dies the container
+  # exits and compose restarts the pair as a unit.
+  broadcast:
+    image: ghcr.io/perminder-klair/subwave-broadcast:${SUBWAVE_VERSION:-latest}
     build:
       context: .
-      dockerfile: docker/Dockerfile.icecast
+      dockerfile: docker/Dockerfile.broadcast
     platform: linux/amd64
-    container_name: sub-wave-icecast
+    container_name: sub-wave-broadcast
     restart: unless-stopped
     environment:
       # All three are optional — leave blank in .env and the image generates
       # random values on first boot, persisting them to state/icecast-secrets.env.
-      # To rotate: delete that file, restart icecast + liquidsoap + controller.
+      # To rotate: delete that file and restart broadcast + controller (the
+      # controller doesn't actually source the file, but a settings reload
+      # picks up any URL change cleanly).
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
-    volumes:
-      - *state-mount
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  # -------------------------------------------------------------------------
-  # LIQUIDSOAP — mixer, pulls from queue file, broadcasts to Icecast
-  # -------------------------------------------------------------------------
-  liquidsoap:
-    image: ghcr.io/perminder-klair/subwave-liquidsoap:${SUBWAVE_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.liquidsoap
-    container_name: sub-wave-liquidsoap
-    restart: unless-stopped
-    depends_on:
-      icecast:
-        condition: service_healthy
-    environment:
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=${TZ:-Europe/London}
     extra_hosts:
@@ -86,6 +69,12 @@ services:
     volumes:
       - *state-mount
       - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # CONTROLLER — AI DJ brain
@@ -99,9 +88,7 @@ services:
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      liquidsoap:
-        condition: service_started
-      icecast:
+      broadcast:
         condition: service_healthy
     environment:
       # Enables the production-only admin gate: refuses to boot unless

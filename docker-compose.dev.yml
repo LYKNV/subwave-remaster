@@ -1,6 +1,6 @@
 # SUB/WAVE — dev compose (local smoke test).
-# Runs: Icecast + Liquidsoap + Controller. The Next.js listener UI runs
-# separately via `cd web && npm run dev` so JSX changes hot-reload.
+# Runs: Broadcast (icecast2 + liquidsoap) + Controller. The Next.js listener
+# UI runs separately via `cd web && npm run dev` so JSX changes hot-reload.
 #
 # State + sounds + radio.liq are bind-mounted from the repo so dev cycles
 # don't need image rebuilds. The prod composes bake them into images instead.
@@ -9,50 +9,26 @@ x-state: &state-mount ./state:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint, exposed for direct dev access
+  # BROADCAST — icecast2 + liquidsoap in one container
   # -------------------------------------------------------------------------
-  icecast:
-    image: ghcr.io/perminder-klair/subwave-icecast:${SUBWAVE_VERSION:-latest}
+  # Icecast HTTP exposed on :7702 for direct dev access (curl the stream,
+  # hit /status-json.xsl, etc.). Liquidsoap is internal to this container.
+  broadcast:
+    image: ghcr.io/perminder-klair/subwave-broadcast:${SUBWAVE_VERSION:-latest}
     build:
       context: .
-      dockerfile: docker/Dockerfile.icecast
+      dockerfile: docker/Dockerfile.broadcast
     platform: linux/amd64
-    container_name: sub-wave-icecast
+    container_name: sub-wave-broadcast
     restart: unless-stopped
     ports:
       - "7702:7702"
     environment:
       # All three are optional — leave blank in .env and the image generates
-      # random values on first boot, writing them to state/icecast-secrets.env
-      # so liquidsoap reads the same values.
+      # random values on first boot, writing them to state/icecast-secrets.env.
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
-    volumes:
-      - *state-mount
-    healthcheck:
-      # The entrypoint writes the secrets file before exec'ing icecast, so the
-      # file's existence is the cleanest "ready for liquidsoap" signal.
-      test: ["CMD-SHELL", "test -f /var/sub-wave/icecast-secrets.env"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  # -------------------------------------------------------------------------
-  # LIQUIDSOAP — pulls from queue file, broadcasts to Icecast
-  # -------------------------------------------------------------------------
-  liquidsoap:
-    image: ghcr.io/perminder-klair/subwave-liquidsoap:${SUBWAVE_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.liquidsoap
-    container_name: sub-wave-liquidsoap
-    restart: unless-stopped
-    depends_on:
-      icecast:
-        condition: service_healthy
-    environment:
       - TZ=${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
@@ -66,6 +42,12 @@ services:
       - ./sounds:/sounds:ro
       - *state-mount
       - ./state/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # CONTROLLER — the AI DJ brain
@@ -79,9 +61,7 @@ services:
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
-      liquidsoap:
-        condition: service_started
-      icecast:
+      broadcast:
         condition: service_healthy
     environment:
       - TZ=${TZ:-Europe/London}

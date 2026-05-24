@@ -75,7 +75,7 @@ export async function runUpdateCommand(): Promise<void> {
 
   // 4. Recreate. `up -d --remove-orphans` recreates only services whose
   // image / config actually changed; listeners on /stream.mp3 only hiccup
-  // if liquidsoap or icecast restart (rare on a pure image bump).
+  // if the broadcast container restarts (rare on a pure image bump).
   header('docker compose up -d');
   const upCode = await run(
     'docker',

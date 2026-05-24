@@ -2,10 +2,10 @@
 // CLAUDE.md:
 //   - controller: COPY at build time, so `restart` reruns the same code.
 //     Always rebuild + recreate.
-//   - liquidsoap: radio.liq is bind-mounted; plain restart picks up edits.
-//     (Dockerfile changes need `--build`; for that case the operator should
-//     use `subwave restart liquidsoap --build`, surfaced via a confirm.)
-//   - icecast / web / caddy / others: plain restart is what you want.
+//   - broadcast: radio.liq is bind-mounted in dev; plain restart picks up
+//     edits. Prod bakes radio.liq + icecast.xml.template into the image,
+//     so Dockerfile / template changes need `--build` (surfaced via a confirm).
+//   - web / caddy / others: plain restart is what you want.
 //
 // When invoked with no arg, presents a select with the per-service hint
 // so the operator doesn't have to remember which is which.
@@ -31,8 +31,7 @@ interface ServicePolicy {
 // Per-service rebuild policy. Anything not in this map gets a plain restart.
 const POLICY: Record<string, ServicePolicy> = {
   controller: { rebuild: true,  hint: 'rebuild — source is COPY-d at build time' },
-  liquidsoap: { rebuild: false, hint: 'restart — radio.liq is bind-mounted' },
-  icecast:    { rebuild: false, hint: 'restart' },
+  broadcast:  { rebuild: false, hint: 'restart — radio.liq is bind-mounted in dev' },
   web:        { rebuild: false, hint: 'restart (rebuild needed only after Dockerfile / build edits)' },
   caddy:      { rebuild: false, hint: 'restart' },
 };

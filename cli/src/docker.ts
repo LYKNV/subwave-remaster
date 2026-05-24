@@ -83,7 +83,7 @@ export function dockerDaemonOk(): boolean {
 }
 
 // `docker compose exec -T <svc> <cmd...>`. Used for in-container probes
-// (e.g. telnet to liquidsoap from the controller container). Not used in
+// (e.g. telnet to liquidsoap inside the broadcast container). Not used in
 // the v1 doctor but kept here so we don't have to retrofit the abstraction.
 export function composeExec(
   file: ComposeFile,

@@ -88,7 +88,7 @@ curl -sf http://localhost:7701/health    # dev — controller exposed directly
 
 Expect `{"status":"on-air"}`. In dev also verify the web UI: `curl -sf -o /dev/null -w "%{http_code}\n" http://localhost:7700` → expect `200`.
 
-If the health probe fails, peek at `docker compose logs --tail=30 controller liquidsoap` and surface the relevant error. Do **not** rebuild — that's `subwave-deploy`'s territory.
+If the health probe fails, peek at `docker compose logs --tail=30 controller broadcast` and surface the relevant error. Do **not** rebuild — that's `subwave-deploy`'s territory.
 
 ### Step 1 — Stop (dev)
 
@@ -121,13 +121,13 @@ Do **not** add `-v` (would wipe the named volumes for Caddy data/config) unless 
 - `docker compose down -v` (wipes volumes — Caddy data/config in prod)
 - Any `rm`/`docker volume rm`/`docker system prune`
 - Killing a non-`node` process holding `:7700`
-- Anything that touches `state/`, `controller/.env`, `docker/.env`, or the rendered `icecast.xml`
+- Anything that touches `state/` (including `state/icecast-secrets.env`) or the root `.env`
 
 ## When to hand off to `subwave-deploy`
 
 If the user wants any of these, this skill is not the right one — invoke `subwave-deploy` instead:
 
-- First-time setup, `scripts/setup.sh`, rendering `icecast.xml`
+- First-time setup, `scripts/setup.sh`
 - `git pull` + rebuild + recreate
 - Source changes in `controller/`, `liquidsoap/`, or `web/` that need `up -d --build`
 - Generating jingles

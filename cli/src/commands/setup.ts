@@ -490,12 +490,12 @@ async function runBashSetup(env: NodeJS.ProcessEnv): Promise<void> {
       ok(`chmod 777 ${stateDir}`);
     } catch (e) {
       warn(`could not chmod ${stateDir}: ${(e as Error).message}`);
-      muted('icecast/liquidsoap/controller may fail to write there on first boot.');
+      muted('broadcast/controller may fail to write there on first boot.');
     }
     return;
   }
 
-  header('Rendering icecast.xml + studio audio (scripts/setup.sh)');
+  header('Bootstrapping state dirs + studio audio (scripts/setup.sh)');
   await new Promise<void>((resolveP, reject) => {
     const child = spawn('bash', ['scripts/setup.sh'], {
       cwd: getSubwaveHome(),

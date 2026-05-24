@@ -81,7 +81,9 @@ export const config = {
   },
   icecast: {
     // Public status JSON — listener counts + per-mount metadata. No auth.
-    statusUrl: process.env.ICECAST_STATUS_URL || 'http://icecast:7702/status-json.xsl',
+    // Icecast lives inside the merged `broadcast` container; its hostname on
+    // the compose network is the service name.
+    statusUrl: process.env.ICECAST_STATUS_URL || 'http://broadcast:7702/status-json.xsl',
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,

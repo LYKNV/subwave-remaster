@@ -11,7 +11,7 @@
 # flowing down /stream.mp3 even when Liquidsoap has a wedged source feeding
 # the Icecast mount digital silence. "on-air" + byte flow is NOT proof of a
 # working stream — only a non-silent audio level is. This is the failure
-# mode a near-simultaneous controller+liquidsoap recreate can leave behind.
+# mode a near-simultaneous controller+broadcast recreate can leave behind.
 #
 # Exits 0 if everything looks healthy, 1 otherwise.
 # Designed to be readable to a human at a glance, not a strict CI gate.

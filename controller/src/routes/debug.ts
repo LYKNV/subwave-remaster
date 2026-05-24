@@ -49,7 +49,7 @@ router.get('/debug', requireAdmin, async (req, res) => {
 
   // 3. Icecast status
   try {
-    const r = await fetch('http://icecast:7702/status-json.xsl');
+    const r = await fetch(config.icecast.statusUrl);
     const ic: any = (await r.json() as any).icestats;
     const src = Array.isArray(ic.source) ? ic.source[0] : ic.source;
     out.icecast = src ? {

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.17](https://github.com/perminder-klair/subwave/compare/v0.1.16...v0.1.17) (2026-05-24)
+
+
+### Features
+
+* **admin:** admin field for station + dashboard/settings polish ([ff1e558](https://github.com/perminder-klair/subwave/commit/ff1e558718f431e02f0c432af984d8407a56b452))
+
+
+### Bug Fixes
+
+* persist station name from setup wizard ([#102](https://github.com/perminder-klair/subwave/issues/102)) + admin polish ([f089c5b](https://github.com/perminder-klair/subwave/commit/f089c5bf090d49e2c051a3cb50ea0139bb2d9cd2))
+* persist station name from setup wizard end-to-end ([f3e1941](https://github.com/perminder-klair/subwave/commit/f3e1941eaf71411ae0afaa278ab88911ce7f2fc9)), closes [#102](https://github.com/perminder-klair/subwave/issues/102)
+
 ## [0.1.16](https://github.com/perminder-klair/subwave/compare/v0.1.15...v0.1.16) (2026-05-24)
 
 

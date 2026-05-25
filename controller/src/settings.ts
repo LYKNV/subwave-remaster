@@ -197,9 +197,20 @@ export const SEED_PERSONAS = [
   },
 ];
 
+// Allowed archive bitrates. Matches the literal branches in radio.liq —
+// %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
+// this small set. Add a branch in radio.liq if you add a value here.
+export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
+  // Hourly archive output. Enabled by default to preserve existing behaviour.
+  // The second MP3 encoder is the largest constant CPU cost in the broadcast
+  // container — operators who don't use the archives can switch this off to
+  // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
+  // mono in a future change) also helps for operators who want the tape.
+  archive: { enabled: true, bitrate: 128 },
   weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -315,6 +326,8 @@ const BOUNDS = {
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
 };
 
+const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
+
 let cache: any = null;
 
 // ── normalizers (lenient — used by load(), clamp/default rather than throw) ──
@@ -323,13 +336,22 @@ let cache: any = null;
 // sentinel — used by legacy personas and the code default so behaviour is
 // unchanged until the operator explicitly picks a subset. An empty array
 // means "this persona runs no skills".
+//
+// Legacy migrations: `random-facts` is rewritten to `curiosity` (the merged
+// successor capability that absorbed the old prompt-only "did you know" line
+// plus Wikipedia on-this-day). Persona ownership lists predate this rename,
+// so without rewriting them, every upgraded operator would silently lose the
+// capability the moment they reload settings.
+const SKILL_RENAMES: Record<string, string> = {
+  'random-facts': 'curiosity',
+};
 function normalizeSkills(raw: any) {
   if (!Array.isArray(raw)) return null;
   const seen = new Set<string>();
   const out: string[] = [];
   for (const item of raw) {
     if (typeof item !== 'string') continue;
-    const v = item.trim();
+    const v = SKILL_RENAMES[item.trim()] || item.trim();
     if (!SKILL_SLUG_RE.test(v) || seen.has(v)) continue;
     seen.add(v);
     out.push(v);
@@ -465,9 +487,21 @@ export async function load() {
     shows.map(s => s.id),
   );
 
+  const archiveBitrate =
+    typeof stored.archive?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.archive.bitrate)
+      ? stored.archive.bitrate
+      : DEFAULTS.archive.bitrate;
+
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    archive: {
+      enabled:
+        typeof stored.archive?.enabled === 'boolean'
+          ? stored.archive.enabled
+          : DEFAULTS.archive.enabled,
+      bitrate: archiveBitrate,
+    },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
@@ -557,7 +591,11 @@ export async function load() {
     },
     skills: {
       enabled: Object.fromEntries(
-        Object.entries(stored.skills?.enabled || {}).filter(([, v]) => typeof v === 'boolean'),
+        Object.entries(stored.skills?.enabled || {})
+          .filter(([, v]) => typeof v === 'boolean')
+          // Same rename applied to the operator's enable toggle map so an
+          // existing `random-facts: false` carries forward as `curiosity: false`.
+          .map(([k, v]) => [SKILL_RENAMES[k] || k, v]),
       ),
     },
     sfx: {
@@ -910,6 +948,28 @@ export async function update(patch) {
     if (v !== cur.crossfadeDuration) {
       next.crossfadeDuration = v;
       restart = true;
+    }
+  }
+  if ('archive' in patch) {
+    const a = patch.archive || {};
+    if (a.enabled !== undefined) {
+      const v = !!a.enabled;
+      if (v !== cur.archive.enabled) {
+        next.archive.enabled = v;
+        restart = true;
+      }
+    }
+    if (a.bitrate !== undefined) {
+      const v = parseInt(a.bitrate, 10);
+      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+        throw new Error(
+          `archive.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.archive.bitrate) {
+        next.archive.bitrate = v;
+        restart = true;
+      }
     }
   }
   if ('weather' in patch) {
@@ -1275,20 +1335,29 @@ export function agentPersonaPreamble(persona, { rules = true } = {}) {
   return rules ? `${opener}` : opener;
 }
 
-// Liquidsoap reads two tiny text files instead of JSON.
+// Liquidsoap reads tiny text files instead of JSON.
 const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
+const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
+const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
   await writeFile(LIQ_CROSSFADE_PATH, String(s.crossfadeDuration));
+  await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
+  await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
 // them on its next start. Idempotent.
 export async function ensureLiquidsoapSettingsFile() {
   const s = await load();
-  if (!existsSync(LIQ_JINGLE_RATIO_PATH) || !existsSync(LIQ_CROSSFADE_PATH)) {
+  if (
+    !existsSync(LIQ_JINGLE_RATIO_PATH) ||
+    !existsSync(LIQ_CROSSFADE_PATH) ||
+    !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
+    !existsSync(LIQ_ARCHIVE_BITRATE_PATH)
+  ) {
     await writeLiquidsoapSettings(s);
   }
 }

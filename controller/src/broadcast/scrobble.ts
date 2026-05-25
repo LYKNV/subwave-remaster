@@ -72,11 +72,6 @@ function isEligibleScrobble(track: ScrobbleTrack | null, elapsed: number): boole
   return elapsed >= MIN_DURATION_SEC;
 }
 
-function listenersPresent(): boolean {
-  const c = getListenerCount();
-  return typeof c === 'number' && c > 0;
-}
-
 // ── credential helpers ──────────────────────────────────────────────────────
 
 interface LastfmCreds {

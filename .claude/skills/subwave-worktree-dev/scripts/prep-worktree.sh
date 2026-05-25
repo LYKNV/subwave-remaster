@@ -9,17 +9,24 @@
 #   - docker/.env                (compose variable substitution — legacy; harmless to copy if present)
 #   - state/setup-config.json    (Navidrome creds the wizard saved; copying skips /onboarding)
 #   - state/secrets.env          (cloud LLM/TTS API keys, if the main checkout has any)
+#   - state/settings.json        (operator's LLM provider, personas, shows, TTS config)
+#   - state/moods.json           (library mood tagging — produced by `npm run tag`, expensive to redo)
+#   - state/sfx.json + sfx/      (sound-effects catalogue + rendered WAVs)
+#   - state/jingles.json + .m3u + jingles/   (pre-rendered station idents)
+#   - state/recent-plays.json    (24h play log — used by library-deep-cut + picker dedup)
+#   - state/sessions/, voice/    (archived sessions + persona TTS reference voices)
 #   - web/node_modules           (needed by `npm run dev`)
 #   - state/                     (bind-mounted into the containers)
 #
 # This copies the env files from the main working tree, runs npm install, and
-# scaffolds a FRESH state/ directory — structure plus the two onboarding-skip
-# files (setup-config.json + secrets.env, if they exist on main). It does NOT
-# copy settings.json, session.json, queue.json, moods.json, or any archived
-# sessions/jingles/voice files, so the worktree station boots clean and the
-# controller writes its own defaults — but the operator lands directly on the
-# player instead of /onboarding. The broadcast container generates its own
-# state/icecast-secrets.env on first boot, so there's nothing to copy.
+# mirrors the operator's DECLARATIVE state — settings, mood-tagging, sfx,
+# jingles, sessions, voice — so the worktree boots into the same station the
+# operator already configured on main, with the same LLM provider, personas,
+# library moods, and rendered jingles. RUNTIME state (current session, queue,
+# archived hourly streams, listener logs, container-generated secrets) is NOT
+# copied — those would clash with whatever the worktree's containers produce
+# fresh on first boot. The broadcast container generates its own
+# state/icecast-secrets.env on first boot, so there's nothing to copy there.
 #
 # Usage:
 #   prep-worktree.sh [worktree-path]   # worktree-path defaults to $PWD
@@ -121,12 +128,13 @@ chmod -R a+rwX "$STATE" 2>/dev/null || true
 [ -f "$STATE/auto.m3u" ]    || { : > "$STATE/auto.m3u";    echo "[prep] touched state/auto.m3u (empty — controller refills it)"; }
 [ -f "$STATE/jingles.m3u" ] || { : > "$STATE/jingles.m3u"; echo "[prep] touched state/jingles.m3u (empty — run generate-jingles.sh later if wanted)"; }
 
-# setup-config.json carries the Navidrome creds the first-run wizard saved.
-# Without it, controller/src/setup/firstRun.ts reports needsSetup=true and the
-# player redirects to /onboarding on every page load. Copy it from main so the
-# worktree boots straight into the player — the operator already onboarded
-# once in the main checkout, no need to do it again per branch. secrets.env
-# is the matching file for cloud LLM/TTS API keys; copy it too if present.
+# Mirror the operator's declarative state from main so the worktree boots
+# into the same configured station (LLM provider, personas, shows, moods,
+# sfx, jingles, sessions) instead of an empty default install. The helper
+# below handles both files and directories; runtime state (queue.json,
+# session.json, archive/, logs/, listeners.jsonl, now-playing.json) is
+# deliberately NOT mirrored — those would clash with what the worktree's
+# own containers produce on first boot.
 copy_state_file() {
   local rel="$1"
   local src="$MAIN/state/$rel"
@@ -136,20 +144,59 @@ copy_state_file() {
     return
   fi
   if [ -e "$dst" ]; then
-    echo "[prep] keep   state/$rel — already in worktree (left untouched)"
-    return
+    # The mkdir above scaffolds sfx/jingles/sessions/voice as empty dirs
+    # before the copy step runs, so treating "already exists" as "keep
+    # untouched" would lock in those empties. If the worktree's copy is an
+    # empty directory but main's is populated, replace it; otherwise honour
+    # the keep so operator edits aren't clobbered.
+    if [ -d "$dst" ] && [ -d "$src" ] && [ -z "$(ls -A "$dst" 2>/dev/null)" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+      rmdir "$dst"
+    else
+      echo "[prep] keep   state/$rel — already in worktree (left untouched)"
+      return
+    fi
   fi
-  cp "$src" "$dst"
+  mkdir -p "$(dirname "$dst")"
+  cp -R "$src" "$dst"
   # secrets.env is mode 0600 — preserve that. The Navidrome pass in
   # setup-config.json is plaintext but the file is normal 0644.
   if [ "$rel" = "secrets.env" ]; then chmod 0600 "$dst"; fi
   echo "[prep] copied state/$rel"
 }
 
+# Onboarding shortcut: skip the /onboarding flow per branch.
 copy_state_file setup-config.json
 copy_state_file secrets.env
 
-echo "[prep] state/ scaffolded — no settings/sessions/queue/moods copied; the controller writes defaults on first boot."
+# Operator-configured station: LLM provider, personas, shows, TTS config.
+# Without this the controller boots with default settings (llm.model empty),
+# every LLM call returns "fetch failed", and the new skills don't run.
+copy_state_file settings.json
+
+# Library mood tagging — expensive to regenerate (`npm run tag` walks the
+# whole library through the LLM). Copy as-is so the picker has the same
+# mood pool the operator already tagged on main.
+copy_state_file moods.json
+
+# Sound-effects + jingles catalogue and rendered WAVs. The .json files
+# carry the metadata the admin UI lists; the directories carry the actual
+# audio liquidsoap mixes in.
+copy_state_file sfx.json
+copy_state_file sfx
+copy_state_file jingles.json
+copy_state_file jingles.m3u
+copy_state_file jingles
+
+# 24h play log — the picker and the new library-deep-cut skill key off
+# this for dedup. Without it the worktree behaves as if nothing has ever
+# been played.
+copy_state_file recent-plays.json
+
+# Archived DJ sessions + Chatterbox reference voices.
+copy_state_file sessions
+copy_state_file voice
+
+echo "[prep] state/ mirrored — operator's declarative settings/moods/sfx/jingles copied; runtime state (queue, current session, archive, logs) stays fresh."
 
 # ── web dependencies ────────────────────────────────────────────────────────
 if [ "$SKIP_NPM" = 1 ]; then

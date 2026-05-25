@@ -2,7 +2,7 @@
 # Reads a JSON queue file written by the Node.js controller,
 # crossfades, ducks DJ voice over song intros, falls back to autonomous playlist.
 
-settings.log.level := 4
+settings.log.level := 3
 settings.log.file := true
 settings.log.file.path := "/var/log/liquidsoap/radio.log"
 
@@ -20,6 +20,8 @@ settings.server.telnet.port := 1234
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
+archive_enabled = ref(true)
+archive_bitrate = ref(128)
 
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
@@ -33,7 +35,18 @@ if file.exists("/var/sub-wave/liquidsoap_crossfade.txt") then
   if v >= 0.0 then crossfade_duration := v end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()}")
+if file.exists("/var/sub-wave/liquidsoap_archive_enabled.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_archive_enabled.txt"))
+  archive_enabled := (raw == "true")
+end
+
+if file.exists("/var/sub-wave/liquidsoap_archive_bitrate.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_archive_bitrate.txt"))
+  v = int_of_string(default=128, raw)
+  if v > 0 then archive_bitrate := v end
+end
+
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -498,17 +511,26 @@ music_meta.on_metadata(on_meta)
 
 # Stream on/off control. An Icecast output can't be paused, but it can be
 # shut down and recreated on demand (Liquidsoap's dynamic-sources pattern).
-# `stream_off` shuts the output down — the /stream.mp3 mount disconnects and
-# the station goes genuinely off air; `stream_on` recreates it. force_start
-# lets the recreated output start after init. The on/off state lives in refs
-# and is read back over telnet by the controller. It is NOT persisted: a
-# mixer restart always comes back on air.
+# `stream_off` shuts both mounts down — the /stream.mp3 and /stream.opus
+# mounts disconnect and the station goes genuinely off air; `stream_on`
+# recreates them. force_start lets the recreated outputs start after init.
+# The on/off state lives in refs and is read back over telnet by the
+# controller. It is NOT persisted: a mixer restart always comes back on air.
+#
+# Two mounts in parallel:
+#   /stream.mp3  — MP3 192 kbps, the universal compatibility floor
+#                  (Sonos, hardware radios, car receivers, pre-iOS-17 Safari).
+#   /stream.opus — Ogg-Opus 96 kbps, ~equal-or-better quality at half the
+#                  bandwidth for modern browsers (the web player auto-prefers
+#                  it via canPlayType). Browsers / VLC / cliamp on a recent
+#                  build all decode it; older clients keep using MP3.
+# Per-listener bandwidth is per-mount, so the unused side costs nothing.
 settings.init.force_start := true
 
-def make_stream_output() =
-  output.icecast(
+def make_stream_outputs() =
+  mp3_out = output.icecast(
     %mp3(bitrate=192, samplerate=44100, stereo=true),
-    id="stream",
+    id="stream_mp3",
     fallible=true,
     host=environment.get(default="icecast", "ICECAST_HOST"),
     port=7702,
@@ -520,6 +542,33 @@ def make_stream_output() =
     url="http://localhost:7700",
     radio
   )
+  # Opus mandates 48 kHz internally — Liquidsoap resamples from the 44.1 kHz
+  # source bus. application="audio" is the right tuning for music (vs "voip"
+  # or "lowdelay"). 96 kbps is the music-transparent sweet spot.
+  opus_out = output.icecast(
+    %opus(
+      bitrate=96,
+      samplerate=48000,
+      channels=2,
+      application="audio",
+      vbr="constrained"
+    ),
+    id="stream_opus",
+    fallible=true,
+    host=environment.get(default="icecast", "ICECAST_HOST"),
+    port=7702,
+    password=environment.get("ICECAST_SOURCE_PASSWORD"),
+    mount="/stream.opus",
+    name="SUB/WAVE",
+    description="Personal frequency from the homelab",
+    genre="Various",
+    url="http://localhost:7700",
+    radio
+  )
+  fun () -> begin
+    mp3_out.shutdown()
+    opus_out.shutdown()
+  end
 end
 
 stream_shutdown = ref(fun () -> ())
@@ -527,8 +576,7 @@ stream_on = ref(false)
 
 def stream_up() =
   if not stream_on() then
-    o = make_stream_output()
-    stream_shutdown := o.shutdown
+    stream_shutdown := make_stream_outputs()
     stream_on := true
   end
 end
@@ -544,14 +592,30 @@ end
 # On air at startup.
 stream_up()
 
-# Optional: also output to local file for archiving / podcast generation
-output.file(
-  %mp3(bitrate=128),
-  fallible=true,
-  reopen_when={0m0s},
-  "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3",
-  radio
-)
+# Optional: hourly archive to /var/sub-wave/archive/. A second MP3 encoder
+# running 24/7 is the single biggest CPU cost in the broadcast container —
+# guard the entire output so operators who don't use the archives don't pay
+# for the encoder. Bitrate is selected from a fixed set because `%mp3(bitrate=…)`
+# requires a literal int at parse time (we can't pass a ref).
+archive_path = "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3"
+if archive_enabled() then
+  br = archive_bitrate()
+  if br <= 64 then
+    output.file(%mp3(bitrate=64), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 96 then
+    output.file(%mp3(bitrate=96), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 128 then
+    output.file(%mp3(bitrate=128), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 160 then
+    output.file(%mp3(bitrate=160), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 192 then
+    output.file(%mp3(bitrate=192), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  else
+    output.file(%mp3(bitrate=320), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  end
+else
+  log("Hourly archive disabled — set archive.enabled=true in settings to re-enable")
+end
 
 # ---------------------------------------------------------------------------
 # CONTROL — custom telnet command for the controller to trigger a restart
@@ -569,10 +633,11 @@ server.register(
   end
 )
 
-# Take the station off air / back on air on demand. stream_off shuts the
-# Icecast output down so the /stream.mp3 mount disconnects; stream_on
-# recreates it. stream_status reports the current state for the admin UI
-# and the listener-facing player. Operator-only — listeners can't reach this.
+# Take the station off air / back on air on demand. stream_off shuts both
+# Icecast outputs down so /stream.mp3 and /stream.opus disconnect together;
+# stream_on recreates them. stream_status reports the current state for the
+# admin UI and the listener-facing player. Operator-only — listeners can't
+# reach this.
 server.register(
   "stream_off",
   description="Take the station off air (disconnect the Icecast mount)",

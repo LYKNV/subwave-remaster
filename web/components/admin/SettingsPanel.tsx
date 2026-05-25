@@ -117,9 +117,19 @@ interface ScrobbleForm {
   listenbrainz: ScrobbleListenbrainzForm;
 }
 
+interface ArchiveForm {
+  enabled: boolean;
+  bitrate: string;
+}
+
+// Keep in sync with ARCHIVE_BITRATES in controller/src/settings.ts — radio.liq
+// has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
+const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
+  archive: ArchiveForm;
   station: string;
   weather: WeatherCfg;
   tts: TtsForm;
@@ -153,6 +163,7 @@ interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
+    archive?: { enabled?: boolean; bitrate?: number };
     station?: string;
     weather?: { lat?: number; lng?: number; locationName?: string };
     tts?: {
@@ -241,6 +252,10 @@ export default function SettingsPanel() {
     setForm({
       jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      archive: {
+        enabled: v.archive?.enabled ?? true,
+        bitrate: String(v.archive?.bitrate ?? 128),
+      },
       station: v.station ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
@@ -497,7 +512,7 @@ export default function SettingsPanel() {
                 data={data} form={form} setForm={updateForm} busy={busy}
                 jingleText={jingleText} setJingleText={setJingleText}
                 createJingle={createJingle} saveSettings={saveSettings}
-                onDelete={setConfirmDelete}
+                onDelete={setConfirmDelete} adminFetch={adminFetch}
               />
             )}
             {activeSection === 'scrobble' && (
@@ -513,7 +528,7 @@ export default function SettingsPanel() {
           <SfxSection
             sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
             busy={busy} createSfx={createSfx} onDelete={setConfirmDeleteSfx}
-            data={data} saveSettings={saveSettings}
+            data={data} saveSettings={saveSettings} adminFetch={adminFetch}
           />
         )}
         {activeSection === 'danger' && (
@@ -581,6 +596,89 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart — apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Record the broadcast to disk</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.archive.enabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, archive: { ...f.archive, enabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({ archive: { enabled: form.archive.enabled } })
+                        }
+                        disabled={busy}
+                      >
+                        Save
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      The archive runs a second MP3 encoder 24/7 and is the biggest constant
+                      CPU cost in the broadcast container — turn it off if you don't replay
+                      the hourly tapes (issue #137).
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Archive bitrate</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={form.archive.bitrate}
+                        onValueChange={v =>
+                          setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
+                        }
+                      >
+                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ARCHIVE_BITRATES.map(br => (
+                            <SelectItem key={br} value={String(br)}>
+                              {br} kbps
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
+                          })
+                        }
+                        disabled={busy || !form.archive.enabled}
+                      >
+                        Save bitrate
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Lower bitrate = smaller archives, less encoder CPU
+                      (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
+                      original default.
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1570,6 +1668,76 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
   );
 }
 
+/* ── Preview button ──────────────────────────────────────────────────── */
+
+// Module-level "now previewing" handle so a second press anywhere on the
+// admin page stops the first clip — no overlapping audio.
+let currentPreview: { audio: HTMLAudioElement; url: string; stop: () => void } | null = null;
+
+interface PreviewButtonProps {
+  path: string;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  label?: string;
+}
+
+// Audio files behind /api/jingles/.../audio and /api/sfx/.../audio are
+// admin-gated (HTTP Basic). A plain <audio src> can't send the header, so
+// we fetch the bytes via adminFetch, hand them to <Audio> as a Blob URL,
+// and revoke the URL when playback ends.
+function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps) {
+  const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
+
+  useEffect(() => {
+    return () => {
+      // Unmounting (e.g. row deleted while previewing) — make sure we
+      // don't leak the audio element or the object URL.
+      if (currentPreview && currentPreview.audio.dataset.owner === path) {
+        currentPreview.stop();
+      }
+    };
+  }, [path]);
+
+  const onClick = async () => {
+    if (state === 'playing') {
+      currentPreview?.stop();
+      return;
+    }
+    if (state === 'loading') return;
+    setState('loading');
+    try {
+      const r = await adminFetch(path);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.dataset.owner = path;
+      const stop = () => {
+        audio.pause();
+        URL.revokeObjectURL(url);
+        if (currentPreview?.audio === audio) currentPreview = null;
+        setState('idle');
+      };
+      audio.addEventListener('ended', stop);
+      audio.addEventListener('error', stop);
+      currentPreview?.stop();
+      currentPreview = { audio, url, stop };
+      await audio.play();
+      setState('playing');
+    } catch (err) {
+      notify.err(`Preview failed: ${errorMessage(err)}`);
+      setState('idle');
+    }
+  };
+
+  const text = state === 'playing' ? 'Stop' : state === 'loading' ? '…' : label;
+
+  return (
+    <Btn sm onClick={onClick} title="Preview audio">
+      {text}
+    </Btn>
+  );
+}
+
 /* ── Jingles ─────────────────────────────────────────────────────────── */
 
 interface JinglesSectionProps extends SectionProps {
@@ -1577,11 +1745,12 @@ interface JinglesSectionProps extends SectionProps {
   setJingleText: (s: string) => void;
   createJingle: () => void;
   onDelete: (filename: string | null) => void;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
 function JinglesSection({
   data, form, setForm, busy, jingleText, setJingleText,
-  createJingle, saveSettings, onDelete,
+  createJingle, saveSettings, onDelete, adminFetch,
 }: JinglesSectionProps) {
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
@@ -1672,15 +1841,21 @@ function JinglesSection({
                 {j.builtin && <Pill tone="accent">builtin</Pill>}
               </div>
             </div>
-            <Btn
-              sm
-              tone="danger"
-              onClick={() => onDelete(j.filename)}
-              disabled={busy || j.builtin}
-              title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
-            >
-              Delete
-            </Btn>
+            <div className="flex items-center gap-2">
+              <PreviewButton
+                path={`/jingles/${encodeURIComponent(j.filename)}/audio`}
+                adminFetch={adminFetch}
+              />
+              <Btn
+                sm
+                tone="danger"
+                onClick={() => onDelete(j.filename)}
+                disabled={busy || j.builtin}
+                title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
+              >
+                Delete
+              </Btn>
+            </div>
           </div>
         ))}
       </Card>
@@ -1699,9 +1874,10 @@ interface SfxSectionProps {
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
   saveSettings: SaveSettings;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, data, saveSettings }: SfxSectionProps) {
+function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
   if (!sfxData) {
     return <div className="text-[13px] text-muted italic">loading…</div>;
   }
@@ -1838,15 +2014,21 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, d
                 {s.builtin && <Pill tone="accent">builtin</Pill>}
               </div>
             </div>
-            <Btn
-              sm
-              tone="danger"
-              onClick={() => onDelete(s.name)}
-              disabled={busy || s.builtin}
-              title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
-            >
-              Delete
-            </Btn>
+            <div className="flex items-center gap-2">
+              <PreviewButton
+                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
+                adminFetch={adminFetch}
+              />
+              <Btn
+                sm
+                tone="danger"
+                onClick={() => onDelete(s.name)}
+                disabled={busy || s.builtin}
+                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
+              >
+                Delete
+              </Btn>
+            </div>
           </div>
         ))}
       </Card>

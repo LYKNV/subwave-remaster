@@ -54,7 +54,7 @@ docker compose up -d --build broadcast      # after radio.liq / icecast.xml.temp
 
 `web` is a Next.js dev server in local mode (`npm run dev`), so it hot-reloads — no rebuild needed for UI changes during dev. Production builds the web image; treat it like the others there.
 
-No test runner, linter, or formatter is configured.
+No test runner is configured. `controller/` and `web/` each expose `npm run lint` (`eslint . && tsc --noEmit`); CI runs both on every PR via `.github/workflows/lint.yml` and they are the merge gate.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
   - `now-playing.json` — written from `music_meta.on_metadata(on_meta)`. Hook is on `music_meta` — the **pre-cross** handle captured before `music` is wrapped in `cross(...)`. Hooking the post-cross source fires twice per transition because the custom `dj_transition` passes `initial_metadata=` into both `fade.in` and `fade.out`, freezing the UI one song behind. `on_metadata` is used instead of `on_track` because `on_track` gets swallowed by source switches (request queue → auto playlist).
 - **Controller → Web UI**: HTTP. The `useStationFeed` hook (`web/hooks/useStationFeed.js`) polls `/now-playing` and `/state` every 5s.
 - **Controller state**: `session.json` — the live DJ session (a chat-history JSON, see `broadcast/session.js`) the controller rewrites as tracks play and the DJ talks; archived sessions land in `state/sessions/<id>.json` on roll. Controller-internal — not read by Liquidsoap.
-- **Browsers → Icecast**: direct `<audio src="…/stream.mp3">`. The `useMediaSession` hook wires lock-screen / headphone / CarPlay controls to the player, with artwork served from the controller's `/cover/:id` proxy.
+- **Browsers → Icecast**: direct `<audio src="…/stream.opus">` on modern browsers, `…/stream.mp3` on everything else. `usePlayer` (`web/hooks/usePlayer.ts`) runs `canPlayType('audio/ogg; codecs=opus')` once on mount and picks the Opus mount when supported (`probably`/`maybe`), landing roughly equal-or-better audio at ~half the bandwidth. Both mounts are served by the same Icecast — Liquidsoap parallel-encodes the same `radio` source bus into MP3 192 kbps and Ogg-Opus 96 kbps (`radio.liq` `make_stream_outputs()`). MP3 is the universal fallback for Sonos, hardware internet radios, car receivers, and pre-iOS-17 Safari. The `useMediaSession` hook wires lock-screen / headphone / CarPlay controls to the player, with artwork served from the controller's `/cover/:id` proxy.
 
 Anything that needs to flow between the controller and Liquidsoap must go through one of these files — there is no socket or RPC channel.
 
@@ -116,7 +116,7 @@ Pipeline (in order):
 6. `rotate(weights=[1, jingle_ratio], [jingles, radio])` — one jingle per N music tracks, configurable.
 7. `fallback(track_sensitive=false, [radio, emergency])` → `blank.skip(max_blank=5s)`.
 8. **Broadcast bus** — brick-wall limiter (ratio 20:1 at −1 dBFS) only. The earlier normaliser, stereo widener, and bus compressor were all removed because they reshaped the masters (pumping on dynamic content, altering the engineer's stereo image, tickling dynamics on loud passages). The limiter stays as a safety net — MP3 encoding generates inter-sample peaks that can exceed the source peak by ~0.5–1 dB, and without a −1 dBFS ceiling, modern masters (peaking at ~−0.3 dBFS TP) would clip in listeners' decoders. It typically does 0 dB of gain reduction on catalogue audio.
-9. `output.icecast(%mp3(bitrate=192))` to `localhost:7702/stream.mp3` (icecast2 lives in the same container — see "Docker layout") + `output.file(%mp3(bitrate=128), reopen_when={0m0s}, "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")` for hourly archives.
+9. **Two parallel Icecast outputs** wrapped in a single `stream_on`/`stream_off` control (`make_stream_outputs()`): `%mp3(bitrate=192)` → `localhost:7702/stream.mp3` (universal compatibility floor — Sonos, hardware radios, car receivers, pre-iOS-17 Safari) **and** `%opus(bitrate=96, samplerate=48000, channels=2, application="audio", vbr="constrained")` → `localhost:7702/stream.opus` (modern browsers / VLC / cliamp — equal-or-better quality at ~half the bandwidth, picked automatically by the web player via `canPlayType`). Both mounts share the same `radio` source bus, so they always carry the same audio and the same listener metadata. `stream_off` / `stream_on` shut down or recreate both together. + `output.file(%mp3(bitrate=128), reopen_when={0m0s}, "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")` for hourly archives (MP3-only — archives prioritise tooling compatibility).
 
 Also: a custom `subhttp:` protocol shells out to `curl` (installed in `Dockerfile.broadcast`) because Liquidsoap's built-in `http.get.stream` returns spurious 522s on the Cloudflare-fronted Navidrome origin. A telnet server on port 1234 (reachable from the controller as `broadcast:1234` on the compose network) exposes a custom `restart` command.
 

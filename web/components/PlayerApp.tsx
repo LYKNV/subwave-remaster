@@ -71,6 +71,20 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
+  // Mirror the tune-button feel from TransportBar: a short pulse on open,
+  // a lighter one on close, so every entry point (DotRail, shortcut, palette,
+  // swipe-dismiss) gets the same tactile confirmation.
+  const prevDrawerRef = useRef<PlayerDrawer | null>(drawer);
+  useEffect(() => {
+    const prev = prevDrawerRef.current;
+    prevDrawerRef.current = drawer;
+    if (prev === drawer) return;
+    if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+    if (prev == null && drawer != null) navigator.vibrate(8);
+    else if (prev != null && drawer == null) navigator.vibrate(5);
+    else navigator.vibrate(6);
+  }, [drawer]);
+
   // First-paint tune-in gate. Shown on every fresh load until the listener
   // taps it; dismissed permanently for the rest of the session once they've
   // tuned in, so a later Tune Out doesn't bring the overlay back.

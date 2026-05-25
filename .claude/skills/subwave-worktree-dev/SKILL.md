@@ -33,15 +33,24 @@ a worktree checkout:
 | `docker/.env` | Compose variable substitution (legacy — harmless to copy). |
 | `state/setup-config.json` | Navidrome creds the wizard saved on main. Without this the controller reports `needsSetup: true` and the player redirects to `/onboarding` on every load. |
 | `state/secrets.env` | Cloud LLM / TTS API keys (if main has any). Sourced into the controller's `process.env` on boot. |
+| `state/settings.json` | Operator's full config — LLM provider/model, personas, shows, TTS. Without it the controller boots with default settings (`llm.model = ''`), every LLM call returns "fetch failed", and the new skills cannot run. |
+| `state/moods.json` | Library mood tagging produced by `npm run tag` (LLM walk over the whole library — expensive to redo per branch). |
+| `state/sfx.json` + `sfx/` | Sound-effects catalogue metadata + rendered WAVs the admin UI lists and liquidsoap mixes in. |
+| `state/jingles.json` + `jingles.m3u` + `jingles/` | Pre-rendered station idents. Liquidsoap reads the M3U with `reload_mode="watch"`. |
+| `state/recent-plays.json` | 24h play log — the picker and the `library-deep-cut` skill key off it for dedup. |
+| `state/sessions/` | Archived DJ sessions (the live one is regenerated on boot). |
+| `state/voice/` | Persona TTS reference voices (Chatterbox cloning refs, if any). |
 | `web/node_modules` | Needed by `npm run dev`. |
 | `state/` | Bind-mounted into the containers. A worktree's `state/` is empty. |
 
-`state/` is scaffolded **fresh** — directory structure plus the two onboarding-skip
-files (`setup-config.json`, `secrets.env`) so the operator lands directly on the
-player. Settings, sessions, queue, library mood data, and rendered jingles are
-*not* copied — the worktree station boots clean and the controller writes its
-own defaults. The broadcast container generates its own `state/icecast-secrets.env`
-on first boot, so worktrees no longer need to copy any rendered icecast config.
+`state/` is **mirrored from main** so the worktree boots into the same configured
+station — same LLM provider, same personas, same library moods, same jingles —
+ready to test branch changes against real data. Runtime state (`queue.json`,
+`session.json`, `archive/`, `logs/`, `listeners.jsonl`, `now-playing.json`) is
+**not** copied, since those would clash with what the worktree's own containers
+produce fresh on first boot. The broadcast container generates its own
+`state/icecast-secrets.env` on first boot, so worktrees never need to copy
+icecast config either.
 
 ## Two load-bearing facts
 
@@ -86,7 +95,8 @@ docker compose -f <some-checkout>/docker-compose.dev.yml down
 
 ### Step 2 — Prep the worktree
 
-Run the bundled script. It copies the env files, scaffolds a fresh `state/`,
+Run the bundled script. It copies the env files, mirrors the operator's
+declarative `state/` from main (settings, moods, sfx, jingles, sessions, voice),
 and runs `npm install` for the web app. `<skill base directory>` is the
 absolute path shown as "Base directory for this skill" when the skill loads.
 
@@ -97,7 +107,7 @@ bash "<skill base directory>/scripts/prep-worktree.sh" <worktree-path>
 Flags: `--reset-state` wipes and re-scaffolds `state/` (use when the user wants
 a clean slate); `--skip-npm` skips the dependency install (use when
 `node_modules` is already good). The script is idempotent — re-running it only
-fills in what is missing.
+fills in what is missing, never overwrites a file the worktree already has.
 
 ### Step 3 — Start the stack from the worktree
 

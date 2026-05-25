@@ -114,14 +114,45 @@ Notes on the body:
 
 ### Step 6 — Open the PR
 
+Prepend this banner to the PR body before opening, so the reviewer can't miss the merge-strategy requirement:
+
+```markdown
+> [!IMPORTANT]
+> **Merge with "Create a merge commit"** — not "Squash and merge". Squash collapses the individual `feat:` / `fix:` / `chore:` commits into one `release: …` commit, and release-please then sees no conventional-commit signal and skips the version bump. See [Step 7](#step-7--how-to-merge-this-pr) for the why.
+```
+
+Then create the PR:
+
 ```bash
 gh pr create --base main --head develop --title "release: <theme>" --body "$(cat <<'EOF'
+<banner above>
+
 <body from Step 5>
 EOF
 )"
 ```
 
-Capture the returned URL and report it to the user. That's the end of this skill's responsibility — release-please takes over from here.
+Capture the returned URL and report it to the user. Along with the URL, tell them in plain text: **"Merge this with a merge commit, not squash — release-please needs the individual conventional commits on main to bump the version."**
+
+### Step 7 — How to merge this PR
+
+Release-please runs on `main` push events and walks the commits added since the last release tag. To bump the version it needs to see at least one conventional commit (`feat:`, `fix:`, `perf:`, `refactor:`, …) on main.
+
+- **"Create a merge commit"** — preserves every commit from develop on main with its original `feat:` / `fix:` / `chore:` prefix. Release-please sees them and opens its version-bump PR. **This is the correct option.**
+- **"Squash and merge"** — collapses all develop commits into one squash commit whose subject is the PR title (`release: …`). `release:` is not a recognized conventional type, so release-please considers the commit non-user-facing and skips. **Do not use this.** This is exactly what happened with PR #118 — release-please ran, found 1 commit, classified it as non-user-facing, and skipped the version bump.
+- **"Rebase and merge"** — also fine in principle (individual commits preserved on main) but breaks the historical pattern (previous successful release PRs like #112, #95, #93 were all merge commits). Stick with merge commit for consistency.
+
+If the operator accidentally squash-merges anyway, the recovery is:
+
+```bash
+git checkout main && git pull
+git commit --allow-empty -m "feat: <one-line description of the dominant work>
+
+Re-trigger release-please after squash-merge of #<N> lost conventional-commit prefixes."
+git push origin main
+```
+
+Then re-run the release-please workflow (Actions tab → release-please → Run workflow on main).
 
 ## Edge cases
 
@@ -130,6 +161,7 @@ Capture the returned URL and report it to the user. That's the end of this skill
 - **Local develop is *ahead* of origin/develop**: the unpushed commits will NOT be in the PR. Ask whether to push first; if yes, push then re-run from Step 2 (the commit list will change).
 - **gh not authenticated**: `gh pr create` will fail with a clear error. Surface it and tell the user to run `gh auth login` — don't try workarounds.
 - **A draft release-please PR exists on main** (the version-bump PR release-please opens after a release lands): unrelated, ignore. That PR's base is main and its head is `release-please--branches--main`, not develop.
+- **Previous release PR was squash-merged and release-please skipped the version bump**: follow the recovery block in Step 7 (push an empty `feat:` commit to main, re-run the release-please workflow).
 
 ## Allowed without confirmation
 

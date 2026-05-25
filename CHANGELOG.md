@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.1.22](https://github.com/perminder-klair/subwave/compare/v0.1.21...v0.1.22) (2026-05-25)
+
+
+### Bug Fixes
+
+* **web:** unblock image build — ripple.tsx tailwind order + inline-style lint ([b5b4dea](https://github.com/perminder-klair/subwave/commit/b5b4dea523689b95831317bf818ad4cc4e3bae7e))
+
+## [0.1.21](https://github.com/perminder-klair/subwave/compare/v0.1.20...v0.1.21) (2026-05-25)
+
+
+### Features
+
+* scrobble to Last.fm and ListenBrainz ([#121](https://github.com/perminder-klair/subwave/issues/121)) ([#126](https://github.com/perminder-klair/subwave/issues/126)) ([fb76507](https://github.com/perminder-klair/subwave/commit/fb765078890d336a6ee0caa831f75f0f2e45c7d8))
+* **web:** ripple effect behind now-playing artwork ([#129](https://github.com/perminder-klair/subwave/issues/129)) ([d4e3819](https://github.com/perminder-klair/subwave/commit/d4e38199f938d0f626370ed33bca211585fdfc9e))
+
+
+### Bug Fixes
+
+* **skill:** worktree-dev prep skips onboarding and follows root compose layout ([#127](https://github.com/perminder-klair/subwave/issues/127)) ([b59d41e](https://github.com/perminder-klair/subwave/commit/b59d41e6337d41a7fe2a86bcaa93bacd885e70b5))
+* **tagger:** load wizard config in tag-library CLI ([#123](https://github.com/perminder-klair/subwave/issues/123)) ([b974eb9](https://github.com/perminder-klair/subwave/commit/b974eb96485a367b45541b984190fdb4222ea805)), closes [#122](https://github.com/perminder-klair/subwave/issues/122)
+
+
+### Documentation
+
+* **setup:** align with merged broadcast container ([#125](https://github.com/perminder-klair/subwave/issues/125)) ([ccd44d7](https://github.com/perminder-klair/subwave/commit/ccd44d77da4c07901c0afb823096b393823850c8))
+* **skill:** warn against squash-merging release PRs ([8777cd0](https://github.com/perminder-klair/subwave/commit/8777cd0502d20e9b35ad5287a26fc293cf1cc7c5))
+
+
+### Refactors
+
+* **admin:** rename Mixer section to Station, move Crossfade to Danger zone ([#128](https://github.com/perminder-klair/subwave/issues/128)) ([56b1135](https://github.com/perminder-klair/subwave/commit/56b11351a7cec688c5832d003465f542156b2c8b))
+
 ## [0.1.20](https://github.com/perminder-klair/subwave/compare/v0.1.19...v0.1.20) (2026-05-25)
 
 

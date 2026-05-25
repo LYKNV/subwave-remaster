@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.22](https://github.com/perminder-klair/subwave/compare/v0.1.21...v0.1.22) (2026-05-25)
+
+
+### Bug Fixes
+
+* **web:** unblock image build — ripple.tsx tailwind order + inline-style lint ([b5b4dea](https://github.com/perminder-klair/subwave/commit/b5b4dea523689b95831317bf818ad4cc4e3bae7e))
+
 ## [0.1.21](https://github.com/perminder-klair/subwave/compare/v0.1.20...v0.1.21) (2026-05-25)
 
 

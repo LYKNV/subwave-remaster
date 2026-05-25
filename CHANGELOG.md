@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.24](https://github.com/perminder-klair/subwave/compare/v0.1.23...v0.1.24) (2026-05-25)
+
+
+### Bug Fixes
+
+* **caddy:** use named matcher for multi-path stream handle ([9ae0471](https://github.com/perminder-klair/subwave/commit/9ae0471a90dde7aad79bd22d4923a99ef893faf8))
+* **caddy:** use named matcher for multi-path stream handle ([bdb98d8](https://github.com/perminder-klair/subwave/commit/bdb98d8912cdb7733be2de57dd71721bae406de7))
+
 ## [0.1.23](https://github.com/perminder-klair/subwave/compare/v0.1.22...v0.1.23) (2026-05-25)
 
 

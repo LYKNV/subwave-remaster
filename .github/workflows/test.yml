@@ -1,0 +1,49 @@
+name: Test
+
+# Runs the Vitest suite for any package that ships one. Today that's
+# controller/ only — web/ has no tests yet. Add to the matrix when that
+# changes. Branch protection on main/develop should require this job.
+#
+# PRs always target develop; main is owned by release-please.
+#
+# Security note: no untrusted user input (PR title/body/commit message)
+# flows into any `run:` step. Only workflow-defined matrix values and
+# built-in github context fields are interpolated.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [controller]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm test

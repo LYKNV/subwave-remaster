@@ -27,6 +27,9 @@ tui/dist/
 # Runtime state — file-based IPC, TTS output, archives, logs
 state/
 
+# Vitest coverage reports — regenerated on demand
+controller/coverage/
+
 # Claude Code worktrees + local runtime files
 .claude/worktrees/
 .claude/scheduled_tasks.lock

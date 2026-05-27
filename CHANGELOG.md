@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.26](https://github.com/perminder-klair/subwave/compare/v0.1.25...v0.1.26) (2026-05-27)
+
+
+### Features
+
+* **controller:** embedding-propagated library tagger (SQLite + sqlite-vec) ([#157](https://github.com/perminder-klair/subwave/issues/157)) ([ec406b7](https://github.com/perminder-klair/subwave/commit/ec406b79d9b4600272440ce49ef47b5bfbb312ba))
+* **tts:** tts-heavy sidecar for Chatterbox + PocketTTS ([#110](https://github.com/perminder-klair/subwave/issues/110)) ([419c25d](https://github.com/perminder-klair/subwave/commit/419c25d1ca937a6a48943ff6979bd1d2146cc132))
+
+
+### Bug Fixes
+
+* **cli:** bypass Bun's broken macOS stdin in curl|sh flow ([#165](https://github.com/perminder-klair/subwave/issues/165)) ([6bb5bb5](https://github.com/perminder-klair/subwave/commit/6bb5bb58473341d709fcde51b7b6a6abac23d468))
+* **cli:** single-quote .env values + docker-group hint ([#156](https://github.com/perminder-klair/subwave/issues/156)) ([10c115d](https://github.com/perminder-klair/subwave/commit/10c115d04712138265e03055aec6bf1e425982c1))
+
+
+### Refactors
+
+* **settings:** split shows + schedule into state/schedule.json ([#162](https://github.com/perminder-klair/subwave/issues/162)) ([c5e454e](https://github.com/perminder-klair/subwave/commit/c5e454ec0cd27f2ab33e4e4342ec7c24c47b1487))
+
 ## [0.1.25](https://github.com/perminder-klair/subwave/compare/v0.1.24...v0.1.25) (2026-05-26)
 
 

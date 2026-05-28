@@ -248,14 +248,18 @@ router.get('/schedule', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/state', (req, res) => {
   const snap = queue.snapshot();
-  // `theme.active` rides along with /state so the every-5s polling loop in
-  // useStationFeed picks up an operator's theme change within one cycle. The
-  // actual token map is fetched separately from /themes, then cached.
+  // `theme.active` rides along with /state — gives polling clients a cheap
+  // heads-up that the effective theme has changed without re-fetching the
+  // full token map from /themes. Per-show theme overrides win over the
+  // station-wide default while a show is on air.
   const s = settings.get();
+  const activeShow = settings.resolveActiveShow();
+  const activeThemeId =
+    (activeShow?.themeId && activeShow.themeId) || s?.theme?.active || DEFAULT_THEME_ID;
   res.json({
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
-    theme: { active: s?.theme?.active || DEFAULT_THEME_ID },
+    theme: { active: activeThemeId },
   });
 });
 
@@ -266,6 +270,11 @@ router.get('/state', (req, res) => {
 // active id; the result is cached in browser localStorage for pre-paint apply
 // on the next visit.
 //
+// `active` reflects the *effective* theme: the on-air show's themeId override
+// if it's set and still resolves to a known theme, otherwise the station
+// default. ThemeBootstrap doesn't have to know about shows — it just applies
+// whatever id comes back.
+//
 // POST /themes/refresh — admin-gated. Clears the user-themes cache so files
 // freshly dropped into ${STATE_DIR}/themes/ appear in the next /themes read
 // without bouncing the controller.
@@ -274,10 +283,16 @@ router.get('/themes', async (req, res) => {
   try {
     const s = settings.get();
     const themes = await listThemes();
-    res.json({
-      active: s?.theme?.active || DEFAULT_THEME_ID,
-      themes,
-    });
+    const stationDefault = s?.theme?.active || DEFAULT_THEME_ID;
+    const activeShow = settings.resolveActiveShow();
+    // Show override wins only if it still resolves to a known theme. A stale
+    // override (operator deleted the file under our feet) silently falls back
+    // to the station default — same fallback strategy as getTheme().
+    const active =
+      activeShow?.themeId && themes.some(t => t.id === activeShow.themeId)
+        ? activeShow.themeId
+        : stationDefault;
+    res.json({ active, themes });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

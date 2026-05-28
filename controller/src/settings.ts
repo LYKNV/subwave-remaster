@@ -7,7 +7,7 @@ import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
-import { DEFAULT_THEME_ID, isValidThemeId } from './themes.js';
+import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 
 // Where uploaded persona avatars live. One file per persona, basename =
 // `<personaId>.<ext>`. The dedicated upload route is the only writer; the
@@ -527,12 +527,22 @@ function normalizeShows(raw: any, personaIds: string[]) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
+    // themeId is the optional per-show theme override. Lenient path: we only
+    // sanity-check the shape. A stale id (theme file deleted under our feet)
+    // is harmless — routes/public.ts falls back to the station default at
+    // serve time via getTheme()'s own fallback. Empty/missing means "no
+    // override" and is stored as an empty string for round-trip cleanliness.
+    const themeId =
+      typeof item.themeId === 'string' && item.themeId.trim()
+        ? item.themeId.trim().slice(0, 64)
+        : '';
     out.push({
       id,
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
       mood: item.mood,
+      themeId,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1033,7 +1043,7 @@ function validatePersonasStrict(raw) {
   });
 }
 
-function validateShowsStrict(raw, personas) {
+function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
   if (!Array.isArray(raw)) throw new Error('shows must be an array');
   if (raw.length > SHOWS_LIMIT) throw new Error(`shows must be at most ${SHOWS_LIMIT} entries`);
   const personaIds = personas.map(p => p.id);
@@ -1050,10 +1060,21 @@ function validateShowsStrict(raw, personas) {
     if (!SHOW_MOODS.includes(item.mood)) {
       throw new Error(`shows[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
     }
+    // Optional per-show theme override. Empty/missing means "fall back to the
+    // station default while this show is on air". The allow-set is built once
+    // by update() so we stay sync here.
+    let themeId = '';
+    if (item.themeId !== undefined && item.themeId !== null && item.themeId !== '') {
+      const v = String(item.themeId).trim();
+      if (!allowedThemeIds.has(v)) {
+        throw new Error(`shows[${i}].themeId "${v}" is not a known theme id`);
+      }
+      themeId = v;
+    }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId };
   });
 }
 
@@ -1249,7 +1270,11 @@ export async function update(patch) {
     next.personas = validatePersonasStrict(patch.personas);
   }
   if ('shows' in patch) {
-    next.shows = validateShowsStrict(patch.shows, next.personas);
+    // Snapshot the theme registry once so the validator can stay sync.
+    // listThemes() returns built-ins + cached user themes (30 s TTL) — same
+    // source the picker reads.
+    const allowedThemeIds = new Set((await listThemes()).map(t => t.id));
+    next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds);
   }
   if ('schedule' in patch) {
     next.schedule = validateScheduleStrict(patch.schedule, next.shows);
@@ -1622,6 +1647,10 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     name: show.name,
     topic: show.topic,
     mood: show.mood,
+    // Empty string means "fall back to the station-wide default". The route
+    // layer is responsible for resolving an empty/stale id against the live
+    // theme registry; we just surface what the show declares.
+    themeId: typeof show.themeId === 'string' ? show.themeId : '',
     persona: persona
       ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
       : null,

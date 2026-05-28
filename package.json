@@ -1,6 +1,6 @@
 {
   "name": "sub-wave",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "private": true,
   "description": "SUB/WAVE — personal internet radio station. One Icecast stream, AI DJ, AI-curated playlists.",
   "license": "MIT",

@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.27](https://github.com/perminder-klair/subwave/compare/v0.1.26...v0.1.27) (2026-05-28)
+
+
+### Features
+
+* **controller:** support imperial weather units ([6fb24e2](https://github.com/perminder-klair/subwave/commit/6fb24e243c3ea05609a8566cdebfc82174e16239)), closes [#173](https://github.com/perminder-klair/subwave/issues/173)
+* **controller:** support imperial weather units (closes [#173](https://github.com/perminder-klair/subwave/issues/173)) ([efba9dc](https://github.com/perminder-klair/subwave/commit/efba9dcaab371592033c791011c2635c5707c3f0))
+* **personas+player:** persona avatars + listener Schedule drawer ([a219fd9](https://github.com/perminder-klair/subwave/commit/a219fd9e7f6df6104ae71471dba71f821a4a924a))
+* **personas+player:** persona avatars + listener Schedule drawer ([40701a2](https://github.com/perminder-klair/subwave/commit/40701a24f11768f0d7a1c2eb2ea1543710234608))
+* **player:** per-show theme override + manual page ([3ff52bb](https://github.com/perminder-klair/subwave/commit/3ff52bbb3df4448e3eff4676d359560dac93dc95))
+* **player:** station-wide visual themes ([433ab98](https://github.com/perminder-klair/subwave/commit/433ab98aaca50bebc3454cf60b643c6e92a421e5))
+* **player:** station-wide visual themes ([5967bef](https://github.com/perminder-klair/subwave/commit/5967befa33cc83d9f6fb76a0dc5221ccd71ba5ce))
+
+
+### Bug Fixes
+
+* **broadcast:** expand strftime in hourly archive path ([358cb94](https://github.com/perminder-klair/subwave/commit/358cb9481ea6f6c05651a720f7443011fc0d835c))
+* **broadcast:** expand strftime in hourly archive path ([bc00d5c](https://github.com/perminder-klair/subwave/commit/bc00d5cf63793a853815e5b8c76c1cc4e3e4bcf3))
+* **controller:** include station in /now-playing dj block so player header shows it ([d1a1b01](https://github.com/perminder-klair/subwave/commit/d1a1b014e316d55b846d017c052cfba276067997))
+* **controller:** raise global JSON body limit so persona avatar uploads work ([f7f809f](https://github.com/perminder-klair/subwave/commit/f7f809f2921f605de1c3a372e807bf6a73f34511))
+* **controller:** raise global JSON body limit so persona avatar uploads work ([09ddbd0](https://github.com/perminder-klair/subwave/commit/09ddbd014ecd9169e9352fd0997b2cda76ee3c6e))
+* honour configured station name in DJ speech + Icecast mounts ([317aec8](https://github.com/perminder-klair/subwave/commit/317aec87a12a17cbd9ca34f0fdf9523b4742b78e))
+* honour configured station name in DJ speech + Icecast mounts ([098b98c](https://github.com/perminder-klair/subwave/commit/098b98ca75d8a0ef59c7d30eb6ca7ba919aab735))
+* **player:** show configured station name + lead DotRail with Schedule ([ad8474a](https://github.com/perminder-klair/subwave/commit/ad8474ac16ad82416959ee8120ff03281108f2d3))
+* **tagger:** friendly preflight + auto-pull for embedding failures ([d980f9d](https://github.com/perminder-klair/subwave/commit/d980f9d79f068b924c7d5237cbed35b724cf020c))
+* **tagger:** friendly preflight + auto-pull for embedding failures ([3721b1b](https://github.com/perminder-klair/subwave/commit/3721b1ba37338a950206483fa3fa65974014e0f9))
+* **web:** keep Safari iOS on MP3 and auto-reconnect stalled &lt;audio&gt; ([861b68f](https://github.com/perminder-klair/subwave/commit/861b68fd946e559dcdcdb97a646eae3079be073f))
+* **web:** keep Safari iOS on MP3 and auto-reconnect stalled audio ([2c1a439](https://github.com/perminder-klair/subwave/commit/2c1a439b2ec486d269774ab043233934c985791a))
+* **web:** mobile layout regressions in admin panels ([c03fc33](https://github.com/perminder-klair/subwave/commit/c03fc33dde1eecc15430180a41aea675cbfb75a7))
+* **web:** mobile layout regressions in admin panels ([d210b1e](https://github.com/perminder-klair/subwave/commit/d210b1ef863f44b7511ab0ebfea86d5d6f1f2b33))
+* **web:** move Schedule above Timeline in the player DotRail ([e99d581](https://github.com/perminder-klair/subwave/commit/e99d58125da8523a5909c325a24fca179ab04756))
+* **web:** wrap long DJ thinking line on narrow screens ([22fc061](https://github.com/perminder-klair/subwave/commit/22fc0619d8e6f490fb9825ff9ffa28cbd2722764))
+* **web:** wrap long DJ thinking line on narrow screens ([20e6af6](https://github.com/perminder-klair/subwave/commit/20e6af67edf54b03d1d0e72b0be2387b8e6a0b09))
+
 ## [0.1.26](https://github.com/perminder-klair/subwave/compare/v0.1.25...v0.1.26) (2026-05-27)
 
 

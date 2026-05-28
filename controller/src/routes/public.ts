@@ -8,6 +8,7 @@ import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
+import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
 
 export const router = express.Router();
 
@@ -125,10 +126,39 @@ router.get('/dj', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/state', (req, res) => {
   const snap = queue.snapshot();
-  // `needsSetup` is what the landing page and admin shell key off to redirect
-  // a fresh operator into the wizard. Sync read — relies on the boot-time
-  // config overlay being already applied (or falls back to env-only check).
-  res.json({ ...snap, needsSetup: getSetupStatusSync().needsSetup });
+  // `theme.active` rides along with /state so the every-5s polling loop in
+  // useStationFeed picks up an operator's theme change within one cycle. The
+  // actual token map is fetched separately from /themes, then cached.
+  const s = settings.get();
+  res.json({
+    ...snap,
+    needsSetup: getSetupStatusSync().needsSetup,
+    theme: { active: s?.theme?.active || DEFAULT_THEME_ID },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /themes — public theme registry. Returns the active theme id plus the
+// full list of built-in and user themes (token maps included). Listener web
+// shells fetch this once on mount and again whenever /state reports a new
+// active id; the result is cached in browser localStorage for pre-paint apply
+// on the next visit.
+//
+// POST /themes/refresh — admin-gated. Clears the user-themes cache so files
+// freshly dropped into ${STATE_DIR}/themes/ appear in the next /themes read
+// without bouncing the controller.
+// ---------------------------------------------------------------------------
+router.get('/themes', async (req, res) => {
+  try {
+    const s = settings.get();
+    const themes = await listThemes();
+    res.json({
+      active: s?.theme?.active || DEFAULT_THEME_ID,
+      themes,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -141,9 +141,6 @@ export interface SessionPayload {
   messages: SessionTurn[];
 }
 
-/** Theme mode persisted in localStorage (or absent for `system`). */
-export type ThemeMode = 'system' | 'light' | 'dark';
-
 /** Cloud TTS provider option. */
 export interface CloudVoice {
   id: string;

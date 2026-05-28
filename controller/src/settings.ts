@@ -7,6 +7,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
+import { DEFAULT_THEME_ID, isValidThemeId } from './themes.js';
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
 // `shows` (reusable show definitions) and `schedule` (the 7×24 grid) live in
@@ -248,6 +249,12 @@ const DEFAULTS = {
   // still called SUB/WAVE — this is what the operator's station running on it
   // is called (e.g. "Frequency 88", "Late Shift Radio").
   station: 'SUB/WAVE',
+  // Station-wide visual theme — every listener and the admin UI render with
+  // this palette. The id resolves through controller/src/themes.ts, which
+  // ships the built-ins and reads optional user JSONs from
+  // ${STATE_DIR}/themes/. Stored as id only; the actual token map lives with
+  // the theme registry so it stays in sync with the file on disk.
+  theme: { active: DEFAULT_THEME_ID },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   djPrompt: '',
   // The persona roster. One persona is "active" at a time (activePersonaId);
@@ -605,6 +612,16 @@ export async function load() {
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
         : DEFAULTS.station,
+    theme: {
+      // We only validate the *shape* here. The active id might reference a
+      // theme file that's since been removed; the public /themes endpoint
+      // and getTheme() both fall back to the default id when that happens, so
+      // a stale id doesn't break the UI.
+      active:
+        typeof stored.theme?.active === 'string' && stored.theme.active.trim()
+          ? stored.theme.active.trim()
+          : DEFAULTS.theme.active,
+    },
     personas,
     activePersonaId,
     shows,
@@ -1156,6 +1173,17 @@ export async function update(patch) {
     } else {
       if (v.length > 80) throw new Error('station name must be 80 chars or fewer');
       next.station = v;
+    }
+  }
+  if ('theme' in patch) {
+    const t = patch.theme || {};
+    if (t.active !== undefined) {
+      const v = String(t.active ?? '').trim();
+      if (!v) throw new Error('theme.active must be a theme id');
+      if (!(await isValidThemeId(v))) {
+        throw new Error(`theme.active "${v}" is not a known theme id`);
+      }
+      next.theme.active = v;
     }
   }
   if ('djPrompt' in patch) {

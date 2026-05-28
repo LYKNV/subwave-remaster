@@ -9,7 +9,6 @@ import {
   CommandItem,
 } from './ui/command';
 import { Kbd } from './ui/kbd';
-import type { ThemeMode } from '@/lib/types';
 
 export type PlayerDrawer = 'timeline' | 'booth' | 'request';
 
@@ -18,11 +17,9 @@ export interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void;
   container: HTMLElement | null;
   tunedIn: boolean;
-  theme: ThemeMode | 'light' | 'dark';
   muted: boolean;
   onTune: () => void;
   onOpenDrawer: (kind: PlayerDrawer) => void;
-  onToggleTheme: () => void;
   onToggleMute: () => void;
   onShowShortcuts: () => void;
 }
@@ -41,11 +38,9 @@ export default function CommandPalette({
   onOpenChange,
   container,
   tunedIn,
-  theme,
   muted,
   onTune,
   onOpenDrawer,
-  onToggleTheme,
   onToggleMute,
   onShowShortcuts,
 }: CommandPaletteProps) {
@@ -59,11 +54,6 @@ export default function CommandPalette({
     { label: 'Open Timeline', hint: '1', onSelect: run(() => onOpenDrawer('timeline')) },
     { label: 'Open Booth feed', hint: '2', onSelect: run(() => onOpenDrawer('booth')) },
     { label: 'Make a request', hint: '3', onSelect: run(() => onOpenDrawer('request')) },
-    {
-      label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
-      hint: 'T',
-      onSelect: run(onToggleTheme),
-    },
     { label: muted ? 'Unmute' : 'Mute', hint: 'M', onSelect: run(onToggleMute) },
     { label: 'Keyboard shortcuts', hint: '?', onSelect: run(onShowShortcuts) },
   ];

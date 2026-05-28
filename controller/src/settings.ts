@@ -242,7 +242,7 @@ const DEFAULTS = {
   // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
   // mono in a future change) also helps for operators who want the tape.
   archive: { enabled: true, bitrate: 128 },
-  weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton' },
+  weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
   // still called SUB/WAVE — this is what the operator's station running on it
@@ -599,6 +599,10 @@ export async function load() {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
       locationName: stored.weather?.locationName ?? DEFAULTS.weather.locationName,
+      units:
+        stored.weather?.units === 'imperial' || stored.weather?.units === 'metric'
+          ? stored.weather.units
+          : DEFAULTS.weather.units,
     },
     djPrompt,
     station:
@@ -1147,6 +1151,12 @@ export async function update(patch) {
     }
     if (typeof w.locationName === 'string' && w.locationName.trim()) {
       next.weather.locationName = w.locationName.trim().slice(0, 80);
+    }
+    if (w.units !== undefined) {
+      if (w.units !== 'metric' && w.units !== 'imperial') {
+        throw new Error("weather.units must be 'metric' or 'imperial'");
+      }
+      next.weather.units = w.units;
     }
   }
   if ('station' in patch) {

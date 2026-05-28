@@ -120,8 +120,12 @@ router.post('/settings', requireAdmin, async (req, res) => {
       config.weather.lat = result.saved.weather.lat;
       config.weather.lng = result.saved.weather.lng;
       config.weather.locationName = result.saved.weather.locationName;
+      config.weather.units = result.saved.weather.units;
       invalidateWeatherCache();
-      queue.log('scheduler', `weather location → ${result.saved.weather.locationName}`);
+      queue.log(
+        'scheduler',
+        `weather location → ${result.saved.weather.locationName} (${result.saved.weather.units})`,
+      );
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);

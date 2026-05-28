@@ -139,7 +139,7 @@ export function buildContextLines(context: any, { recentTracks }: { recentTracks
   }
   if (context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
   if (context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
-    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°C` : ''}`);
+    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
   }
   if (context?.festival) lines.push(`Festival: ${context.festival.name}`);
   if (context?.activeShow) {

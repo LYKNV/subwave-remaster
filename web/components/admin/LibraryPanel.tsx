@@ -10,7 +10,7 @@
 //
 // Each row supports `Queue` (push to the live queue) and, where applicable,
 // `Retag` / `Tag` (single-track LLM classification via /library/retag).
-// A sticky tagger strip at the bottom owns the background batch job.
+// A tagger strip below the header owns the background batch job.
 
 import type { ChangeEvent, FormEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -90,7 +90,7 @@ export default function LibraryPanel() {
   const ready = hydrated && !needsAuth;
 
   // shared state
-  const [tab, setTab] = useState<Tab>('browse');
+  const [tab, setTab] = useState<Tab>('recent');
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [tagger, setTagger] = useState<TaggerState | null>(null);
   const [taggerLimit, setTaggerLimit] = useState('500');
@@ -394,8 +394,18 @@ export default function LibraryPanel() {
     recentLoading;
 
   return (
-    <div className="grid gap-4 pb-24">
+    <div className="grid gap-4">
       <KpiStrip coverage={coverage} stats={stats} />
+
+      <TaggerStrip
+        coverage={coverage}
+        tagger={tagger}
+        limit={taggerLimit}
+        setLimit={setTaggerLimit}
+        busy={taggerBusy}
+        onStart={startTagger}
+        onStop={stopTagger}
+      />
 
       <div className="stack-mobile grid grid-cols-[260px_1fr] items-start gap-4">
         <aside className="grid gap-4">
@@ -422,7 +432,7 @@ export default function LibraryPanel() {
             <Card title="About this view" bodyClass="!py-3">
               <div className="text-[11px] leading-[1.5] text-muted">
                 {tab === 'search' && 'Free-text search against Navidrome — best for finding a specific track to queue right now.'}
-                {tab === 'untagged' && 'Tracks that don\'t yet have moods/energy classified. Tag them one at a time, or kick off the bulk tagger at the bottom of the page.'}
+                {tab === 'untagged' && 'Tracks that don\'t yet have moods/energy classified. Tag them one at a time, or kick off the bulk tagger at the top of the page.'}
                 {tab === 'recent' && 'The newest tracks added to your Navidrome library.'}
               </div>
             </Card>
@@ -523,16 +533,6 @@ export default function LibraryPanel() {
           )}
         </div>
       </div>
-
-      <TaggerStrip
-        coverage={coverage}
-        tagger={tagger}
-        limit={taggerLimit}
-        setLimit={setTaggerLimit}
-        busy={taggerBusy}
-        onStart={startTagger}
-        onStop={stopTagger}
-      />
     </div>
   );
 }
@@ -590,10 +590,10 @@ function KpiStrip({ coverage, stats }: {
 // ---------------------------------------------------------------------------
 function TabRail({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   const items: { id: Tab; label: string; hint: string }[] = [
+    { id: 'recent', label: 'Recently added', hint: '' },
     { id: 'browse', label: 'Browse', hint: 'tagged' },
     { id: 'search', label: 'Search', hint: 'navidrome' },
     { id: 'untagged', label: 'Untagged', hint: 'needs tags' },
-    { id: 'recent', label: 'Recently added', hint: '' },
   ];
   return (
     <Card bodyClass="!p-0">
@@ -849,7 +849,7 @@ function TaggerStrip(p: TaggerStripProps) {
   useDynamicStyle(fillRef, { width: pct != null ? `${Math.min(100, pct)}%` : null });
 
   return (
-    <div className="sticky bottom-3 z-30">
+    <div>
       <section className="card border-ink shadow-[0_4px_24px_rgba(0,0,0,0.18)]">
         <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-3 p-3">
           <div className="grid gap-1.5">

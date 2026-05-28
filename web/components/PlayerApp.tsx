@@ -22,7 +22,6 @@ import { useStationFeed } from '@/hooks/useStationFeed';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useMediaSession } from '@/hooks/useMediaSession';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { getStoredTheme, setTheme as persistTheme } from '@/lib/theme';
 import { cn } from '@/lib/cn';
 import type { RequestResult } from '@/lib/types';
 
@@ -92,7 +91,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [drawer, setDrawer] = useState<PlayerDrawer | null>(null);
   const [tickerOn, setTickerOn] = useState(true);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
@@ -127,27 +125,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     } catch {}
   }, []);
 
-  // Resolve the *applied* theme for the toggle icon. If the user has never
-  // chosen manually, `getStoredTheme()` returns 'system' and we fall through
-  // to prefers-color-scheme. Persisting via setTheme() commits to a manual
-  // mode (writes to localStorage + sets <html data-theme>).
-  useEffect(() => {
-    const stored = getStoredTheme();
-    if (stored === 'light' || stored === 'dark') {
-      setTheme(stored);
-      return;
-    }
-    const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-    setTheme(prefersDark ? 'dark' : 'light');
-  }, []);
-  const toggleTheme = () => {
-    setTheme(t => {
-      const next = t === 'dark' ? 'light' : 'dark';
-      persistTheme(next);
-      return next;
-    });
-  };
-
   // Tune toggle for shortcuts/palette — also dismisses the first-paint gate,
   // so Space behaves like tapping the overlay before the listener has tuned in.
   const handleTune = () => {
@@ -173,7 +150,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
       arrowup: () => adjustVolume(0.05),
       arrowdown: () => adjustVolume(-0.05),
       m: toggleMute,
-      t: toggleTheme,
       '1': () => setDrawer('timeline'),
       '2': () => setDrawer('booth'),
       '3': () => setDrawer('request'),
@@ -234,8 +210,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         djName={typeof dj?.name === 'string' ? dj.name : undefined}
         activeShow={activeShow}
         listeners={listeners}
-        theme={theme}
-        onToggleTheme={toggleTheme}
         onOpenSchedule={() => setDrawer('schedule')}
       />
 
@@ -310,11 +284,9 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         onOpenChange={setPaletteOpen}
         container={portalNode}
         tunedIn={tunedIn}
-        theme={theme}
         muted={muted}
         onTune={handleTune}
         onOpenDrawer={setDrawer}
-        onToggleTheme={toggleTheme}
         onToggleMute={toggleMute}
         onShowShortcuts={() => setShortcutsOpen(true)}
       />

@@ -11,6 +11,7 @@ import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
+import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
 
 export const router = express.Router();
 
@@ -247,10 +248,54 @@ router.get('/schedule', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/state', (req, res) => {
   const snap = queue.snapshot();
-  // `needsSetup` is what the landing page and admin shell key off to redirect
-  // a fresh operator into the wizard. Sync read — relies on the boot-time
-  // config overlay being already applied (or falls back to env-only check).
-  res.json({ ...snap, needsSetup: getSetupStatusSync().needsSetup });
+  // `theme.active` rides along with /state — gives polling clients a cheap
+  // heads-up that the effective theme has changed without re-fetching the
+  // full token map from /themes. Per-show theme overrides win over the
+  // station-wide default while a show is on air.
+  const s = settings.get();
+  const activeShow = settings.resolveActiveShow();
+  const activeThemeId =
+    (activeShow?.themeId && activeShow.themeId) || s?.theme?.active || DEFAULT_THEME_ID;
+  res.json({
+    ...snap,
+    needsSetup: getSetupStatusSync().needsSetup,
+    theme: { active: activeThemeId },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /themes — public theme registry. Returns the active theme id plus the
+// full list of built-in and user themes (token maps included). Listener web
+// shells fetch this once on mount and again whenever /state reports a new
+// active id; the result is cached in browser localStorage for pre-paint apply
+// on the next visit.
+//
+// `active` reflects the *effective* theme: the on-air show's themeId override
+// if it's set and still resolves to a known theme, otherwise the station
+// default. ThemeBootstrap doesn't have to know about shows — it just applies
+// whatever id comes back.
+//
+// POST /themes/refresh — admin-gated. Clears the user-themes cache so files
+// freshly dropped into ${STATE_DIR}/themes/ appear in the next /themes read
+// without bouncing the controller.
+// ---------------------------------------------------------------------------
+router.get('/themes', async (req, res) => {
+  try {
+    const s = settings.get();
+    const themes = await listThemes();
+    const stationDefault = s?.theme?.active || DEFAULT_THEME_ID;
+    const activeShow = settings.resolveActiveShow();
+    // Show override wins only if it still resolves to a known theme. A stale
+    // override (operator deleted the file under our feet) silently falls back
+    // to the station default — same fallback strategy as getTheme().
+    const active =
+      activeShow?.themeId && themes.some(t => t.id === activeShow.themeId)
+        ? activeShow.themeId
+        : stationDefault;
+    res.json({ active, themes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

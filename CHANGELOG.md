@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/perminder-klair/subwave/compare/v0.2.0...v0.3.0) (2026-05-31)
+
+
+### Features
+
+* **web:** add news "Dispatches" page with markdown articles ([#223](https://github.com/perminder-klair/subwave/issues/223)) ([4a221f0](https://github.com/perminder-klair/subwave/commit/4a221f085d40a0de88617116f6898ff79925659b))
+
+
+### Bug Fixes
+
+* **broadcast:** fatten Icecast burst + queue buffers to cut mobile stalls ([#224](https://github.com/perminder-klair/subwave/issues/224)) ([e421fe4](https://github.com/perminder-klair/subwave/commit/e421fe433f761b8725033babee489817abf86144))
+
 ## [0.2.0](https://github.com/perminder-klair/subwave/compare/v0.1.30...v0.2.0) (2026-05-31)
 
 

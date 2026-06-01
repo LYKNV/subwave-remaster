@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.0](https://github.com/perminder-klair/subwave/compare/v0.4.0...v0.5.0) (2026-06-01)
+
+
+### Features
+
+* **broadcast:** make the Opus mount optional + graceful client fallback ([#236](https://github.com/perminder-klair/subwave/issues/236)) ([a763c52](https://github.com/perminder-klair/subwave/commit/a763c52c7f66a8e9bf13ec78fdc76d3ff900a145))
+* **web:** add Re-seed embeddings button to admin Library tab ([#239](https://github.com/perminder-klair/subwave/issues/239)) ([710fd30](https://github.com/perminder-klair/subwave/commit/710fd30484bbcb75b6cd7972d23087f1903a21d9)), closes [#237](https://github.com/perminder-klair/subwave/issues/237)
+* **web:** show 'engine off' on acoustic analysis meter when no DSP backend ([#235](https://github.com/perminder-klair/subwave/issues/235)) ([9751fc5](https://github.com/perminder-klair/subwave/commit/9751fc52412365c7e43a9542956b3af1925bc0ce))
+
+
+### Bug Fixes
+
+* **cli:** point TUI download at a real release tag ([#242](https://github.com/perminder-klair/subwave/issues/242)) ([67e4c68](https://github.com/perminder-klair/subwave/commit/67e4c68db00c1541c37306b4a8ff813145ff475b))
+* **tts:** make PocketTTS voice cloning work + surface when it can't ([#238](https://github.com/perminder-klair/subwave/issues/238)) ([#240](https://github.com/perminder-klair/subwave/issues/240)) ([2ebbec8](https://github.com/perminder-klair/subwave/commit/2ebbec8c9ff0b2c1789d52545ec7707dcb31e559))
+* **web:** order news newest-first with human-friendly dates ([#241](https://github.com/perminder-klair/subwave/issues/241)) ([9a62423](https://github.com/perminder-klair/subwave/commit/9a6242350922ad876f0532cb883688e2be11be76))
+
+
+### Documentation
+
+* **claude:** trim CLAUDE.md under the 40k perf threshold ([#243](https://github.com/perminder-klair/subwave/issues/243)) ([79869a2](https://github.com/perminder-klair/subwave/commit/79869a238b72aedfccd1124a65a6f6890cc1c153))
+
 ## [0.4.0](https://github.com/perminder-klair/subwave/compare/v0.3.0...v0.4.0) (2026-06-01)
 
 

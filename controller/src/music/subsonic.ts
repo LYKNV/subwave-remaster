@@ -287,6 +287,13 @@ export function getStreamUrl(songId) {
   return `subhttp:${buildUrl('stream', { id: songId, format: 'raw' })}`;
 }
 
+// Plain HTTP stream URL (no `subhttp:` prefix) with auth baked into the query
+// string — for the analysis worker, which fetches the original bytes with
+// urllib and decodes the first chunk. `format=raw` avoids a transcode hop.
+export function getRawStreamUrl(songId: string): string {
+  return buildUrl('stream', { id: songId, format: 'raw' });
+}
+
 // Returns the local file path if Navidrome and the controller share the music
 // volume — much more efficient than streaming over HTTP for the radio.
 // Set MUSIC_LIBRARY_PATH to mount your library inside the controller container.
@@ -315,5 +322,12 @@ export function getAnnotatedUri(song) {
   ];
   if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
   if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);
+  // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
+  // (seconds) on the track when the persona is in DJ mode and both tracks are
+  // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
+  // blend for this transition (radio.liq dj_transition reads the same key for
+  // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
+  // crossfade_duration(), i.e. today's behaviour.
+  if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

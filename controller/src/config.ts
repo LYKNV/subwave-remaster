@@ -62,6 +62,19 @@ export const config = {
     outDir: process.env.PIPER_OUT || `${STATE_DIR}/voice`,
     speed: parseFloat(process.env.PIPER_SPEED || TTS_SPEED),
   },
+  // Acoustic analysis (bpm/key/intro) — runs librosa, which deliberately does
+  // NOT live in the controller image. Two backends, resolved in music/
+  // analyzer.ts: the tts-heavy sidecar (production) or a local Python venv
+  // (offline/dev — set ANALYZE_PYTHON to a venv with librosa installed). When
+  // neither is reachable the analysis phase skips cleanly.
+  analyzer: {
+    python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
+    workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
+    // 60s is enough for stable BPM (beat_track) / key (chroma); intro
+    // detection only needs the first ~20-30s. Env-overridable.
+    seconds: parseFloat(process.env.ANALYZE_SECONDS || '60'),
+    requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
+  },
   kokoro: {
     python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',
     workerScript: process.env.KOKORO_WORKER || '/app/scripts/kokoro_worker.py',

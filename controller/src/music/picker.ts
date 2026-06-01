@@ -9,6 +9,7 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import { bpmCompat, keyCompat } from './mix.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -39,6 +40,40 @@ function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
+// --- Tempo / harmonic compatibility (Stage B, soft re-rank only) -----------
+// These bias the pool ordering toward smoother transitions; they are NEVER a
+// hard filter, and a track with NULL bpm/key contributes a 0 bonus (so it
+// keeps its random position). An entirely un-analysed library therefore ranks
+// exactly as a plain shuffle — today's behaviour.
+
+// Pull bpm/musical_key for a candidate, from the candidate itself (library
+// sources carry it via slimTrack) or a library lookup (Subsonic sources).
+function analysisFor(t: any): { bpm: number | null; key: string | null } {
+  if (t && (t.bpm != null || t.musicalKey != null)) {
+    return { bpm: t.bpm ?? null, key: t.musicalKey ?? null };
+  }
+  const rec = t?.id ? library.get(t.id) : null;
+  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+}
+
+// bpmCompat / keyCompat now live in ./mix.js (single source of truth, shared
+// with the DJ-mix transition features); imported above.
+
+// Order the pool by a random base nudged up for tempo/harmonic compatibility
+// with the current track. Random stays dominant so the pool keeps its variety
+// and a NULL-analysis pool is indistinguishable from shuffle().
+function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null }): any[] {
+  if (current.bpm == null && current.key == null) return shuffle(pool);
+  return pool
+    .map((t: any) => {
+      const a = analysisFor(t);
+      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.key, a.key);
+      return { t, score: Math.random() + bonus };
+    })
+    .sort((x, y) => y.score - x.score)
+    .map((s) => s.t);
+}
+
 function notRecent(recentIds: Set<string>) {
   return (t: any) => t && t.id && !recentIds.has(t.id);
 }
@@ -56,7 +91,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -184,7 +219,18 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const MAX_PER_ARTIST = 3;
   const seen = new Set<string>();
   const perArtist = new Map<string, number>();
-  const final = shuffle(pool)
+  // Soft tempo/harmonic re-rank toward the current track BEFORE the cap, so
+  // compatible tracks are likelier to survive the slice — never a hard filter,
+  // and a no-op (pure shuffle) when the current track or the pool is
+  // un-analysed. The dedup / artist-cap / recent-artist filter below is
+  // unchanged; it just walks a differently-ordered list.
+  // A DJ-mode mini-run (broadcast/dj-agent.ts) overrides the re-rank anchor
+  // with a deliberate tempo/key target so the pool drifts toward the run's
+  // journey rather than just hugging the current track. Falls back to the
+  // current track's own analysis when no run is active.
+  const curAnalysis = rankTarget
+    || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
+  const final = softRankByCompat(pool, curAnalysis)
     .filter((t: any) => {
       if (!t.id || seen.has(t.id)) return false;
       const artistKey = (t.artist || '').toLowerCase().trim();
@@ -228,13 +274,13 @@ function summariseRecent(queue: any) {
 // { song, reason, source } or null. Used by broadcast/dj-agent.js.
 // ---------------------------------------------------------------------------
 
-export async function pickViaPool(queue, ctx) {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null) {
   // Match the agent picker's window (dj-agent.pickViaAgent) — 12h. Anything
   // shorter and the fallback could pick a track the agent would have rejected.
   const recentIds = queue.recentlyPlayedIds(12);
   const recentArtists = queue.recentArtistsSince(2);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack);
+  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -253,17 +299,24 @@ export async function pickViaPool(queue, ctx) {
   let pickRaw;
   try {
     pickRaw = await dj.pickNextTrack({
-      candidates: candidates.map(c => ({
-        id: c.id,
-        title: c.title,
-        artist: c.artist,
-        album: c.album || null,
-        year: c.year || null,
-        genre: c.genre || null,
-        moods: c.moods || [],
-        energy: c.energy || null,
-        source: c._source || null,
-      })),
+      candidates: candidates.map(c => {
+        const a = analysisFor(c);
+        return {
+          id: c.id,
+          title: c.title,
+          artist: c.artist,
+          album: c.album || null,
+          year: c.year || null,
+          genre: c.genre || null,
+          moods: c.moods || [],
+          energy: c.energy || null,
+          // Measured acoustic facts — omitted (undefined) when un-analysed so
+          // the LLM only sees them when they're real.
+          bpm: a.bpm ?? undefined,
+          key: a.key ?? undefined,
+          source: c._source || null,
+        };
+      }),
       recentPlays,
       context: ctx,
     });

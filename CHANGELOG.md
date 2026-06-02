@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.0](https://github.com/perminder-klair/subwave/compare/v0.6.0...v0.7.0) (2026-06-02)
+
+
+### Features
+
+* **web:** add 'The Stack' landing section on swappable LLMs, TTS & voice cloning ([#260](https://github.com/perminder-klair/subwave/issues/260)) ([f4c94d1](https://github.com/perminder-klair/subwave/commit/f4c94d14d991227b58ae5bbbfa309fd312a5ab4f))
+* **web:** add payload & recipe examples to the webhooks admin page ([#266](https://github.com/perminder-klair/subwave/issues/266)) ([106a23c](https://github.com/perminder-klair/subwave/commit/106a23c29d2f776e7edc4e85aa9e41a71be46031))
+* **web:** make admin header Listen button open /listen in a new tab ([#263](https://github.com/perminder-klair/subwave/issues/263)) ([0efd06b](https://github.com/perminder-klair/subwave/commit/0efd06bc7bf0bc967cf4e6fe8149e988a749b7fd))
+* **web:** punch up landing feature strip with real capabilities ([#258](https://github.com/perminder-klair/subwave/issues/258)) ([ead5450](https://github.com/perminder-klair/subwave/commit/ead54503d420bd3caf1644e6cf0b79e60d715d84))
+* **web:** render admin/debug DJ context as a human-friendly summary ([#265](https://github.com/perminder-klair/subwave/issues/265)) ([aaf462f](https://github.com/perminder-klair/subwave/commit/aaf462f0a3b501f17dc831006bc52ce28f5a6b55))
+
+
+### Bug Fixes
+
+* **controller:** give picker agent the current track id so similarSongs/tracksLikeThis stop failing ([#267](https://github.com/perminder-klair/subwave/issues/267)) ([d33cd6e](https://github.com/perminder-klair/subwave/commit/d33cd6ef9e1fbea119381638711253aebabfd772))
+* **controller:** stop DJ tools returning empty for titles & vibe queries ([#268](https://github.com/perminder-klair/subwave/issues/268)) ([2411337](https://github.com/perminder-klair/subwave/commit/24113372af09d105a281c92c6527aadb54ff78ba))
+* **docker:** retry controller model/binary downloads to survive transient HF/GitHub 5xx ([#257](https://github.com/perminder-klair/subwave/issues/257)) ([db66817](https://github.com/perminder-klair/subwave/commit/db6681708b787f231b8c292fc1c66d64ac695ac2))
+* **web:** authenticate admin archive downloads ([#264](https://github.com/perminder-klair/subwave/issues/264)) ([683ff1d](https://github.com/perminder-klair/subwave/commit/683ff1de8b7a24fe0e95b2ca60d5e742f6367a52))
+* **web:** keep masthead nav on one row on mobile ([#261](https://github.com/perminder-klair/subwave/issues/261)) ([0f130e2](https://github.com/perminder-klair/subwave/commit/0f130e286b4555faca1ce77a77fddf3dee0c69cc))
+
 ## [0.6.0](https://github.com/perminder-klair/subwave/compare/v0.5.0...v0.6.0) (2026-06-02)
 
 

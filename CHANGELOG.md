@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0](https://github.com/perminder-klair/subwave/compare/v0.5.0...v0.6.0) (2026-06-02)
+
+
+### Features
+
+* **web:** Fraunces player wordmark + article-head CTAs ([#254](https://github.com/perminder-klair/subwave/issues/254)) ([d075bdd](https://github.com/perminder-klair/subwave/commit/d075bdd05b9e21ffe0674ea78c610ec13ae79d15))
+* **web:** full library re-scan + advanced passes in admin ([#248](https://github.com/perminder-klair/subwave/issues/248)) ([830327f](https://github.com/perminder-klair/subwave/commit/830327f45d2d1ae094abe7cd670452272acc6f70))
+* **web:** refine player header, track meta, and DJ booth text ([#249](https://github.com/perminder-klair/subwave/issues/249)) ([9cfd947](https://github.com/perminder-klair/subwave/commit/9cfd9478cf352603c9c6bb1cadf0cdb022d4171c))
+* **web:** switch type to Fraunces + Plus Jakarta Sans for a softer, premium feel ([#252](https://github.com/perminder-klair/subwave/issues/252)) ([1be1f9d](https://github.com/perminder-klair/subwave/commit/1be1f9d2ce1548133323f2fefc7c2fb4e6e99e58))
+
+
+### Bug Fixes
+
+* **web:** make all public pages SEO-friendly ([#251](https://github.com/perminder-klair/subwave/issues/251)) ([9afbdab](https://github.com/perminder-klair/subwave/commit/9afbdabf6eec4b3d829f7e0ed9dceea43902465a))
+
+
+### Documentation
+
+* **web:** remove Architecture section from README ([#253](https://github.com/perminder-klair/subwave/issues/253)) ([76461bd](https://github.com/perminder-klair/subwave/commit/76461bd2ae998771aa0a559d96745a58837fcfde))
+
 ## [0.5.0](https://github.com/perminder-klair/subwave/compare/v0.4.0...v0.5.0) (2026-06-01)
 
 

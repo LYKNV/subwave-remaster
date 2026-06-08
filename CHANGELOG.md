@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.12.0](https://github.com/perminder-klair/subwave/compare/v0.11.0...v0.12.0) (2026-06-08)
+
+
+### Features
+
+* **llm:** primary→fallback LLM with automatic failover ([#326](https://github.com/perminder-klair/subwave/issues/326)) ([27f6521](https://github.com/perminder-klair/subwave/commit/27f6521db57d1e5088940a25728324779be0d744))
+* **stations:** add RoboRadio + The Ninth House ([#321](https://github.com/perminder-klair/subwave/issues/321), [#322](https://github.com/perminder-klair/subwave/issues/322)) ([#324](https://github.com/perminder-klair/subwave/issues/324)) ([3226cd2](https://github.com/perminder-klair/subwave/commit/3226cd2497c3a8df5711b9ddb51c1a66c6f78c52))
+* **web:** live listener connections table in admin ([#318](https://github.com/perminder-klair/subwave/issues/318)) ([#328](https://github.com/perminder-klair/subwave/issues/328)) ([06326a9](https://github.com/perminder-klair/subwave/commit/06326a9f93e425e844a23e39b09babb8f41bc73b))
+
+
+### Bug Fixes
+
+* **controller:** probe-based embedding dim + clearer preflight errors ([#319](https://github.com/perminder-klair/subwave/issues/319)) ([#327](https://github.com/perminder-klair/subwave/issues/327)) ([fb789ba](https://github.com/perminder-klair/subwave/commit/fb789baf71ea6b8ba9e1e7de583fce40a1dd38a8))
+* **controller:** salvage failed tag batches + prune orphaned library rows ([#323](https://github.com/perminder-klair/subwave/issues/323)) ([#325](https://github.com/perminder-klair/subwave/issues/325)) ([648d3bb](https://github.com/perminder-klair/subwave/commit/648d3bb9e3189d03ca4ed5876c43204c5f82f336))
+
 ## [0.11.0](https://github.com/perminder-klair/subwave/compare/v0.10.0...v0.11.0) (2026-06-06)
 
 

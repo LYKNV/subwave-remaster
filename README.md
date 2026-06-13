@@ -37,6 +37,12 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 | <img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"> | <img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"> |
 | **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
 
+**The Library Observatory.** A data-art map of every track the DJ has tagged, placed by genre and lit by energy. Click a point for its full dossier: BPM, key, mood, embeddings, and nearest neighbours. Open it at `/observatory`.
+
+<img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the full map of the tagged library with stat panels" width="640">
+
+<img src="web/public/screenshots/observatory-track.webp" alt="Library Observatory — a single track dossier" width="280">
+
 ## Features
 
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
@@ -54,6 +60,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Hourly archives.** Every hour saved as MP3 for later replay.
 - **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
 - **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
+- **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.
 - **MCP server.** External agents (Claude Desktop, Cursor, etc.) can request songs and drive the DJ.
 - **Self-hosted.** One `docker compose up -d` on a single Linux host. Optional Cloudflare in front for TLS.
 

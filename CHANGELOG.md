@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/perminder-klair/subwave/compare/v0.17.0...v0.18.0) (2026-06-14)
+
+
+### Features
+
+* **tts-heavy:** bake CLAP + Demucs into the published image ([#393](https://github.com/perminder-klair/subwave/issues/393)) ([#395](https://github.com/perminder-klair/subwave/issues/395)) ([22f3dc8](https://github.com/perminder-klair/subwave/commit/22f3dc8f6a7ca256fdfb9b05100e348713478bba))
+
 ## [0.17.0](https://github.com/perminder-klair/subwave/compare/v0.16.0...v0.17.0) (2026-06-14)
 
 

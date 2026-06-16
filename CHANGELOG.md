@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.19.0](https://github.com/perminder-klair/subwave/compare/v0.18.0...v0.19.0) (2026-06-16)
+
+
+### Features
+
+* **admin:** add Manual link to bottom of admin sidebar ([#408](https://github.com/perminder-klair/subwave/issues/408)) ([1b7b9d1](https://github.com/perminder-klair/subwave/commit/1b7b9d13f5227b358d5ae4e257c457e24df60f74))
+* **admin:** backup/restore station config + tag DB to a zip ([#410](https://github.com/perminder-klair/subwave/issues/410)) ([26b2ca0](https://github.com/perminder-klair/subwave/commit/26b2ca0142bc6d373fdc3b5b41ad645b37f923cf))
+* **player:** show per-track genre/BPM/key/mood strip in now-playing ([#401](https://github.com/perminder-klair/subwave/issues/401)) ([bfbe763](https://github.com/perminder-klair/subwave/commit/bfbe7632eb2c7f67295773c02e1760cf29882cdd))
+
+
+### Bug Fixes
+
+* **broadcast:** bump MP3 stream 128 → 192 kbps ([#406](https://github.com/perminder-klair/subwave/issues/406)) ([6b2260a](https://github.com/perminder-klair/subwave/commit/6b2260a306cc44d2fdbd9ed7776a64f8cbd69259))
+* **controller:** fuzzy-resolve requested artists + log near-misses ([#403](https://github.com/perminder-klair/subwave/issues/403)) ([6cacc02](https://github.com/perminder-klair/subwave/commit/6cacc029ccfb23cf01f41995d35d67f9b3912ef7))
+* **llm:** reliable DJ picker across providers — native-first output, thinking-safe forced tools, SDK bump ([#407](https://github.com/perminder-klair/subwave/issues/407)) ([fcf94b0](https://github.com/perminder-klair/subwave/commit/fcf94b0100538d69d365fb5d2d59ceeba9a89d78))
+* **release:** bump embedded CLI_VERSION via release-please generic updater ([#400](https://github.com/perminder-klair/subwave/issues/400)) ([0a5c51e](https://github.com/perminder-klair/subwave/commit/0a5c51e8419505bf1677b983afa76867665ce47d))
+
+
+### Documentation
+
+* **readme:** embed showreel video ([#409](https://github.com/perminder-klair/subwave/issues/409)) ([5ce070c](https://github.com/perminder-klair/subwave/commit/5ce070cefe5be689080e419003e9731060bfb678))
+
 ## [0.18.0](https://github.com/perminder-klair/subwave/compare/v0.17.0...v0.18.0) (2026-06-14)
 
 

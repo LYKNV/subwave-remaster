@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.20.0](https://github.com/perminder-klair/subwave/compare/v0.19.0...v0.20.0) (2026-06-17)
+
+
+### Features
+
+* **admin:** fold Archives/Webhooks/Backup into Settings + tighten app links ([#420](https://github.com/perminder-klair/subwave/issues/420)) ([92695df](https://github.com/perminder-klair/subwave/commit/92695df82de73272103e7a057454a7f7f91f46af))
+
+
+### Bug Fixes
+
+* **ui:** render on-air timestamps in the station timezone, not the viewer's ([#418](https://github.com/perminder-klair/subwave/issues/418)) ([#421](https://github.com/perminder-klair/subwave/issues/421)) ([bbb6081](https://github.com/perminder-klair/subwave/commit/bbb6081768111e65938f46772110770dae59bf5d))
+
+
+### Refactors
+
+* **llm:** split sdk.ts into internal/** modules with data-driven provider capabilities ([#414](https://github.com/perminder-klair/subwave/issues/414)) ([3fba6bf](https://github.com/perminder-klair/subwave/commit/3fba6bf9591627da24011be1c869212874c1ba3f))
+
 ## [0.19.0](https://github.com/perminder-klair/subwave/compare/v0.18.0...v0.19.0) (2026-06-16)
 
 

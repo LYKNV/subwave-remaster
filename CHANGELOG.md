@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.21.0](https://github.com/perminder-klair/subwave/compare/v0.20.0...v0.21.0) (2026-06-18)
+
+
+### Features
+
+* **admin:** add "Reconcile with Navidrome" to prune deleted tracks from the library ([#424](https://github.com/perminder-klair/subwave/issues/424)) ([fe50bd4](https://github.com/perminder-klair/subwave/commit/fe50bd4b5419570905cb2927d4071654a22ab9fb))
+* **admin:** enrich Stats page — listener trend chart, cost, request analytics ([#427](https://github.com/perminder-klair/subwave/issues/427)) ([0652d78](https://github.com/perminder-klair/subwave/commit/0652d7841b5735247fcac9515fec9035dcf4257f))
+* **dj:** cover 'latest song' + 'more like this' requests ([#428](https://github.com/perminder-klair/subwave/issues/428)) ([e418c30](https://github.com/perminder-klair/subwave/commit/e418c30d139de41d241cd7b47411ba5b2a7b1edc))
+* **dj:** resolve described track requests via web search (request agent only) ([#425](https://github.com/perminder-klair/subwave/issues/425)) ([a9714dd](https://github.com/perminder-klair/subwave/commit/a9714ddf7cb70696f6f08bccaecc5c1ef800c477))
+* **llm:** first-class locca provider + constrained pool picks ([#429](https://github.com/perminder-klair/subwave/issues/429)) ([9765425](https://github.com/perminder-klair/subwave/commit/9765425f41f1415a7c70964d6a2db7d11c181115))
+
+
+### Refactors
+
+* **admin:** slim Stats page — drop duplicate KPI strip + cost displays ([#431](https://github.com/perminder-klair/subwave/issues/431)) ([da3dab2](https://github.com/perminder-klair/subwave/commit/da3dab29bd00001bf71dc28382ed1b9cffa58621))
+
 ## [0.20.0](https://github.com/perminder-klair/subwave/compare/v0.19.0...v0.20.0) (2026-06-17)
 
 

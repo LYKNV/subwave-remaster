@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.23.0](https://github.com/perminder-klair/subwave/compare/v0.22.0...v0.23.0) (2026-06-19)
+
+
+### Features
+
+* **player:** show cumulative LLM token count by the now-playing time ([#449](https://github.com/perminder-klair/subwave/issues/449)) ([b222b79](https://github.com/perminder-klair/subwave/commit/b222b7998a5c97944ebabc376af84e76475d458a))
+
+
+### Bug Fixes
+
+* **library:** show real tag status in Recently-added & Search tabs ([#448](https://github.com/perminder-klair/subwave/issues/448)) ([a9b313b](https://github.com/perminder-klair/subwave/commit/a9b313b5cba86b96d56e12089e7cc05e9bb42402))
+* **listeners:** count distinct listeners behind a reverse proxy ([#445](https://github.com/perminder-klair/subwave/issues/445)) ([a16f641](https://github.com/perminder-klair/subwave/commit/a16f641c026d773112b8ca23cf04e9274432a1cf))
+* **requests:** sanitize listener request text against prompt injection ([#446](https://github.com/perminder-klair/subwave/issues/446)) ([6a57792](https://github.com/perminder-klair/subwave/commit/6a577923f4e3286ceb2063d0cc8ddacdb958fb76))
+
 ## [0.22.0](https://github.com/perminder-klair/subwave/compare/v0.21.0...v0.22.0) (2026-06-18)
 
 

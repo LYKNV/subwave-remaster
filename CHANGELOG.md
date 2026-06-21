@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.24.0](https://github.com/perminder-klair/subwave/compare/v0.23.0...v0.24.0) (2026-06-20)
+
+
+### Features
+
+* **app:** surface Now-Playing on CarPlay & Android Auto ([#444](https://github.com/perminder-klair/subwave/issues/444)) ([59da3a4](https://github.com/perminder-klair/subwave/commit/59da3a409ec0c4ac7d5242767dd9eada308bff3e))
+* **shows:** steer per-show music by genre, decade, and energy ([#453](https://github.com/perminder-klair/subwave/issues/453)) ([422f888](https://github.com/perminder-klair/subwave/commit/422f8882930347a8a7913ad3f7ccd03a7a06896c))
+* **stats:** show audience sources (referrers, geo, sessions) on admin Stats ([#456](https://github.com/perminder-klair/subwave/issues/456)) ([7e730d1](https://github.com/perminder-klair/subwave/commit/7e730d1d2f6b831b90b621bfffbe582dfcf32ae2))
+
+
+### Bug Fixes
+
+* **requests:** honest intro/ack when requested artist isn't in the library ([#455](https://github.com/perminder-klair/subwave/issues/455)) ([1c9b188](https://github.com/perminder-klair/subwave/commit/1c9b188c87a8099c24aa39bd9aa96af30134101a))
+* **settings:** accept Kokoro voice ids under piper so seed personas save ([#454](https://github.com/perminder-klair/subwave/issues/454)) ([#457](https://github.com/perminder-klair/subwave/issues/457)) ([cd24673](https://github.com/perminder-klair/subwave/commit/cd2467332c25ef36ae22983b7103de679da9212c))
+
+
+### Documentation
+
+* music licensing disclaimer, FAQ, Terms page + private-station guide ([#452](https://github.com/perminder-klair/subwave/issues/452)) ([e2e48cf](https://github.com/perminder-klair/subwave/commit/e2e48cf917206f961b21241e005216adafc1bebd))
+
 ## [0.23.0](https://github.com/perminder-klair/subwave/compare/v0.22.0...v0.23.0) (2026-06-19)
 
 

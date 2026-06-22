@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/perminder-klair/subwave/compare/v0.26.0...v0.26.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* **build:** publish subwave-aio amd64-only (arm64 webbuild fails under QEMU) ([#503](https://github.com/perminder-klair/subwave/issues/503)) ([e06d7ff](https://github.com/perminder-klair/subwave/commit/e06d7ff65f17741862fbf9eb1f6f4725b5e0c87e))
+
 ## [0.26.0](https://github.com/perminder-klair/subwave/compare/v0.25.0...v0.26.0) (2026-06-21)
 
 

@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.27.0](https://github.com/perminder-klair/subwave/compare/v0.26.1...v0.27.0) (2026-06-23)
+
+
+### Features
+
+* **app:** diagnose connection failures and add an HTTP/HTTPS toggle in onboarding ([#458](https://github.com/perminder-klair/subwave/issues/458)) ([#527](https://github.com/perminder-klair/subwave/issues/527)) ([1762793](https://github.com/perminder-klair/subwave/commit/17627933f74e92e1face2cba4dc63171da064b5b))
+* **controller:** fetch Last.fm artist tags directly via the Last.fm API ([#514](https://github.com/perminder-klair/subwave/issues/514)) ([ba3696e](https://github.com/perminder-klair/subwave/commit/ba3696ed9ad3685de73af2750807272d9a7fc36e))
+* **controller:** persist last 10 raw LLM requests to a rolling log file ([#515](https://github.com/perminder-klair/subwave/issues/515)) ([11ccee0](https://github.com/perminder-klair/subwave/commit/11ccee0269e1b0f73ed618fca49c8829f391837a))
+* **personas:** redesign editor — rotary tone dials, LED voice meter, full-width roster ([#526](https://github.com/perminder-klair/subwave/issues/526)) ([ca5ef25](https://github.com/perminder-klair/subwave/commit/ca5ef25036d10595e294dda99f5c10cef4a64dcc))
+* **picker:** add per-show strict genre lean (hard-filter the pool, soft fallback) ([#516](https://github.com/perminder-klair/subwave/issues/516)) ([b23b8ff](https://github.com/perminder-klair/subwave/commit/b23b8ff59cd060afa762f84457facf3dca49b3b6))
+* **skills:** make traffic brief region-agnostic and sharper ([#509](https://github.com/perminder-klair/subwave/issues/509)) ([7310f5d](https://github.com/perminder-klair/subwave/commit/7310f5dbd96b8de67ea800cfc582bdf5e21319b6))
+
+
+### Bug Fixes
+
+* **admin:** de-glitch shows add/edit modal + frosted backdrop ([#519](https://github.com/perminder-klair/subwave/issues/519)) ([36f947c](https://github.com/perminder-klair/subwave/commit/36f947c0a281c268a87656284ce080903b443361))
+* **auth:** harden admin auth with timing-safe comparison and brute-force lockoutFix/admin auth timing bruteforce ([#491](https://github.com/perminder-klair/subwave/issues/491)) ([83195e5](https://github.com/perminder-klair/subwave/commit/83195e583044c7988ec54d24e456efb4010f9f13))
+* **auth:** reset brute-force counter after lockout window expires ([#517](https://github.com/perminder-klair/subwave/issues/517)) ([55f17af](https://github.com/perminder-klair/subwave/commit/55f17af46fe6805282434bcb33a6863a58abc8ca))
+* **embeddings:** support OpenRouter as an embedding provider ([#522](https://github.com/perminder-klair/subwave/issues/522)) ([#523](https://github.com/perminder-klair/subwave/issues/523)) ([403b3b8](https://github.com/perminder-klair/subwave/commit/403b3b89969e2bc56f1b632e97f84c8b04f6991b))
+* **personas:** give feedback when adding a persona ([#518](https://github.com/perminder-klair/subwave/issues/518)) ([cc899c0](https://github.com/perminder-klair/subwave/commit/cc899c0075f24119ce4c456743f136751ffedd54))
+* **unraid:** lowercase CA app name to "subwave" + broaden search terms (discoverability) ([#512](https://github.com/perminder-klair/subwave/issues/512)) ([a1d49c4](https://github.com/perminder-klair/subwave/commit/a1d49c46879956f845a3a19ce3af4f487db749d4))
+* **web:** resolve schedule "On now" in station timezone, not browser ([#510](https://github.com/perminder-klair/subwave/issues/510)) ([1033d6f](https://github.com/perminder-klair/subwave/commit/1033d6f4d3dd88a0bca880f12cc034e4ce7cfa88))
+
+
+### Documentation
+
+* **unraid:** make BYO reverse-proxy (NPM/SWAG/Traefik) guidance front-and-center ([#513](https://github.com/perminder-klair/subwave/issues/513)) ([9793302](https://github.com/perminder-klair/subwave/commit/9793302fab43061d761cc0a973b7d5e7976911e2))
+* **unraid:** mark CA listing live, humanize Overview + setup pages, add news dispatch ([#507](https://github.com/perminder-klair/subwave/issues/507)) ([9254956](https://github.com/perminder-klair/subwave/commit/9254956062dd353369f933fceb3c7b181581a00a))
+
 ## [0.26.1](https://github.com/perminder-klair/subwave/compare/v0.26.0...v0.26.1) (2026-06-22)
 
 

@@ -24,7 +24,7 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
 import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
@@ -69,6 +69,10 @@ interface Show {
   fromYear: number | null;
   toYear: number | null;
   energy: string;
+  /** When true (and a genre is set) the genre becomes a HARD filter on the pick
+   *  pool instead of a soft lean — off-genre tracks only play as a last resort
+   *  to avoid silence. Defaults off. */
+  genreStrict: boolean;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -161,7 +165,7 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
             show ? 'text-ink' : 'text-muted',
           )}
         >
-          {show ? show.name : '(no show — autonomous)'}
+          {show ? show.name : '(no show, autonomous)'}
         </span>
       </div>
       <div className="text-[11px] text-muted">
@@ -174,9 +178,11 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 }
 
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
-// whatever the show doesn't pin.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string }): string {
-  const bits = [s.genre, decadeLabelOf(s), s.energy].filter(Boolean);
+// whatever the show doesn't pin. A strict genre is flagged inline so the hard
+// lock is visible at a glance.
+function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean }): string {
+  const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
+  const bits = [genre, decadeLabelOf(s), s.energy].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -283,6 +289,7 @@ export default function ShowsPanel() {
           fromYear: s.fromYear ?? null,
           toYear: s.toYear ?? null,
           energy: s.energy ?? '',
+          genreStrict: s.genreStrict ?? false,
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -343,7 +350,7 @@ export default function ShowsPanel() {
       id: '', name: '', topic: '',
       personaId: personas[0]?.id || '', mood: moods[0] || '',
       themeId: '',
-      genre: '', fromYear: null, toYear: null, energy: '',
+      genre: '', fromYear: null, toYear: null, energy: '', genreStrict: false,
     });
   };
   const openEdit = (i: number) => {
@@ -356,6 +363,7 @@ export default function ShowsPanel() {
       personaId: s.personaId, mood: s.mood,
       themeId: s.themeId || '',
       genre: s.genre || '', fromYear: s.fromYear ?? null, toYear: s.toYear ?? null, energy: s.energy || '',
+      genreStrict: s.genreStrict ?? false,
     });
   };
   const closeModal = () => { setEditIndex(null); setDraft(null); };
@@ -367,6 +375,8 @@ export default function ShowsPanel() {
       personaId: draft.personaId, mood: draft.mood,
       themeId: draft.themeId || '',
       genre: draft.genre.trim(), fromYear: draft.fromYear, toYear: draft.toYear, energy: draft.energy || '',
+      // Strict is only meaningful with a genre to lock to — drop it otherwise.
+      genreStrict: !!draft.genre.trim() && draft.genreStrict,
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -503,13 +513,14 @@ export default function ShowsPanel() {
             personaId: s.personaId, mood: s.mood,
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
+            genreStrict: !!s.genre.trim() && s.genreStrict,
           })),
           schedule: form.schedule,
         }),
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('schedule saved — the current hour applies on the next pick');
+      notify.ok('schedule saved, the current hour applies on the next pick');
       await load();
     } catch (e) {
       notify.err(errorMessage(e));
@@ -594,7 +605,7 @@ export default function ShowsPanel() {
       {personas.length === 0 && (
         <Card title="Personas required" sub="setup">
           <div className="text-[13px] text-[var(--danger)]">
-            No personas defined — create one under Personas first.
+            No personas defined. Create one under Personas first.
           </div>
         </Card>
       )}
@@ -704,7 +715,7 @@ export default function ShowsPanel() {
       >
         {form.shows.length === 0 && (
           <p className="text-[12px] text-muted">
-            No shows yet — add one to start programming the week.
+            No shows yet. Add one to start programming the week.
           </p>
         )}
         <div className="grid gap-2">
@@ -818,7 +829,7 @@ export default function ShowsPanel() {
             </div>
 
             <Field>
-              <Label>theme override — applied while this show is on air</Label>
+              <Label>theme override (applied while this show is on air)</Label>
               <Select
                 value={draft.themeId || THEME_DEFAULT_SENTINEL}
                 onValueChange={val =>
@@ -897,17 +908,37 @@ export default function ShowsPanel() {
                 </Select>
               </Field>
             </div>
+
+            <div className="flex items-start gap-3">
+              <div className="pt-0.5">
+                <Toggle
+                  on={draft.genreStrict}
+                  disabled={!draft.genre.trim()}
+                  onClick={() => setDraftField({ genreStrict: !draft.genreStrict })}
+                />
+              </div>
+              <div className="grid gap-0.5">
+                <Label className={!draft.genre.trim() ? 'opacity-40' : undefined}>
+                  Strict genre
+                </Label>
+                <span className="field-hint">
+                  Stay strictly within this genre (off-genre tracks only as a last
+                  resort to avoid silence). Needs a genre lean set above.
+                </span>
+              </div>
+            </div>
+
             <span className="field-hint -mt-1.5">
-              Optional soft music steer for this show — a genre, an era, an energy
+              Optional soft music steer for this show: a genre, an era, an energy
               band, or any mix. The DJ leans toward these but can break them for
               flow; leave blank to let the topic and mood drive selection.
             </span>
 
             <Field>
-              <Label htmlFor="show-topic">topic — fed to the DJ as the show theme</Label>
+              <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
               <span className="field-hint">
                 This is the brief the AI DJ works from. The more you describe,
-                the better it picks music and writes links — name genres, eras,
+                the better it picks music and writes links: name genres, eras,
                 moods, artists to lean into or avoid, the time of day, the kind
                 of listener, and how the host should sound. Write it like
                 you&apos;re briefing a real DJ before their slot.
@@ -916,7 +947,7 @@ export default function ShowsPanel() {
                 id="show-topic"
                 rows={7} value={draft.topic} maxLength={TOPIC_MAX}
                 onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setDraftField({ topic: e.target.value })}
-                placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side — nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
+                placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
               />
               <span className="field-hint">{draft.topic.trim().length}/{TOPIC_MAX}</span>
             </Field>
@@ -1090,7 +1121,7 @@ function GridCell({
       onMouseEnter={onMouseEnter}
       onTouchStart={onTouchStart}
       title={
-        (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00 — empty`)
+        (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
         + (isNow ? ' · on air now' : '')
       }
       className={cn(

@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.28.0](https://github.com/perminder-klair/subwave/compare/v0.27.0...v0.28.0) (2026-06-23)
+
+
+### Features
+
+* **app:** trust user-installed CAs on Android & clarify TLS failures ([#458](https://github.com/perminder-klair/subwave/issues/458)) ([#550](https://github.com/perminder-klair/subwave/issues/550)) ([1327ec9](https://github.com/perminder-klair/subwave/commit/1327ec99d11b7f19f3a310832f856fc4a758e21a))
+* **library:** surface tts-heavy setup docs when the acoustic engine is off ([#559](https://github.com/perminder-klair/subwave/issues/559)) ([9af92cd](https://github.com/perminder-klair/subwave/commit/9af92cde4133dffeaf1aaaf3ba03c689842648e8)), closes [#553](https://github.com/perminder-klair/subwave/issues/553)
+* **tts-heavy:** GPU opt-in for Chatterbox + Voices manual page & guide ([#562](https://github.com/perminder-klair/subwave/issues/562)) ([351a46d](https://github.com/perminder-klair/subwave/commit/351a46d01e26ef0b1735971a2311677da34aaeec))
+* **web:** Booth Buddy DJ-line mascot with station toggle ([#563](https://github.com/perminder-klair/subwave/issues/563)) ([385a753](https://github.com/perminder-klair/subwave/commit/385a7539c91bbe338bbee508057194a4cdb3dc61))
+
+
+### Bug Fixes
+
+* **admin:** make AI show/persona generators tolerant of partial model output ([#556](https://github.com/perminder-klair/subwave/issues/556)) ([29bc697](https://github.com/perminder-klair/subwave/commit/29bc6973ec3812eb897be25951120f4fd0cbfcb4))
+* **app:** replace gorhom sheet + drop gesture-handler stack to fix Android dead-touch (New Arch) ([#561](https://github.com/perminder-klair/subwave/issues/561)) ([b2d0a4a](https://github.com/perminder-klair/subwave/commit/b2d0a4ae5ce57e834262b06967977f99f560f670))
+* **app:** request drawer hangs on "Closing…" after the first request ([#542](https://github.com/perminder-klair/subwave/issues/542)) ([0f7e22d](https://github.com/perminder-klair/subwave/commit/0f7e22d077607999a157bc7abf43ff88ce566d69))
+* **dj-agent:** don't record a phantom pick when the dedup guard drops a track ([#548](https://github.com/perminder-klair/subwave/issues/548)) ([a8c8f44](https://github.com/perminder-klair/subwave/commit/a8c8f44027b35134ecfcd43b0d9b243fc131c6e9))
+* **dj:** apply persona language to agent segments + cloud TTS ([#558](https://github.com/perminder-klair/subwave/issues/558)) ([#564](https://github.com/perminder-klair/subwave/issues/564)) ([04f3678](https://github.com/perminder-klair/subwave/commit/04f36787569070005a4a3445f5c62f505697238d))
+* **embedding:** handle provider-prefixed model names in dim lookup ([ba5ae3e](https://github.com/perminder-klair/subwave/commit/ba5ae3e22507a3f4d537fab219c12b059ae7667e))
+* **embedding:** honour EMBEDDING_API_KEY across providers (completes [#535](https://github.com/perminder-klair/subwave/issues/535)) ([#549](https://github.com/perminder-klair/subwave/issues/549)) ([676c9f6](https://github.com/perminder-klair/subwave/commit/676c9f6e2f1fb2dc4a0218957211d1991e52eb04))
+* **library:** make Last.fm tag enrichment reachable from every path ([#541](https://github.com/perminder-klair/subwave/issues/541)) ([1b2e0d4](https://github.com/perminder-klair/subwave/commit/1b2e0d4be6d6a9e2497b921c688f71f0b461d817))
+* **llm:** keep the DJ from failing loud when gemma ignores the forced done tool ([#555](https://github.com/perminder-klair/subwave/issues/555)) ([#560](https://github.com/perminder-klair/subwave/issues/560)) ([135ef0d](https://github.com/perminder-klair/subwave/commit/135ef0d54c3ef53f3790f9496ecdb7f9cc11920e))
+* **personas:** mark "on air" by the effective persona, not the default ([#540](https://github.com/perminder-klair/subwave/issues/540)) ([175751b](https://github.com/perminder-klair/subwave/commit/175751b4ca74ab4a51ae851db70e6a872f0876eb))
+* **queue:** deduplicate track pushes to prevent stacking ([#538](https://github.com/perminder-klair/subwave/issues/538)) ([43d3893](https://github.com/perminder-klair/subwave/commit/43d3893d8cf41ade9d7d0a1cd8f493452575753e))
+
 ## [0.27.0](https://github.com/perminder-klair/subwave/compare/v0.26.1...v0.27.0) (2026-06-23)
 
 

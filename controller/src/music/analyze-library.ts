@@ -13,6 +13,9 @@
 //   --audio        also re-target already-analysed tracks that lack a CLAP
 //                  audio vector (backfill embeddings without a full re-analyze).
 //                  Implied when ANALYZE_AUDIO_EMBEDDING is set.
+//   --vocal        also re-target tracks missing Demucs vocal-activity ranges
+//                  (vocal_ranges_json IS NULL). Implied when ANALYZE_VOCAL_ACTIVITY
+//                  / settings.audio.vocalActivity is on.
 //
 // Walk policy: by default the metadata walk runs ONLY when the catalogue is
 // empty (first-run bootstrap) — the ~11.5 min walk over a populated DB is the
@@ -31,7 +34,18 @@ import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import * as analyzer from './analyzer.js';
-import { reportProgress } from './tagger-progress.js';
+import { reportProgress, makeEventLogger } from './tagger-progress.js';
+import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+
+const logEvent = makeEventLogger('analyze');
+
+// Close (and TRUNCATE-checkpoint) the library DB on every exit path. The
+// analysis pass is the biggest bulk writer in the system — fat *_json blobs
+// per track — and exiting without a close is exactly what left a 730MB WAL
+// sidecar behind in #786. db.close() is synchronous, so an 'exit' hook is safe.
+process.on('exit', () => {
+  try { if (db.isOpen()) db.close(); } catch { /* best-effort */ }
+});
 
 function parseIntFlag(args: string[], name: string): number | undefined {
   const idx = args.indexOf(name);
@@ -61,12 +75,27 @@ async function applyWizardOverlay() {
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // Belt-and-braces single-flight — a controller-spawned run is a no-op here
+  // (MANAGED_ENV set, the controller holds the pidfile); a manual `npm run
+  // analyze` claims the lock and refuses if another live run holds it.
+  let ownsLock = false;
+  try {
+    ownsLock = acquireStandaloneLock('analyze', args);
+  } catch (err: any) {
+    console.error(`[analyze] ${err.message}`);
+    process.exit(1);
+  }
+  if (ownsLock) installPidfileCleanup();
+
   const limit = parseIntFlag(args, '--limit');
   const reAnalyze = args.includes('--re-analyze');
   const forceWalk = args.includes('--walk');
   const skipWalk = args.includes('--skip-walk');
   // undefined → runAnalysisPass falls back to the ANALYZE_AUDIO_EMBEDDING env.
   const audioBackfill = args.includes('--audio') ? true : undefined;
+  // undefined → falls back to ANALYZE_VOCAL_ACTIVITY / settings.audio.vocalActivity.
+  const vocalBackfill = args.includes('--vocal') ? true : undefined;
 
   await applyWizardOverlay();
   await settings.load();
@@ -113,7 +142,7 @@ async function main() {
         reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
       }
     }
-    console.log(`[analyze] walked ${walked} total tracks`);
+    logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
     // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
     // scope reflects the live catalogue, not orphans from past full rescans.
@@ -126,7 +155,7 @@ async function main() {
     }
   }
 
-  const stats = await runAnalysisPass({ limit, reAnalyze, audioBackfill });
+  const stats = await runAnalysisPass({ limit, reAnalyze, audioBackfill, vocalBackfill });
   analyzer.shutdown();
   console.log('[analyze] stats:', JSON.stringify(stats));
   process.exit(stats.available ? 0 : 0);

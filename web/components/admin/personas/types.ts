@@ -2,12 +2,16 @@
 // PersonasPanel so the presentational sub-components can share one shape.
 
 export interface PersonaTts {
-  engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | string;
+  engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | 'remote' | string;
   cloudProvider: string;
   voice: string;
   // Per-persona voice-level trim in dB (−12..+12, default 0 = no change). Stacks
   // on top of the per-engine gain. See controller settings.ts:clampTtsGain.
   gainDb: number;
+  // Per-persona speech-rate multiplier (0.5..2.0×, default 1.0 = no change).
+  // Composes with the per-engine speed + daypart energy. Honoured by
+  // Piper/Kokoro/cloud only. See controller settings.ts:clampTtsSpeed.
+  speed: number;
 }
 
 export interface Persona {
@@ -72,7 +76,9 @@ export interface SettingsResponse {
   defaults?: { djPrompt?: string };
   skills?: { catalog?: SkillCatalogEntry[] };
   tts?: {
-    kokoroVoices?: VoiceOption[];
+    kokoroVoices?: string[];
+    kokoroVoiceLanguages?: Record<string, string>;
+    kokoroLangs?: string[];
     piperVoices?: string[];
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
@@ -85,4 +91,25 @@ export interface SettingsResponse {
     cloudProviders?: string[];
   };
   env?: Record<string, unknown>;
+}
+
+// One entry in the shipped community persona catalog (GET /personas/community).
+// Mirrors the controller's CommunityPersona (personas/community.ts). The
+// catalog is station-agnostic — "already in the roster" is computed client-side
+// by name match, since the panel holds the roster anyway.
+export interface CommunityPersona {
+  slug: string;
+  displayName: string;
+  tagline?: string;
+  soul: string;
+  frequency: 'quiet' | 'moderate' | 'aggressive';
+  scriptLength: 'concise' | 'extended';
+  djMode: boolean;
+  humour?: number;
+  localColour?: number;
+  warmth?: number;
+  language?: string;
+  submittedBy?: string;  // GitHub login of the contributor who submitted it
+  dateAdded?: string;    // ISO date (YYYY-MM-DD) it first entered the catalog
+  dateModified?: string; // ISO date (YYYY-MM-DD) of the last catalog change
 }

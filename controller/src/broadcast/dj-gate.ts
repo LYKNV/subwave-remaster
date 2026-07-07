@@ -6,7 +6,7 @@
 // scheduled show's owner this hour, or the active persona) — quiet | moderate
 // | aggressive.
 //
-// Between-track segments (weather, news, traffic, facts, web search) are NOT
+// Between-track segments (weather, news, now-playing digs, facts, web search) are NOT
 // gated here — the segment-director agent (skills/_agent.js) owns its own
 // frequency floor. Lives outside scheduler.js to keep that file lean.
 
@@ -35,6 +35,18 @@ export function shouldFire(kind, now = new Date()) {
     // must align with when the crons actually fire.
     if (f === 'quiet') return zonedParts(now).hour % 2 === 0;
     return true;
+  }
+
+  if (kind === 'banter') {
+    // Guest-show banter breaks. The cron ticks at :20/:50 — minutes the ident
+    // (:15/:30/:45) and hourly (:00) crons never own, so an exchange can't
+    // land on the same minute as another wall-clock talker by construction.
+    // Banter is chatty by nature: a quiet persona never auto-fires it (the
+    // operator's manual /dj/segment trigger still works), moderate gets at
+    // most one an hour.
+    if (f === 'quiet')    return false;
+    if (f === 'moderate') return m === 20;
+    return m === 20 || m === 50;
   }
 
   return true;

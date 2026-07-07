@@ -53,15 +53,17 @@ https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
 - **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
-- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
-- **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
-- **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
-- **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
+- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
+- **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
+- **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
+- **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
 - **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — plus an installable PWA on phone and desktop.
-- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
-- **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it. See [`docs/custom-skills.md`](docs/custom-skills.md).
+- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist.
+- **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it — or write one in the admin UI's built-in editor, or install one other operators shared on the [community exchange](https://www.getsubwave.com/skills). See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
 - **Hourly archives.** Every hour saved as MP3 for later replay.
+- **Scrobbling.** Every spin can report to Last.fm and ListenBrainz, including self-hosted ListenBrainz instances.
+- **DJ Doc.** A built-in station check-up: runs diagnostics across the stack, then has your configured LLM review the findings.
 - **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
 - **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
 - **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.
@@ -137,6 +139,23 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
+Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
+it runs in its own `subwave-analyzer` service, which **starts by default**
+alongside the controller and web. The default image is **lean and multi-arch**
+(~1.1 GB, no PyTorch — so it runs natively on arm64 NAS/Pi/Apple-Silicon). The
+two heavier dimensions — CLAP **"sounds-like"** embeddings and **Demucs** vocal
+ranges — are the opt-in tier; enable them by pulling the heavy image, no rebuild:
+
+```bash
+# in your root .env
+ANALYZER_HEAVY=1
+```
+
+That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
+~1.9 GB, amd64) on the next `docker compose up -d`. The `subwave setup` wizard
+also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
+instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
+
 ### Local dev (contributors)
 
 ```bash
@@ -198,7 +217,7 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three.
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`.
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (lean, multi-arch acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar. Heavy-analysis variants — `subwave-analyzer-heavy` and `subwave-aio-heavy` (CLAP + Demucs, amd64) — are published for operators who enable "sounds-like"/vocals.
 All compose files pull `:latest` by default; pin a version with
 `SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 
@@ -232,6 +251,15 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
   call goes through the Vercel AI SDK.
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
+- **Add to Sonos / VLC with one link.** Hardware and software players take a
+  playlist file, not a raw stream URL — paste `https://<your-station>/listen.pls`
+  (or `/listen.m3u`) into Sonos, VLC, moOde, or a car receiver and it tunes
+  straight in. Both are public (no auth), point at the always-served MP3 mount
+  (plus Opus when you've enabled it), and resolve the origin from `SITE_URL`
+  when set, otherwise the address you reached the station on (LAN / Tailscale /
+  custom domain). `/api/now-playing` also carries a `stream` block
+  (`mount`, `format`, `bitrate`, `sampleRate`, `channels`) for clients that want
+  the broadcast's shape.
 - **Navidrome ≥0.62 is recommended.** It ships several security hardening
   fixes (internet-radio management now admin-gated, transcode-config
   disclosure restricted to admins, concurrent-transcode DoS limits) and the
@@ -250,7 +278,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
-- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the optional heavy sidecar — expressive voices and acoustic analysis, and how to turn it on.
+- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.

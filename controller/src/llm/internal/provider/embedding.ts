@@ -89,6 +89,58 @@ function defaultEmbeddingDimFor(model: string): number {
   return 768; // homelab default until a probe says otherwise
 }
 
+// Heuristic: is this a "heavy" embedding model — large + slow on CPU relative to
+// the light homelab default (nomic-embed-text, ~137M / 768d)? Name-based only,
+// drives a perf advisory (doctor) — so unknown models default to NOT heavy, no
+// false alarms. The common heavy local picks are bge-m3 (~567M / 1024d,
+// multilingual) and mxbai-embed-large (~335M / 1024d); the OpenAI/BGE "-large"
+// variants and Qwen embeddings are heavy too (only flagged when run locally —
+// see embeddingPerfAdvisory, which gates on provider).
+export function isHeavyEmbeddingModel(model: string): boolean {
+  const bare = (model || '').toLowerCase();
+  if (!bare) return false;
+  if (bare.includes('bge-m3')) return true;
+  if (bare.includes('large')) return true;       // mxbai-embed-large, *-embedding-3-large, bge-large-*
+  if (/qwen3?-?embed/.test(bare)) return true;    // qwen embeddings
+  return false;
+}
+
+// Task prefixes some embedding models are trained with. Name-based like
+// isHeavyEmbeddingModel — unknown models get no prefixes.
+//
+// nomic-embed-text (the shipped Ollama default) REQUIRES them: the model card
+// marks `search_document:` / `search_query:` as mandatory for retrieval, and
+// embedding bare measurably degrades neighbour quality. Its document prefix
+// changes the stored vectors, so the index records which mode it was built in
+// (embedding_meta.text_mode) and queries follow suit.
+//
+// mxbai-embed-large wants a query-side instruction only — documents embed
+// bare, so its query prefix is always safe to apply regardless of index mode.
+export interface EmbeddingTextPrefixes {
+  document: string; // prepended to indexed track texts; '' = embed bare
+  query: string;    // prepended to search queries; '' = embed bare
+}
+
+export function embeddingTextPrefixes(model: string): EmbeddingTextPrefixes {
+  const bare = (model || '').toLowerCase();
+  if (bare.includes('nomic-embed')) {
+    return { document: 'search_document: ', query: 'search_query: ' };
+  }
+  if (bare.includes('mxbai-embed-large')) {
+    return { document: '', query: 'Represent this sentence for searching relevant passages: ' };
+  }
+  return { document: '', query: '' };
+}
+
+// Does this embedding provider run on the operator's own hardware (so model
+// weight is a CPU/RAM concern they pay for), vs a cloud API that does the work
+// off-box? Gates the heavy-model perf advisory — a big model on OpenAI/Google is
+// not the operator's performance problem. ollama / locca / openai-compatible are
+// the self-hosted transports.
+export function isLocalEmbeddingProvider(provider: string): boolean {
+  return provider === 'ollama' || provider === 'locca' || provider === 'openai-compatible';
+}
+
 // Resolved embedding config. `settings.embedding` overrides settings.llm field
 // by field; `overrides` (e.g. unsaved form values from the probe endpoint) win
 // over both. Mirrors the precedence in embeddingCfg().

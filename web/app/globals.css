@@ -435,6 +435,26 @@ body::after {
 .v3-modal-pop {
     animation: v3-modal-pop 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
+
+/* V3 AlertDialog — smooth fade + zoom on open AND close, keyed on Radix's
+   data-state (the shadcn pattern). Centering is the static -translate-* (CSS
+   `translate` property), so the keyframe's `transform: scale()` composes with
+   it and the box zooms from its own centre. Radix's Presence waits for the
+   `closed` animation before unmounting. */
+@keyframes v3-alert-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes v3-alert-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes v3-alert-pop-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+}
+@keyframes v3-alert-pop-out {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.96); }
+}
+.v3-alert-overlay[data-state="open"] { animation: v3-alert-overlay-in 160ms ease-out; }
+.v3-alert-overlay[data-state="closed"] { animation: v3-alert-overlay-out 140ms ease-in; }
+.v3-alert-content[data-state="open"] { animation: v3-alert-pop-in 170ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.v3-alert-content[data-state="closed"] { animation: v3-alert-pop-out 140ms ease-in; }
 .v3-blink {
     animation: v3-blink 1s steps(1) infinite;
 }
@@ -736,8 +756,20 @@ body::after {
 
 /* Reduced motion — collapse anything that animates. */
 @media (prefers-reduced-motion: reduce) {
+    /* Low-power concession: the frosted backdrop blur is the single biggest GPU
+       cost on weak devices, and listeners who ask for reduced motion are often
+       on exactly those devices — drop it too. (Lite mode does the same wholesale
+       via html.lite below.) */
+    *,
+    *::before,
+    *::after {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
     .v3-drawer-content,
     .v3-drawer-overlay,
+    .v3-alert-overlay,
+    .v3-alert-content,
     .v3-blink,
     .v3-tunein-pulse,
     .v3-connecting-pulse,
@@ -774,6 +806,20 @@ body::after {
     .fz-scale .fz-needle {
         transition: none;
     }
+}
+
+/* Lite (low-power) mode — toggled from the player theme menu or pinned with
+   ?lite=1 (see lib/lite.ts). Drops every backdrop-filter blur and disables
+   animations so weak GPUs (kiosks, Raspberry Pi) stop re-compositing frosted
+   layers and looping effects every frame — the measured Pi 4 win is ~170% →
+   ~40% Chromium CPU. Transitions are intentionally left alone: they only fire
+   on interaction and aren't the continuous repaint cost. */
+html.lite *,
+html.lite *::before,
+html.lite *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    animation: none !important;
 }
 
 /* Player title — Fraunces display serif (see the type-roles block up top).
@@ -1165,6 +1211,151 @@ body::after {
     letter-spacing: -0.015em;
     font-weight: 900;
     text-transform: uppercase;
+}
+
+/* Off-register ink plate behind the nameplate — the vermilion plate printed a
+   hair off-register, the way cheap newsprint presses actually drifted. Em
+   offsets so the drift scales with the clamp()ed wordmark. Hovering the
+   nameplate pulls the plate into perfect register — the press operator's
+   micro-adjust — and reduced-motion readers get the settled plate outright. */
+.bs-wordmark-plate {
+    text-shadow: 0.032em 0.026em 0 color-mix(in oklab, var(--accent) 42%, transparent);
+    transition: text-shadow 280ms ease;
+}
+.bs-wordmark-plate:hover {
+    text-shadow: 0 0 0 color-mix(in oklab, var(--accent) 42%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+    .bs-wordmark-plate,
+    .bs-wordmark-plate:hover {
+        text-shadow: none;
+        transition: none;
+    }
+}
+
+/* Slash → disc morph — hovering the nameplate spins the slash away and the
+   station's disc mark (the .bs-dj-glyph / .player-mark vocabulary) drops
+   into the gap already turning. The slash glyph keeps its box (opacity only)
+   so the nameplate never reflows; the disc is absolutely centred over it and
+   em-sized, so the morph scales with the clamp()ed wordmark. The face spins
+   on its own inner element — the outer element owns the scale/fade
+   transition, so the two transforms never fight. */
+.bs-wordmark-slash {
+    position: relative;
+    display: inline-block;
+    /* Hover eases SUB and WAVE apart a touch so the disc gets clear air —
+       symmetric padding keeps the mark optically centred while it spreads. */
+    transition: padding 420ms cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-slash {
+    padding: 0 0.09em;
+}
+.bs-wordmark-slash-glyph {
+    display: inline-block;
+    transition:
+        opacity 300ms ease,
+        transform 380ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-slash-glyph {
+    opacity: 0;
+    transform: rotate(114deg) scale(0.5);
+}
+.bs-wordmark-disc {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.56em;
+    height: 0.56em;
+    /* -0.28em centres the box; +0.006em drops it onto the caps' optical
+       centre (baseline minus half the measured cap-ink height). */
+    margin: -0.274em 0 0 -0.28em;
+    transform: scale(0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 300ms ease,
+        transform 420ms cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-disc {
+    opacity: 1;
+    transform: scale(1);
+}
+.bs-wordmark-disc-face {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid var(--ink);
+    background: repeating-conic-gradient(
+        from 0deg,
+        var(--ink) 0deg 9deg,
+        transparent 9deg 18deg
+    );
+    position: relative;
+    /* Always turning (it's invisible at rest), so the disc arrives mid-spin
+       instead of starting from a standstill. */
+    animation: bs-dj-spin 4s linear infinite;
+}
+.bs-wordmark-disc-face::after {
+    content: "";
+    position: absolute;
+    inset: 33%;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--bg);
+}
+@media (prefers-reduced-motion: reduce) {
+    /* No morph for reduced-motion readers — the slash simply stays put. */
+    .bs-wordmark-disc {
+        display: none;
+    }
+    .bs-wordmark-slash,
+    .bs-wordmark-plate:hover .bs-wordmark-slash {
+        transition: none;
+        padding: 0;
+    }
+    .bs-wordmark-slash-glyph,
+    .bs-wordmark-plate:hover .bs-wordmark-slash-glyph {
+        transition: none;
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* Motto rule — the line under the nameplate carries the paper's motto (the
+   system's one load-bearing promise) between full-width hairlines, flanked
+   by the ✦ used in the footer's press credit. Replaces the plain .bs-rule
+   in the masthead, so it must keep reading as a rule at a glance. */
+.bs-masthead-motto {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--accent);
+    font-size: 9px;
+}
+.bs-masthead-motto::before,
+.bs-masthead-motto::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--ink);
+}
+.bs-masthead-motto-text {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+@media (max-width: 560px) {
+    .bs-masthead-motto {
+        gap: 8px;
+    }
+    .bs-masthead-motto-text {
+        font-size: 8px;
+        letter-spacing: 0.14em;
+    }
 }
 
 /* Eyebrow — vermilion small-caps section label, sits above each section. */
@@ -2800,6 +2991,27 @@ body::after {
 .admin-root .card-body.loose {
     padding: 18px;
 }
+/* Flat — used inside EditorDialog so stacked sections read as one continuous
+   modal form separated by hairline dividers, not boxed cards. No border/bg, no
+   side padding (the dialog supplies the gutter); a top rule divides each section
+   from the previous one. The first section in a group has no rule. */
+.admin-root .card.is-flat {
+    border: 0;
+    background: transparent;
+    border-top: 1px solid var(--soft-border);
+    padding: 26px 0;
+}
+.admin-root .card.is-flat:first-child {
+    border-top: 0;
+    padding-top: 0;
+}
+.admin-root .card.is-flat > .card-head {
+    padding: 0 0 14px;
+    border-bottom: 0;
+}
+.admin-root .card.is-flat > .card-body {
+    padding: 0;
+}
 /* Spotlight — lifts a card above the plain stack with an accent rail + faint
    wash. Used for DJ Doc's verdict ("DJ Doc says") so the operator's eye lands
    on the producer's read before the raw findings. */
@@ -2929,8 +3141,10 @@ body::after {
 /* Log line */
 .admin-root .log {
     display: grid;
-    grid-template-columns: 64px 96px 1fr;
-    gap: 12px;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
     font-size: 11px;
     line-height: 1.6;
     padding: 4px 0;
@@ -2940,12 +3154,14 @@ body::after {
     color: var(--muted);
 }
 .admin-root .log .k {
+    justify-self: start;
     font-size: 9px;
     letter-spacing: 0.22em;
     text-transform: uppercase;
     font-weight: 700;
 }
 .admin-root .log .msg {
+    grid-column: 1 / -1;
     color: var(--ink);
     word-break: break-word;
 }
@@ -3265,6 +3481,20 @@ body::after {
     overflow: auto;
 }
 
+/* CRT modifier — a minimal phosphor look for the live tagging-log drawer:
+   fixed scanlines (don't scroll with content), a faint accent glow on the
+   text, and a soft inset vignette. Theme-aware via tokens. */
+.admin-root .term-crt {
+    background-image: repeating-linear-gradient(
+        color-mix(in srgb, var(--ink) 9%, transparent) 0px,
+        color-mix(in srgb, var(--ink) 9%, transparent) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    text-shadow: 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+    box-shadow: inset 0 0 36px color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    LIBRARY — redesigned /admin/library. One merged tagging panel + clearer
    browse/search/untagged. Every value is a token (or token-derived color-mix)
@@ -3322,6 +3552,28 @@ body::after {
     color: var(--muted); border: 1px solid var(--separator-strong); padding: 2px 7px;
 }
 
+/* run phase stepper — the live pipeline position above the run bar */
+.admin-root .lib-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; }
+.admin-root .lib-step {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--muted);
+}
+.admin-root .lib-step-dot {
+    width: 15px; height: 15px; border-radius: 50%; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 8px; line-height: 1;
+    border: 1px solid var(--separator-strong); color: var(--muted);
+}
+/* completed phases: dimmed text, ticked accent dot */
+.admin-root .lib-step.done .lib-step-dot { border-color: var(--accent); color: var(--accent); }
+/* the live phase: full-ink label, filled accent dot */
+.admin-root .lib-step.active { color: var(--ink); }
+.admin-root .lib-step.active .lib-step-dot { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+/* not yet reached */
+.admin-root .lib-step.pending { opacity: 0.45; }
+.admin-root .lib-step-sep { color: var(--separator-strong); font-size: 11px; }
+
 /* batch select */
 .admin-root .lib-batch { display: flex; align-items: stretch; border: 1px solid var(--ink); }
 .admin-root .lib-batch label {
@@ -3332,6 +3584,13 @@ body::after {
 .admin-root .lib-batch select {
     border: 0; background: transparent; font-family: inherit; font-size: 12px; font-weight: 700;
     color: var(--ink); padding: 10px 12px; cursor: pointer; outline: none;
+}
+/* The native option popup ignores the select's transparent background and (on
+   Linux Chromium) the inherited color-scheme, falling back to a white surface
+   with our light --ink text on it — unreadable in dark mode. Give the options
+   an explicit theme-driven surface so the dropdown matches the palette. */
+.admin-root select option {
+    background: var(--bg); color: var(--ink);
 }
 
 /* live dot */
@@ -3349,6 +3608,7 @@ body::after {
     padding: 12px 13px; cursor: pointer; text-align: left; font-family: inherit;
 }
 .admin-root .lib-pass:hover { border-color: var(--ink); }
+.admin-root .lib-pass:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 .admin-root .lib-pass.on { border-color: var(--accent); background: var(--accent-soft); }
 .admin-root .lib-pass .box {
     width: 15px; height: 15px; border: 1px solid var(--ink); flex: none; margin-top: 2px;
@@ -3749,11 +4009,23 @@ body::after {
     padding-left: 22px;
 }
 .bs-prose li {
-    margin-bottom: 0.4em;
+    margin-bottom: 0.5em;
     line-height: 1.6;
 }
 .bs-prose li::marker {
     color: var(--accent);
+}
+/* Loose lists (blank line between items) render each item as a <p>; keep that
+   from inheriting the 1.2em paragraph gap so description-style lists stay tight. */
+.bs-prose li > p {
+    margin: 0 0 0.4em;
+}
+.bs-prose li > p:last-child {
+    margin-bottom: 0;
+}
+/* A bold lead-in term ("Blend — …") reads as the item's label. */
+.bs-prose li > strong:first-child {
+    color: var(--ink);
 }
 .bs-prose code {
     padding: 1px 6px;
@@ -3944,6 +4216,79 @@ body::after {
     padding-top: 20px;
     border-top: 1px solid var(--separator-strong);
     min-width: 0;
+}
+
+/* Community-skill card — same newspaper-run column as the station grid, but a
+   text-first entry: title + cadence, the DJ brief, context tags, credit line.
+   Reuses .bs-stations-grid for layout. */
+.bs-skill-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 20px;
+    border-top: 1px solid var(--separator-strong);
+    min-width: 0;
+}
+.bs-skill-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+.bs-skill-name {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(19px, 2vw, 24px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+}
+.bs-skill-cadence {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-skill-brief {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--muted);
+}
+.bs-skill-tags {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.bs-skill-tag {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--separator-strong);
+    padding: 3px 7px;
+}
+.bs-skill-credit {
+    margin: 2px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-skill-credit-link {
+    font-weight: 700;
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 2px;
 }
 
 /* Live strip — ON AIR + current track, or Offline / Checking. */
@@ -4205,6 +4550,12 @@ body::after {
 .observatory-root .ss-pace { fill: var(--accent); fill-opacity: 0.22; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .observatory-root .ss-sect { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.35; }
 .observatory-root .ss-intro { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--accent); }
+/* Outro (tail) marker on the pace lane: a cold end is a flat tint to the edge,
+   a fade-out a gradient that visually fades — mirrors what the audio does. */
+.observatory-root .ss-outro { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--muted); background: color-mix(in oklab, var(--ink) 14%, transparent); pointer-events: auto; }
+.observatory-root .ss-outro-fade { background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 26%, transparent), transparent); }
+.observatory-root .ss-swatch-outro { background: color-mix(in oklab, var(--ink) 30%, transparent); }
+.observatory-root .ss-swatch-outro.fade { background: linear-gradient(90deg, var(--accent), transparent); }
 .observatory-root .ss-vox { position: absolute; top: 2px; bottom: 2px; background: var(--accent); opacity: 0.8; }
 .observatory-root .ss-key { position: absolute; top: 0; bottom: 0; }
 .observatory-root .ss-note { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
@@ -4279,3 +4630,24 @@ body::after {
     .observatory-root .cmap-ripple,
     .observatory-root .wire-line { animation: none !important; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Skill Edit Card ("segment sheet") typography — /admin/skills. The SkillEditModal
+   body now renders inside the shared full-screen EditorDialog, which carries the
+   `sw-seg` class so these descendant rules still resolve (focus accents, muted
+   placeholders, the brief drop-cap). Scoped to .sw-seg so they can't leak into
+   the rest of the admin. The old sheet's spin/ring/blink keyframes went with the
+   bespoke overlay — the flash now uses the shared `v3-blink`.
+   ─────────────────────────────────────────────────────────────────────────── */
+.sw-seg textarea:focus, .sw-seg input:focus { border-color: var(--accent) !important; }
+.sw-seg ::placeholder { color: var(--muted); opacity: 0.75; }
+.sw-seg .sw-ghost:hover { background: var(--ink-soft); }
+.sw-seg .sw-title:focus { border-bottom-color: var(--accent) !important; }
+.sw-seg .sw-dropcap::first-letter {
+    font-size: 2.7em; font-weight: 800; float: left; line-height: 0.74;
+    color: var(--accent); padding: 4px 9px 0 0;
+}
+/* Body sections — hairline dividers between them, matching .card.is-flat, so the
+   skills editor reads as one continuous modal form rather than spaced blocks. */
+.sw-seg .sw-section { border-top: 1px solid var(--soft-border); padding: 26px 0; }
+.sw-seg .sw-section:first-child { border-top: 0; padding-top: 0; }

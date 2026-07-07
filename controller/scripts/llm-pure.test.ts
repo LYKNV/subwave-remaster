@@ -4,17 +4,19 @@
 // These functions are side-effect-free and unit-pinned here so a wiring slip
 // (a provider routed to the wrong path, a thinking knob flipped, the failover
 // gate widened) fails an assert BEFORE it ever reaches a model. Matches the
-// node:assert-via-tsx style of scripts/picker-recency-regression.ts.
+// node:assert-via-tsx style of scripts/picker-recency-regression.test.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
-import { withDeadline } from '../src/llm/internal/core/retry.js';
+import { generateText, APICallError } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
+import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict } from '../src/settings.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX } from '../src/settings.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 
 let failures = 0;
@@ -82,9 +84,255 @@ async function main() {
     assert.equal(isQuotaOrAuthError({ cause: { statusCode: 402 } }), true);
     assert.equal(isQuotaOrAuthError({ cause: { message: 'quota exceeded' } }), true);
   });
+  await test('OpenRouter out-of-credit 402 classifies by message when status is flattened', () => {
+    // Canonical 402 — caught by the existing insufficient-credit branch.
+    assert.equal(isQuotaOrAuthError(new Error('Your account or API key has insufficient credits. Add more credits and retry the request.')), true);
+    // Per-request affordability 402 — no "insufficient"/"quota" token, so before
+    // this it classified ONLY while the 402 status survived (Discord: run died as
+    // "unreachable" once the SDK flattened the status into the message).
+    const afford: any = new Error('This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 118.');
+    assert.equal(isQuotaOrAuthError(afford), true);
+    assert.equal(isTransient(afford), false);    // fail over, not same-leg retry
+    assert.equal(isUnreachable(afford), false);   // host answered — not a network outage
+  });
   await test('plain 5xx / socket errors are NOT quota/auth (still same-leg retry)', () => {
     assert.equal(isQuotaOrAuthError({ statusCode: 503 }), false);
     assert.equal(isQuotaOrAuthError({ code: 'ECONNRESET' }), false);
+  });
+
+  // ---- upstream-overload gate: STAYS transient (retry first), THEN fails over (#671) ----
+  console.log('isUpstreamOverloaded (reachable gateway relays a saturated upstream → retry, then fail over):');
+  await test('OpenRouter "Upstream error from <provider>: ResourceExhausted" → upstream-overload', () => {
+    // The exact shape from issue #671: OpenRouter relaying a saturated Nvidia upstream.
+    const e: any = { statusCode: 429, message: 'Upstream error from Nvidia: ResourceExhausted: Worker local total request limit reached (32/32)' };
+    assert.equal(isUpstreamOverloaded(e), true);
+    assert.equal(isTransient(e), true);          // stays transient — a brief blip clears on the chosen model
+    assert.equal(isUnreachable(e), false);        // gateway answered, host is up
+    assert.equal(isQuotaOrAuthError(e), false);   // not the user's quota — the upstream is saturated
+  });
+  await test('Anthropic 529 "Overloaded" → upstream-overload (529 is outside the transient status set)', () => {
+    assert.equal(isUpstreamOverloaded({ statusCode: 529 }), true);
+    assert.equal(isUpstreamOverloaded({ message: 'Overloaded' }), true);
+  });
+  await test('gRPC RESOURCE_EXHAUSTED / "no instances available" → upstream-overload', () => {
+    assert.equal(isUpstreamOverloaded({ message: 'RESOURCE_EXHAUSTED: model is overloaded' }), true);
+    assert.equal(isUpstreamOverloaded({ message: 'No instances available for this model' }), true);
+  });
+  await test('cause.message / cause.statusCode are unwrapped', () => {
+    assert.equal(isUpstreamOverloaded({ cause: { message: 'Upstream error from Together: overloaded' } }), true);
+    assert.equal(isUpstreamOverloaded({ cause: { statusCode: 529 } }), true);
+  });
+  await test('plain 503 / quota / socket errors are NOT upstream-overload (no false failover)', () => {
+    assert.equal(isUpstreamOverloaded({ statusCode: 503 }), false);
+    assert.equal(isUpstreamOverloaded({ statusCode: 429, message: 'rate limit exceeded, slow down' }), false);
+    assert.equal(isUpstreamOverloaded({ code: 'ECONNRESET' }), false);
+    assert.equal(isUpstreamOverloaded(null), false);
+  });
+
+  // ---- rate-limit gate: STAYS transient (retry first), THEN fails over (#738) ----
+  console.log('isRateLimited (rate-limit 429 → retry, then fail over to keep a free tier on air):');
+  await test('a 429 with a plain "rate limit" message → rate-limited, stays transient, not quota/auth', () => {
+    const e: any = { statusCode: 429, message: 'rate limit exceeded, slow down' };
+    assert.equal(isRateLimited(e), true);
+    assert.equal(isTransient(e), true);
+    assert.equal(isQuotaOrAuthError(e), false);
+    assert.equal(isUnreachable(e), false);
+  });
+  await test('real provider shapes: OpenAI RPM / Gemini per-day / Groq TPM messages classify', () => {
+    assert.equal(isRateLimited({ statusCode: 429, message: 'Rate limit reached for gpt-4o in organization org-x on requests per min (RPM): Limit 3, Used 3' }), true);
+    assert.equal(isRateLimited({ statusCode: 429, message: 'Resource has been exhausted (e.g. check quota): too many requests per day' }), true);
+    assert.equal(isRateLimited({ statusCode: 429, message: 'Rate limit exceeded for requests per minute' }), true);
+  });
+  await test('a bare 429 with a Retry-After header but no wording → rate-limited', () => {
+    assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after': '20' } }), true);
+    assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after-ms': '500' } }), true);
+  });
+  await test('a bare 429 with NO wording and NO header (self-hosted concurrency spike) does NOT fail over', () => {
+    // llama.cpp/vLLM/LiteLLM answering 429 on a momentary slot conflict must
+    // stay a same-leg transient retry — never silently switch the station onto
+    // a possibly-paid cloud fallback (PR #751 review).
+    assert.equal(isRateLimited({ statusCode: 429 }), false);
+    assert.equal(isTransient({ statusCode: 429 }), true);
+  });
+  await test('an AI_RetryError wrapper (SDK maxRetries spent) is unwrapped to the real 429', () => {
+    // What djText/djObject/djAgent actually receive: the SDK retried
+    // internally, then threw a wrapper with NO statusCode of its own — the
+    // real APICallError lives in errors[]/lastError (PR #751 review).
+    const inner: any = { statusCode: 429, message: 'Rate limit reached for gpt-4o', responseHeaders: { 'retry-after': '20' } };
+    const wrapper: any = new Error('Failed after 3 attempts. Last error: Rate limit reached for gpt-4o');
+    wrapper.reason = 'maxRetriesExceeded';
+    wrapper.errors = [inner, inner];
+    wrapper.lastError = inner;
+    assert.equal(isRateLimited(wrapper), true);
+    assert.equal(isTransient(wrapper), true);
+    assert.equal(isQuotaOrAuthError(wrapper), false);
+  });
+  await test('a wrapped quota/auth error still classifies as quota/auth through the wrapper', () => {
+    const inner: any = { statusCode: 429, message: 'you have reached your weekly usage limit' };
+    const wrapper: any = new Error('Failed after 3 attempts. Last error: weekly usage limit');
+    wrapper.errors = [inner];
+    wrapper.lastError = inner;
+    assert.equal(isQuotaOrAuthError(wrapper), true);
+    assert.equal(isTransient(wrapper), false);
+  });
+  await test('cause.statusCode is unwrapped', () => {
+    assert.equal(isRateLimited({ cause: { statusCode: 429, message: 'too many requests' } }), true);
+  });
+  await test('non-429 errors are NOT rate-limited', () => {
+    assert.equal(isRateLimited({ statusCode: 503 }), false);
+    assert.equal(isRateLimited({ code: 'ECONNRESET' }), false);
+    assert.equal(isRateLimited(null), false);
+  });
+
+  // ---- retryAfterMs: parses a provider's Retry-After header (#738) ----
+  console.log('retryAfterMs (Retry-After header sets the same-leg retry delay; raw, uncapped):');
+  await test('a numeric Retry-After (seconds) converts to ms', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '1' } }), 1000);
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '5' } }), 5000);
+  });
+  await test('returns the RAW duration uncapped — the caller decides to wait or fail over', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '3600' } }), 3_600_000);
+  });
+  await test('OpenAI retry-after-ms takes precedence over retry-after', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after-ms': '250', 'retry-after': '2' } }), 250);
+  });
+  await test('an AI_RetryError wrapper is unwrapped to reach the header', () => {
+    const inner: any = { statusCode: 429, responseHeaders: { 'retry-after': '20' } };
+    const wrapper: any = new Error('Failed after 3 attempts');
+    wrapper.errors = [inner];
+    wrapper.lastError = inner;
+    assert.equal(retryAfterMs(wrapper), 20_000);
+  });
+  await test('cause.responseHeaders is unwrapped', () => {
+    assert.equal(retryAfterMs({ cause: { responseHeaders: { 'retry-after': '2' } } }), 2000);
+  });
+  await test('missing header, zero, or garbage value → null (falls back to the default delay)', () => {
+    assert.equal(retryAfterMs({}), null);
+    assert.equal(retryAfterMs({ responseHeaders: {} }), null);
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '0' } }), null);
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': 'not-a-date' } }), null);
+    assert.equal(retryAfterMs(null), null);
+  });
+
+  // ---- withTransientRetry: wires retryAfterMs into the actual retry loop ----
+  console.log('withTransientRetry (waits out a short Retry-After; gives up the leg on a long one):');
+  await test('a 429 with Retry-After: 1 waits ~1000ms instead of the default 500ms', async () => {
+    let calls = 0;
+    const started = Date.now();
+    await withTransientRetry('test', async () => {
+      calls++;
+      if (calls === 1) {
+        const err: any = new Error('rate limit exceeded, slow down');
+        err.statusCode = 429;
+        err.responseHeaders = { 'retry-after': '1' };
+        throw err;
+      }
+      return 'ok';
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(calls, 2);
+    assert.ok(elapsed >= 950, `expected a ~1000ms wait, got ${elapsed}ms`);
+  });
+  await test('a Retry-After beyond the same-leg budget throws IMMEDIATELY (→ withFailover tries the backup)', async () => {
+    let calls = 0;
+    const started = Date.now();
+    const err: any = new Error('rate limit exceeded');
+    err.statusCode = 429;
+    err.responseHeaders = { 'retry-after': '3600' };
+    const thrown = await withTransientRetry('test', async () => { calls++; throw err; }).catch((x) => x);
+    const elapsed = Date.now() - started;
+    assert.equal(thrown, err);
+    assert.equal(calls, 1);                        // no second same-leg attempt
+    assert.ok(elapsed < 500, `expected an immediate throw, got ${elapsed}ms`);
+  });
+  await test('an aborted signal stops the backoff sleep and further attempts', async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    const started = Date.now();
+    const err: any = new Error('service unavailable');
+    err.statusCode = 503;
+    const run = withTransientRetry('test', async () => { calls++; throw err; }, controller.signal).catch((x) => x);
+    setTimeout(() => controller.abort(), 50);       // fire mid-backoff (first delay is ~500ms)
+    const thrown = await run;
+    const elapsed = Date.now() - started;
+    assert.equal(thrown, err);
+    assert.equal(calls, 1);
+    assert.ok(elapsed < 400, `expected the abort to cut the ~500ms sleep short, got ${elapsed}ms`);
+  });
+  await test('no Retry-After header falls back to the default jittered delay', async () => {
+    let calls = 0;
+    await withTransientRetry('test', async () => {
+      calls++;
+      if (calls === 1) {
+        const err: any = new Error('service unavailable');
+        err.statusCode = 503;
+        throw err;
+      }
+      return 'ok';
+    });
+    assert.equal(calls, 2);
+  });
+
+  // ---- real AI SDK error shapes: generateText + mock transport (PR #751 review) ----
+  // The synthetic literals above pin the classifier logic; this pins the SHAPE.
+  // A real generateText call retries internally (default maxRetries: 2) and
+  // throws AI_RetryError — a wrapper with no statusCode/responseHeaders of its
+  // own. The classifiers must see through it or none of this fires in prod.
+  console.log('real AI SDK shapes (generateText throws AI_RetryError wrapping APICallError):');
+  await test('a real 429 APICallError from generateText classifies through the RetryError wrapper', async () => {
+    const rateLimit429 = new APICallError({
+      message: 'Rate limit reached for gpt-4o on requests per min (RPM): Limit 3, Used 3',
+      url: 'https://api.openai.com/v1/chat/completions',
+      requestBodyValues: {},
+      statusCode: 429,
+      // retry-after: 0 keeps the SDK's own honoured waits at 0ms so the test is fast.
+      responseHeaders: { 'retry-after': '0' },
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: () => { throw rateLimit429; },
+    });
+    const thrown: any = await generateText({ model, prompt: 'hi' }).catch((x) => x);
+    assert.equal(thrown?.name, 'AI_RetryError');            // proves the wrapper shape
+    assert.equal(thrown?.statusCode, undefined);            // …with no status of its own
+    assert.equal(isRateLimited(thrown), true);              // unwrap finds the real 429
+    assert.equal(isTransient(thrown), true);
+    assert.equal(isQuotaOrAuthError(thrown), false);
+    assert.equal(isUnreachable(thrown), false);
+    assert.equal(retryAfterMs(thrown), null);               // '0' → no forced wait, default delay
+  });
+  await test('a real quota 429 through the wrapper still routes to quota/auth (issue #438 preserved)', async () => {
+    const quota429 = new APICallError({
+      message: 'you have reached your weekly usage limit, upgrade for higher limits',
+      url: 'https://ollama.com/api/chat',
+      requestBodyValues: {},
+      statusCode: 429,
+      responseHeaders: { 'retry-after': '0' },
+    });
+    const model = new MockLanguageModelV3({ doGenerate: () => { throw quota429; } });
+    const thrown: any = await generateText({ model, prompt: 'hi' }).catch((x) => x);
+    assert.equal(thrown?.name, 'AI_RetryError');
+    assert.equal(isQuotaOrAuthError(thrown), true);
+    assert.equal(isTransient(thrown), false);
+  });
+
+  // ---- errReason: turn undici's opaque "fetch failed" into an actionable log ----
+  console.log('errReason (log-friendly cause; digs the errno out of err.cause):');
+  await test('undici "fetch failed" surfaces the errno from err.cause.code, not "unknown"', () => {
+    // The Discord shape: the request never reached OpenRouter, so there is no
+    // HTTP status — the real reason (ECONNRESET / ENOTFOUND / ETIMEDOUT) is on
+    // the cause. The old retry log only read err.code and printed "unknown".
+    const e: any = new TypeError('fetch failed');
+    e.cause = { code: 'ECONNRESET' };
+    assert.equal(errReason(e), 'fetch failed (ECONNRESET)');
+    const dns: any = new TypeError('fetch failed');
+    dns.cause = { code: 'ENOTFOUND' };
+    assert.equal(errReason(dns), 'fetch failed (ENOTFOUND)');
+  });
+  await test('prefers a status when there is no errno, and never double-prints', () => {
+    assert.equal(errReason({ statusCode: 503 }), '503');
+    assert.equal(errReason({ message: '503 Service Unavailable', statusCode: 503 }), '503 Service Unavailable');
+    assert.equal(errReason(new Error('Insufficient credits. Add more credits and retry.')), 'Insufficient credits. Add more credits and retry.');
+    assert.equal(errReason(null), 'unknown');
   });
 
   // ---- per-provider thinking knob (the single most regression-prone mapping) ----
@@ -296,6 +544,42 @@ async function main() {
     assert.equal(bare.warmth, DIAL_NEUTRAL);
   });
 
+  // ---- clampTtsSpeed: per-engine / per-persona speech-rate multiplier ----
+  // Defaults to 1.0 (NOT 0 like gain) so a stock station — and any older save
+  // with no tts.speed — composes to unity and is byte-for-byte unchanged.
+  console.log('clampTtsSpeed (speech-rate multiplier, default 1.0):');
+  await test('non-finite / missing → 1.0 (unity)', () => {
+    assert.equal(clampTtsSpeed(undefined), TTS_SPEED_DEFAULT);
+    assert.equal(clampTtsSpeed(null), 1.0);
+    assert.equal(clampTtsSpeed('abc'), 1.0);
+    assert.equal(clampTtsSpeed(NaN), 1.0);
+  });
+  await test('clamps to [0.5, 2.0]', () => {
+    assert.equal(clampTtsSpeed(0.1), 0.5);
+    assert.equal(clampTtsSpeed(-3), 0.5);
+    assert.equal(clampTtsSpeed(5), 2.0);
+    assert.equal(clampTtsSpeed(2.0), 2.0);
+    assert.equal(clampTtsSpeed(0.5), 0.5);
+  });
+  await test('rounds to 0.05 step', () => {
+    assert.equal(clampTtsSpeed(1.23), 1.25);
+    assert.equal(clampTtsSpeed(0.87), 0.85);
+    assert.equal(clampTtsSpeed(1.0), 1.0);
+  });
+
+  // The persona save path (validatePersonasStrict → validateTtsBlock) must carry
+  // tts.speed through, else the per-persona dial is silently dropped on every save.
+  await test('validatePersonasStrict carries tts.speed through the save path', () => {
+    const base = { name: 'Nova', soul: 'late-night', frequency: 'moderate',
+      tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
+    const [fast] = validatePersonasStrict([{ ...base, tts: { ...base.tts, speed: 1.4 } }]);
+    assert.equal(fast.tts.speed, 1.4);
+    const [clamped] = validatePersonasStrict([{ ...base, tts: { ...base.tts, speed: 9 } }]);
+    assert.equal(clamped.tts.speed, 2.0);          // clamped to max
+    const [bare] = validatePersonasStrict([base]);
+    assert.equal(bare.tts.speed, TTS_SPEED_DEFAULT); // absent → unity
+  });
+
   // ---- showMusicLean: soft lean vs strict genre lock (shared by both pick paths) ----
   console.log('showMusicLean (soft lean vs strict genre lock):');
   const SOFT_GENRE_LINE = '\n\nMusic steer for this show — lean toward Jazz. These are preferences, not hard filters: break them only when the flow genuinely demands it.';
@@ -306,33 +590,97 @@ async function main() {
   await test('soft genre-only show is byte-for-byte the legacy line', () => {
     assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz' }), SOFT_GENRE_LINE);
   });
-  await test('genreStrict=false leaves the soft path unchanged', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz', genreStrict: false }), SOFT_GENRE_LINE);
+  await test('filtersStrict=false leaves the soft path unchanged', () => {
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz', filtersStrict: false }), SOFT_GENRE_LINE);
   });
-  await test('strict genre is a hard rule, not a soft lean', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', genreStrict: true });
-    assert.match(out, /Genre lock/);
-    assert.match(out, /MUST be Hip-Hop/);
-    assert.match(out, /do not pick other genres/);
+  await test('strict filters are a hard rule, not a soft lean', () => {
+    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', filtersStrict: true });
+    assert.match(out, /music filters are STRICT/);                  // the unified strict lock (#766)
+    assert.match(out, /Hip-Hop tracks/);                            // genre carried into the lock
+    assert.match(out, /Keep your talk inside them too/);            // stay-in-filter instruction
+    assert.match(out, /only step outside if there is genuinely nothing left that fits/); // hard rule + escape hatch
     assert.doesNotMatch(out, /lean toward Hip-Hop/);
-    assert.doesNotMatch(out, /Music steer/);     // no soft line when only the genre is pinned
+    assert.doesNotMatch(out, /Music steer/);     // no soft line when strict is on
   });
   await test('strict carries the never-starve escape hatch', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Metal', genreStrict: true });
-    assert.match(out, /no Metal track/i);        // can stray only to avoid dead air
+    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Metal', filtersStrict: true });
+    assert.match(out, /never leave dead air/i);   // can stray only to avoid dead air
   });
-  await test('strict needs a genre — genreStrict alone is inert', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genreStrict: true }), '');
-    // energy still produces a soft line; no genre lock without a genre
-    const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', genreStrict: true });
-    assert.doesNotMatch(out, /Genre lock/);
-    assert.match(out, /favour high-energy tracks/);
+  await test('strict needs a filter — filtersStrict alone is inert', () => {
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', filtersStrict: true }), '');
+    // energy alone still bites: the unified toggle locks any pinned filter, not just genre
+    const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', filtersStrict: true });
+    assert.match(out, /music filters are STRICT/);
+    assert.match(out, /high-energy tracks/);
+    assert.doesNotMatch(out, /Music steer/);   // strict, so no soft line
   });
-  await test('strict genre coexists with soft era/energy steers', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', genreStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
-    assert.match(out, /Genre lock for this show/);
-    assert.match(out, /Music steer for this show — prefer tracks from 1970–1979; favour medium-energy tracks/);
-    assert.doesNotMatch(out, /lean toward Soul/);  // genre is the hard rule, not a soft part
+  await test('strict locks genre, era and energy together (unified toggle)', () => {
+    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', filtersStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
+    assert.match(out, /music filters are STRICT/);   // unified strict lock (#766)
+    assert.match(out, /Soul tracks/);
+    assert.match(out, /the 1970–1979 era/);
+    assert.match(out, /medium-energy tracks/);
+    assert.doesNotMatch(out, /Music steer/);       // era/energy are strict too — no soft line
+    assert.doesNotMatch(out, /lean toward Soul/);  // genre is part of the hard lock
+  });
+
+  // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----
+  console.log('clampMaxOutputTokens / resolveMaxOutputTokens (per-call output cap):');
+  await test('0 and negatives mean "off" — pass through as 0, not the floor', () => {
+    assert.equal(clampMaxOutputTokens(0, 4000), 0);
+    assert.equal(clampMaxOutputTokens(-5, 4000), 0);
+  });
+  await test('non-numeric / NaN falls back to def (leaves the stored value untouched)', () => {
+    assert.equal(clampMaxOutputTokens('nope', 4000), 4000);
+    assert.equal(clampMaxOutputTokens(NaN, 8000), 8000);
+    assert.equal(clampMaxOutputTokens(undefined, 1234), 1234);
+    assert.equal(clampMaxOutputTokens(Infinity, 4000), 4000);
+  });
+  await test('1..499 rounds up to the 500 floor; over-max clamps to 8000', () => {
+    assert.equal(clampMaxOutputTokens(1, 4000), MAX_OUTPUT_TOKENS_MIN);
+    assert.equal(clampMaxOutputTokens(499, 4000), 500);
+    assert.equal(clampMaxOutputTokens(9000, 4000), MAX_OUTPUT_TOKENS_MAX);
+  });
+  await test('in-range values pass through, floored to an int', () => {
+    assert.equal(clampMaxOutputTokens(500, 4000), 500);
+    assert.equal(clampMaxOutputTokens(2000, 4000), 2000);
+    assert.equal(clampMaxOutputTokens(8000, 4000), 8000);
+    assert.equal(clampMaxOutputTokens(2000.9, 4000), 2000);
+  });
+  await test('resolveMaxOutputTokens returns the strategy fallback when unset (default 0)', () => {
+    // No update() has run in this pure harness, so settings.get() is DEFAULTS
+    // (maxOutputTokens: 0) → each strategy keeps its own built-in default.
+    assert.equal(resolveMaxOutputTokens(4000), 4000);
+    assert.equal(resolveMaxOutputTokens(8000), 8000);
+  });
+
+  // ---- nearestId: near-miss id repair for the picker agents ----
+  console.log('nearestId (unknown-id near-miss repair):');
+  await test('repairs the observed live case: final character dropped from a nanoid', () => {
+    // glm-5.1 returned "BFjCKvSeWFKFpKTRvroPC" for the real "BFjCKvSeWFKFpKTRvroPCp".
+    const seen = ['2igTN1Xw3uJBY9CjdKzZGl', 'H8G6Y1gPsSsMNJwflWbstW', 'BFjCKvSeWFKFpKTRvroPCp'];
+    assert.equal(nearestId('BFjCKvSeWFKFpKTRvroPC', seen), 'BFjCKvSeWFKFpKTRvroPCp');
+  });
+  await test('repairs a single substituted character (edit distance 1)', () => {
+    const seen = ['yu4ZsUclpGxnr8CU2YfNf7', 'qJcxd61T5W7YJ0bNryKakG'];
+    assert.equal(nearestId('yu4ZsUclpGxnr8CU2YfNf8', seen), 'yu4ZsUclpGxnr8CU2YfNf7');
+  });
+  await test('rejects a fabricated id (nothing near any candidate)', () => {
+    const seen = ['2igTN1Xw3uJBY9CjdKzZGl', 'H8G6Y1gPsSsMNJwflWbstW'];
+    assert.equal(nearestId('3bKpTnYlqR8vD4sXe2aJ0m', seen), null);
+  });
+  await test('rejects an ambiguous match (two candidates equally close)', () => {
+    // Both differ from the query by one trailing character — no safe winner.
+    const seen = ['AAAAAAAAAAAAAAAAAAAAAx', 'AAAAAAAAAAAAAAAAAAAAAy'];
+    assert.equal(nearestId('AAAAAAAAAAAAAAAAAAAAAz', seen), null);
+  });
+  await test('rejects short-prefix matches (below the 12-char floor)', () => {
+    assert.equal(nearestId('abc', ['abcdef123456789012345']), null);
+  });
+  await test('handles junk input without throwing', () => {
+    assert.equal(nearestId('', ['abcdef123456789012345']), null);
+    assert.equal(nearestId(undefined as any, ['abcdef123456789012345']), null);
+    assert.equal(nearestId('abcdef123456789012345', []), null);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

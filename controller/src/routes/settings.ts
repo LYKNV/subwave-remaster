@@ -2,11 +2,14 @@
 // UI consumes, the matching write endpoint, plus the mixer-restart and
 // auto-pick toggles.
 import express from 'express';
+import { readFile, unlink } from 'node:fs/promises';
+import { extname } from 'node:path';
 import { config } from '../config.js';
 import * as library from '../music/library.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as settings from '../settings.js';
 import * as tts from '../audio/tts.js';
+import * as remoteTts from '../audio/remoteTts.js';
 import * as chatterbox from '../audio/chatterbox.js';
 import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
@@ -16,15 +19,17 @@ import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../bro
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
-import { generateText } from 'ai';
+import { listenbrainzApiBase } from '../broadcast/scrobble.js';
+import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { tagger } from '../broadcast/tagger.js';
+import { taggerView } from '../broadcast/tagger.js';
+import { currentMode as budgetCurrentMode } from '../broadcast/dj-budget.js';
 import { skillCatalog } from '../skills/_agent.js';
-import { clearUserThemeCache, loadUserThemes, listThemes, saveUserTheme } from '../themes.js';
+import { clearUserThemeCache, loadUserThemes, listThemesAnnotated, saveUserTheme, deleteUserTheme } from '../themes.js';
 
 export const router = express.Router();
 
@@ -68,7 +73,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
       onAir,
       jingles: await jingles.list(),
       libraryStats: library.stats(),
-      tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
+      tagger: taggerView(),
+      // Current daily-token-budget tier (normal|soft|hard) — reads 'normal' on the
+      // default cap-off install. The library Tagging modal warns before a run when
+      // this is soft/hard (LLM steps will spend more, or fail until UTC midnight).
+      budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
       // What the configured zone resolves to when timezone is '' (Auto) —
       // lets the UI label the Auto option with the actual server zone.
@@ -77,12 +86,17 @@ router.get('/settings', requireAdmin, async (req, res) => {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
         maxTrackSeconds: s.maxTrackSeconds,
+        // Crossfade-relative floor for a non-zero cap — one rule, shared with the
+        // admin/show UI so client hints match server validation.
+        minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
         stream: s.stream,
+        loudness: s.loudness,
         station: s.station,
         timezone: s.timezone,
         locale: s.locale,
         theme: s.theme,
+        festivals: s.festivals,
         weather: s.weather,
         djPrompt: s.djPrompt,
         personas: s.personas,
@@ -110,7 +124,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
       tts: {
         engines: tts.ENGINES,
         available: tts.availableEngines(),
-        kokoroVoices: settings.KOKORO_VOICES_BRITISH,
+        kokoroVoices: settings.KOKORO_VOICES,
+        kokoroVoiceLanguages: settings.KOKORO_VOICE_LANGUAGES,
+        kokoroLangs: settings.KOKORO_LANGS,
         voiceDir,
         piperVoices,
         chatterboxVoices: customVoices,
@@ -154,6 +170,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
         LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
         LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
+        LISTENBRAINZ_API_URL: !!process.env.LISTENBRAINZ_API_URL,
       },
       // Skill catalogue — consumed by the Skills page and by Personas for the
       // per-persona skill-assignment checklist.
@@ -185,6 +202,12 @@ router.post('/settings', requireAdmin, async (req, res) => {
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
+    }
+    // A changed remote-TTS URL re-probes immediately so availability (and the
+    // admin "ready/unreachable" badge) reflects the new endpoint on the next
+    // /settings fetch instead of waiting for the 30s probe tick.
+    if (req.body?.tts?.remote?.url !== undefined) {
+      await remoteTts.refresh();
     }
     res.json(result);
   } catch (err) {
@@ -356,7 +379,7 @@ async function probeKey(
       return { ok: true, message: '✓ Last.fm API key valid' };
     }
     case 'LISTENBRAINZ_USER_TOKEN': {
-      const r = await fetch('https://api.listenbrainz.org/1/validate-token', {
+      const r = await fetch(`${listenbrainzApiBase()}/validate-token`, {
         headers: { Authorization: `Token ${value}` },
         signal: AbortSignal.timeout(8000),
       });
@@ -378,22 +401,63 @@ async function probeKey(
 // ---------------------------------------------------------------------------
 router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   const { key, value } = req.body || {};
-  if (!key || !value || typeof key !== 'string' || typeof value !== 'string') {
-    return res.status(400).json({ ok: false, message: 'key and value are required', latencyMs: 0 });
+  if (!key || typeof key !== 'string') {
+    return res.status(400).json({ ok: false, message: 'key is required', latencyMs: 0 });
   }
   if (!SECRET_ENV_KEYS.includes(key as any)) {
     return res.status(400).json({ ok: false, message: `Unknown key: ${key}`, latencyMs: 0 });
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return res.status(400).json({ ok: false, message: 'value must not be blank', latencyMs: 0 });
+  let targetValue = typeof value === 'string' ? value.trim() : '';
+  if (!targetValue) {
+    // If no value provided, check if key is already set in the environment
+    const envValue = (process.env[key] || '').trim();
+    if (!envValue) {
+      return res.status(400).json({ ok: false, message: 'value is required when key is not set in environment', latencyMs: 0 });
+    }
+    targetValue = envValue;
   }
   const t0 = Date.now();
   try {
-    const result = await probeKey(key as (typeof SECRET_ENV_KEYS)[number], trimmed);
+    const result = await probeKey(key as (typeof SECRET_ENV_KEYS)[number], targetValue);
     res.json({ ok: result.ok, message: result.message, latencyMs: Date.now() - t0 });
   } catch (err: any) {
     res.json({ ok: false, message: err?.message || 'probe failed', latencyMs: Date.now() - t0 });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
+// voice (not the on-air persona) so the admin "Play sample" button can audition
+// a voice/speed before saving. Body: { engine, voice?, cloudProvider?, speed?,
+// lang?, text? }. On success streams the rendered WAV (audio/wav). On a synth
+// failure — e.g. the tts-heavy sidecar is down or no cloud key — returns 422
+// with { ok, message } instead of silently falling back to Piper, so the
+// operator sees why. The temp WAV is unlinked once sent.
+// ---------------------------------------------------------------------------
+router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
+  const body = req.body || {};
+  const engine = typeof body.engine === 'string' ? body.engine : '';
+  if (!engine || !tts.ENGINES.includes(engine)) {
+    return res.status(400).json({ ok: false, message: `Unknown engine: ${engine || '(none)'}` });
+  }
+  let filePath: string | null = null;
+  try {
+    filePath = await tts.synthesizeSample({
+      engine,
+      voice: typeof body.voice === 'string' ? body.voice : '',
+      cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
+      speed: typeof body.speed === 'number' ? body.speed : undefined,
+      lang: typeof body.lang === 'string' ? body.lang : undefined,
+      text: typeof body.text === 'string' ? body.text : undefined,
+    });
+    const buf = await readFile(filePath);
+    // Local engines render WAV; cloud (ElevenLabs) renders MP3. Set the type
+    // from the actual extension so the browser <audio> gets the right MIME.
+    res.type(extname(filePath) || '.wav').send(buf);
+  } catch (err: any) {
+    res.status(422).json({ ok: false, message: err?.message || 'Preview synthesis failed' });
+  } finally {
+    if (filePath) unlink(filePath).catch(() => {});
   }
 });
 
@@ -443,8 +507,23 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   }
   const t0 = Date.now();
   try {
+    let resolvedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+    if (!resolvedApiKey) {
+      await settings.load();
+      const s = settings.get();
+      const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
+      const targetUrl = baseUrl.trim().replace(/\/+$/, '');
+      // Match the target server to a leg, then read that leg's provider's inline
+      // key from the per-provider map (issue #657). Falls back to the
+      // openai-compatible slot when neither leg's URL matches.
+      const legProvider = (targetUrl && targetUrl === fallbackUrl)
+        ? s.llm?.fallback?.provider
+        : s.llm?.provider;
+      resolvedApiKey = settings.llmKeyFor(legProvider || 'openai-compatible');
+    }
+
     const m = createOpenAI({
-      apiKey: (typeof apiKey === 'string' && apiKey.trim()) ? apiKey.trim() : 'no-key',
+      apiKey: resolvedApiKey || 'no-key',
       baseURL: baseUrl.trim().replace(/\/+$/, ''),
     }).chat(model.trim());
     await generateText({
@@ -456,6 +535,223 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
     res.json({ ok: true, message: '✓ Bearer token accepted · model responded', latencyMs: Date.now() - t0 });
   } catch (err: any) {
     res.json({ ok: false, message: briefLlmError(err), latencyMs: Date.now() - t0 });
+  }
+});
+
+// Providers whose model API returns one mixed list (chat + embedding) with no
+// type flag. For scope=embedding we can't tell them apart at the API level like
+// openai/google/openrouter/gateway do, so we trim by model-name heuristic below
+// — otherwise the embedding picker offers chat models that just fail to embed.
+const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty']);
+
+// Heuristic: does this model id look like a text-embedding model? Embedding
+// model naming is conventional — almost all carry "embed", the rest come from a
+// short list of known families (bge / gte / e5 / minilm / instructor). Anything
+// unmatched can still be typed by hand (the field falls back to a free-text
+// input when discovery returns nothing).
+function looksLikeEmbeddingModel(id: string): boolean {
+  const s = id.toLowerCase();
+  if (s.includes('embed')) return true; // nomic-embed-text, mxbai-embed-large, text-embedding-3-*, *-arctic-embed
+  return /(^|[/:_-])(bge|gte|e5|all-minilm|minilm|instructor)([/:_-]|$)/.test(s);
+}
+
+// ---------------------------------------------------------------------------
+// GET /settings/llm/models — discover available models for any LLM provider.
+// Query: provider (required), baseUrl (optional), ollamaUrl (optional).
+// Always 200s with { ok, models, provider, error? }.
+// ---------------------------------------------------------------------------
+router.get('/settings/llm/models', requireAdmin, async (req, res) => {
+  const provider = String(req.query.provider || '').trim();
+  if (!provider) {
+    return res.json({ ok: false, models: [], provider: '', error: 'provider is required' });
+  }
+  const baseUrl = String(req.query.baseUrl || '').trim().replace(/\/+$/, '');
+  const ollamaUrl = String(req.query.ollamaUrl || '').trim().replace(/\/+$/, '');
+  const scope = String(req.query.scope || '').trim(); // 'embedding' | '' (chat)
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10_000);
+
+  const resolveKey = (envName: string) => (process.env[envName] || '').trim() || '';
+
+  try {
+    let models: string[] = [];
+
+    switch (provider) {
+      case 'ollama': {
+        const url = ollamaUrl || config.ollama.url || 'http://localhost:11434';
+        const r = await fetch(`${url}/api/tags`, { signal: ctrl.signal });
+        if (!r.ok) throw new Error(`Ollama HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.models)
+          ? data.models.map((m: any) => m?.name).filter((n: any): n is string => typeof n === 'string')
+          : [];
+        break;
+      }
+
+      case 'openai-compatible':
+      case 'locca': {
+        const url = baseUrl
+          || (provider === 'locca' ? llmProvider.DEFAULT_LOCCA_BASE_URL : '');
+        if (!url) throw new Error('baseUrl is required for openai-compatible');
+        await settings.load();
+        // Inline key for this provider from the per-provider map (issue #657).
+        // Primary and fallback inline legs of the same provider share one entry,
+        // so the key resolves by provider id without a baseUrl match.
+        const apiKey = settings.llmKeyFor(provider);
+        const headers: Record<string, string> = {};
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+        const r = await fetch(`${url}/models`, { signal: ctrl.signal, headers });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string')
+          : [];
+        break;
+      }
+
+      case 'openai': {
+        const apiKey = resolveKey('OPENAI_API_KEY');
+        if (!apiKey) throw new Error('OPENAI_API_KEY not set');
+        const r = await fetch('https://api.openai.com/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data
+              .map((m: any) => m?.id)
+              .filter((id: any): id is string => typeof id === 'string')
+              .filter((id: string) => scope === 'embedding' ? id.startsWith('text-embedding-') : !id.startsWith('text-embedding-'))
+              .sort()
+          : [];
+        break;
+      }
+
+      case 'anthropic': {
+        const apiKey = resolveKey('ANTHROPIC_API_KEY');
+        if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+        const r = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+          signal: ctrl.signal,
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+        });
+        if (!r.ok) throw new Error(`Anthropic HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'google': {
+        const apiKey = resolveKey('GOOGLE_GENERATIVE_AI_API_KEY');
+        if (!apiKey) throw new Error('GOOGLE_GENERATIVE_AI_API_KEY not set');
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
+          signal: ctrl.signal,
+        });
+        if (!r.ok) throw new Error(`Google HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.models)
+          ? data.models
+              .filter((m: any) => {
+                const methods: string[] = Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
+                return scope === 'embedding'
+                  ? methods.includes('embedContent')
+                  : methods.includes('generateContent');
+              })
+              .map((m: any) => String(m?.name || '').replace(/^models\//, ''))
+              .filter(Boolean)
+              .sort()
+          : [];
+        break;
+      }
+
+      case 'deepseek': {
+        const apiKey = resolveKey('DEEPSEEK_API_KEY');
+        if (!apiKey) throw new Error('DEEPSEEK_API_KEY not set');
+        const r = await fetch('https://api.deepseek.com/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`DeepSeek HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'openrouter': {
+        const url = scope === 'embedding'
+          ? 'https://openrouter.ai/api/v1/models?output_modalities=embeddings'
+          : 'https://openrouter.ai/api/v1/models';
+        const r = await fetch(url, { signal: ctrl.signal });
+        if (!r.ok) throw new Error(`OpenRouter HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'requesty': {
+        const apiKey = resolveKey('REQUESTY_API_KEY');
+        if (!apiKey) throw new Error('REQUESTY_API_KEY not set');
+        const r = await fetch(`${llmProvider.DEFAULT_REQUESTY_BASE_URL}/models`, {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`Requesty HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'gateway': {
+        // Vercel AI Gateway. Use the SDK's getAvailableModels() rather than a
+        // hand-rolled URL — the gateway lives at ai-gateway.vercel.sh/v3/ai (not
+        // Cloudflare) and the SDK resolves the key / OIDC exactly as the registry's
+        // createGateway does. No apiKey → fall through to env / OIDC credentials.
+        const apiKey = resolveKey('AI_GATEWAY_API_KEY');
+        const gw = createGateway({
+          ...(apiKey ? { apiKey } : {}),
+          fetch: (u: any, init: any) => fetch(u, { ...init, signal: ctrl.signal }),
+        });
+        const { models: gwModels } = await gw.getAvailableModels();
+        models = (Array.isArray(gwModels) ? gwModels : [])
+          .filter((m: any) => {
+            if (!scope) return true;
+            const t = m?.modelType;
+            return scope === 'embedding' ? t === 'embedding' : t !== 'embedding';
+          })
+          .map((m: any) => m?.id)
+          .filter((id: any): id is string => typeof id === 'string')
+          .sort();
+        break;
+      }
+
+      default:
+        return res.json({ ok: false, models: [], provider, error: `unknown provider: ${provider}` });
+    }
+
+    // These providers hand back a mixed chat+embedding list; keep only the
+    // embedding-looking models so the tagger's embedding picker isn't cluttered
+    // with chat models that can't embed. Other providers already filtered by
+    // their API above.
+    if (scope === 'embedding' && MIXED_MODEL_LIST_PROVIDERS.has(provider)) {
+      models = models.filter(looksLikeEmbeddingModel);
+    }
+
+    res.json({ ok: true, models, provider });
+  } catch (err: any) {
+    res.json({ ok: false, models: [], provider, error: err?.message || 'discovery failed' });
+  } finally {
+    clearTimeout(timer);
   }
 });
 
@@ -476,7 +772,15 @@ router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
   }
   try {
     const r = await probeEmbeddingConfig(overrides);
-    res.json({ ok: r.code === 'ok', dim: r.dim ?? null, code: r.code, message: r.message });
+    let message = r.message;
+    // Test-only reassurance: a not-yet-pulled Ollama model isn't a real failure —
+    // the tagger auto-pulls it on the next run (ensureReady → tryOllamaPull). We
+    // add this only here, NOT in the shared actionableMessage, because the tagger
+    // reuses that same message only AFTER an auto-pull has already failed.
+    if (r.code === 'not_found' && r.provider === 'ollama') {
+      message += '\n  You can ignore this — the tagger pulls this model automatically when you start a run.';
+    }
+    res.json({ ok: r.code === 'ok', dim: r.dim ?? null, code: r.code, message });
   } catch (err: any) {
     res.json({ ok: false, dim: null, code: 'unknown', message: err?.message || 'probe failed' });
   }
@@ -542,7 +846,7 @@ router.post('/themes/refresh', requireAdmin, async (req, res) => {
   try {
     clearUserThemeCache();
     await loadUserThemes(true);
-    const themes = await listThemes();
+    const themes = await listThemesAnnotated();
     res.json({ ok: true, themes });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -558,6 +862,21 @@ router.post('/themes/refresh', requireAdmin, async (req, res) => {
 router.post('/themes', requireAdmin, async (req, res) => {
   try {
     const themes = await saveUserTheme(req.body || {});
+    res.json({ ok: true, themes });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /themes/:id — remove a user theme file from ${STATE_DIR}/themes/.
+// Built-in ids are reserved and rejected. The admin UI reassigns the active
+// theme when it deletes the one in use, so this route only touches the file.
+// Returns the refreshed registry.
+// ---------------------------------------------------------------------------
+router.delete('/themes/:id', requireAdmin, async (req, res) => {
+  try {
+    const themes = await deleteUserTheme(req.params.id);
     res.json({ ok: true, themes });
   } catch (err) {
     res.status(400).json({ error: err.message });

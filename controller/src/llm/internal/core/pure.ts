@@ -78,12 +78,14 @@ export function budgetMode(
 // Transient vs unreachable error classification
 // ---------------------------------------------------------------------------
 //
-// Three classifiers gate two different recovery mechanisms:
-//   isTransient        → withTransientRetry retries on the SAME leg (5xx / plain 429 / socket).
-//   isUnreachable      → withFailover switches to the BACKUP leg (host is DOWN).
-//   isQuotaOrAuthError → withFailover switches to the BACKUP leg (host UP but
-//                        refusing this leg: quota/usage-limit/billing 429, or
-//                        an auth failure — retrying the same model is futile).
+// Four classifiers gate two different recovery mechanisms:
+//   isTransient         → withTransientRetry retries on the SAME leg (5xx / plain 429 / socket).
+//   isUnreachable       → withFailover switches to the BACKUP leg (host is DOWN).
+//   isQuotaOrAuthError  → withFailover switches to the BACKUP leg (host UP but
+//                         refusing this leg: quota/usage-limit/billing 429, or
+//                         an auth failure — retrying the same model is futile).
+//   isUpstreamOverloaded→ withFailover switches to the BACKUP leg (a reachable
+//                         gateway relayed a saturated upstream — see below).
 // isUnreachable is a strict subset of isTransient: it EXCLUDES 408/425/429/5xx,
 // because a host that answers with a status is reachable — those stay with
 // transient retry on the configured model rather than being masked by a silent
@@ -92,6 +94,30 @@ export function budgetMode(
 // recover this call, so it is pulled OUT of the transient set and fails over
 // instead of pointlessly retrying a dead leg (issue #438 — Ollama Cloud's
 // "weekly usage limit" 429s looped on the exhausted leg and never failed over).
+//
+// isUpstreamOverloaded is the inverse-shaped sibling: it is ADDED to the
+// failover set but deliberately LEFT IN the transient set. An OpenRouter
+// "Upstream error from <provider>: ResourceExhausted" (issue #671) or an
+// Anthropic 529 "Overloaded" means the chosen model/route is saturated right
+// now — which, unlike a quota cap, CAN clear in a second. So withTransientRetry
+// gets first crack on the chosen model (honouring #320); only when the overload
+// persists past that budget does withFailover try the configured fallback model,
+// instead of the call dying on the saturated route having never tried the backup.
+
+// The AI SDK's built-in retry (generateText's default maxRetries: 2) throws
+// AI_RetryError once its attempts are spent — a wrapper with NO statusCode,
+// cause, or responseHeaders of its own. The real APICallError (with the 429
+// status and the Retry-After header) lives in err.lastError / err.errors[].
+// Every classifier below unwraps first, or a rate-limited/quota/overloaded
+// call that the SDK already retried would classify as nothing at all and
+// never fail over (PR #751 review). Duck-typed on the wrapper's fields, not
+// RetryError.isInstance, so this file keeps its no-`ai`-import purity.
+export function unwrapSdkError(err: any): any {
+  if (!err) return err;
+  const inner = err.lastError
+    ?? (Array.isArray(err.errors) && err.errors.length ? err.errors[err.errors.length - 1] : undefined);
+  return inner ?? err;
+}
 
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
@@ -101,6 +127,7 @@ const TRANSIENT_CODE = new Set([
 
 export function isTransient(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   // A quota/usage-limit/auth rejection is permanent for THIS leg this call —
   // never burn same-leg retries on it; let it propagate to withFailover, which
   // switches legs (#438). A plain rate-limit 429 (no quota/auth signature) is
@@ -131,6 +158,7 @@ const UNREACHABLE_CODE = new Set([
 
 export function isUnreachable(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   const code = err.code ?? err.cause?.code;
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
@@ -150,11 +178,15 @@ export function isUnreachable(err: any): boolean {
 // leg (issue #438). Detected by message because providers surface quota/auth
 // differently and the AI SDK often flattens the status into the message text;
 // a bare 429 with no quota signature stays a plain transient rate-limit.
-const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|upgrade for higher|out of credit|payment required/i;
+// "requires more credits" / "can only afford" are OpenRouter's per-request
+// affordability 402 — no "insufficient"/"quota" token, so it only classified
+// while the 402 status survived; match it by text too (Discord out-of-credit run).
+const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|requires more credits|can only afford|upgrade for higher|out of credit|payment required/i;
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
 export function isQuotaOrAuthError(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   // Auth: any 401/403, or an auth-shaped message regardless of status.
   if (status === 401 || status === 403) return true;
@@ -166,6 +198,80 @@ export function isQuotaOrAuthError(err: any): boolean {
   if (AUTH_RE.test(msg)) return true;
   if (QUOTA_RE.test(msg)) return true;
   return false;
+}
+
+// A reachable gateway relayed a saturated upstream: the host answered, but the
+// model/route it fronts is at capacity right now. OpenRouter surfaces this as
+// "Upstream error from <provider>: ResourceExhausted: Worker local total
+// request limit reached (32/32)" (issue #671); Anthropic as a 529 "Overloaded";
+// Vertex/gRPC as RESOURCE_EXHAUSTED. Unlike a quota cap this is NOT the user's
+// account being out of credit (so it is NOT isQuotaOrAuthError) and the host is
+// UP (so it is NOT isUnreachable) — it is a transient capacity blip that CAN
+// clear on a retry. So it deliberately STAYS in the transient set
+// (withTransientRetry gets first crack on the chosen model); withFailover then
+// adds it as a failover trigger, so a persistent overload finally tries the
+// configured fallback model rather than dying on the saturated route. Matched
+// by message because the signal is in the relayed text, plus Anthropic's 529.
+// Kept tight to avoid stealing plain rate-limit 429s (which should stay same-leg
+// transient retries): only an explicit upstream/overload/exhausted phrase or a
+// 529 qualifies — a bare 503 or "rate limit exceeded, slow down" does not.
+const UPSTREAM_OVERLOAD_RE = /upstream error|resource[ _]?exhausted|overloaded|no instances?\b.*\bavailable|worker local total request limit/i;
+
+export function isUpstreamOverloaded(err: any): boolean {
+  if (!err) return false;
+  err = unwrapSdkError(err);
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  if (status === 529) return true; // Anthropic "Overloaded" — outside TRANSIENT_STATUS
+  const msg = String(err.message || err.cause?.message || '');
+  return UPSTREAM_OVERLOAD_RE.test(msg);
+}
+
+// A plain rate-limit 429 with no quota/usage-limit wording (issue #738): the
+// free-tier daily/per-minute request cap on a provider like Gemini/Groq/
+// OpenRouter. This is the case isQuotaOrAuthError deliberately does NOT catch
+// (see its comment above), so it stays isTransient and gets same-leg retries
+// first via withTransientRetry. If those retries exhaust and the 429 is still
+// live, withFailover treats it the same as a quota/auth rejection and switches
+// to the backup leg — a request-per-minute/day cap on the primary provider is
+// exactly the "keep the station on air on a free tier" case the issue asks
+// for, and retrying the same exhausted leg forever will never recover it.
+//
+// Deliberately NOT any bare 429: a status alone must also carry rate-limit
+// wording or a Retry-After header to qualify. A self-hosted llama.cpp/vLLM box
+// answering 429 on a momentary concurrency spike sends neither — that stays a
+// plain same-leg transient retry and never silently switches the station onto
+// a (possibly paid) cloud fallback (PR #751 review). Every provider #738
+// names does send the wording and/or the header.
+const RATE_LIMIT_RE = /rate.?limit|too many requests|requests? per (?:minute|day|hour)|\b[rt]p[mdh]\b/i;
+
+export function isRateLimited(err: any): boolean {
+  if (!err) return false;
+  err = unwrapSdkError(err);
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  const msg = String(err.message || err.cause?.message || '');
+  const is429 = status === 429 || (status == null && /\b429\b/.test(msg));
+  if (!is429) return false;
+  const headers = err.responseHeaders ?? err.cause?.responseHeaders;
+  const hasRetryAfter = !!(headers?.['retry-after'] ?? headers?.['retry-after-ms']);
+  return hasRetryAfter || RATE_LIMIT_RE.test(msg);
+}
+
+// A short, actionable reason string for logs. A network-transport failure
+// surfaces as undici's opaque `TypeError: fetch failed` — the real errno
+// (ECONNRESET / ENOTFOUND / ETIMEDOUT / UND_ERR_*) lives on err.cause.code,
+// NOT err.code, so a log that only reads err.code/status prints "unknown" for
+// exactly the case an operator most needs to see (a request that never reached
+// the provider — Discord: "it's not even seeing requests"). Digs into the cause
+// and appends the errno/status to the message when it adds something.
+export function errReason(err: any): string {
+  if (!err) return 'unknown';
+  err = unwrapSdkError(err);
+  const msg = String(err.message || err.cause?.message || '').trim();
+  const code = err.code ?? err.cause?.code;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  const detail = typeof code === 'string' ? code : typeof status === 'number' ? String(status) : '';
+  if (msg && detail && !msg.includes(detail)) return `${msg.slice(0, 100)} (${detail})`;
+  return msg.slice(0, 100) || detail || 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -216,4 +322,52 @@ export function failureDiagnostics(err: any): any {
     out.steps = steps.length;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Near-miss id resolution
+// ---------------------------------------------------------------------------
+
+// Levenshtein distance capped at 2 — we only ever care about distance ≤ 1, so
+// bail as soon as a row's minimum exceeds the cap instead of filling the table.
+function editDistanceAtMost2(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > 2) return 3;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Resolve a model-returned id that isn't in the candidate set to the candidate
+// it almost certainly meant, or null when no single safe match exists. Covers
+// the observed transcription slips (glm-5.1 dropped the final character of an
+// id it had genuinely picked from its own tool results — a 22-char nanoid
+// returned as 21) without ever guessing between two plausible candidates:
+//   1. prefix — one string is a prefix of the other, ≥ 12 chars shared and ≤ 3
+//      chars difference (nanoid-style ids make a 12-char prefix collision
+//      astronomically unlikely; 12 also keeps short ids from matching wildly).
+//   2. edit distance ≤ 1 — a single dropped/added/substituted character.
+// Both passes require EXACTLY one candidate to match — any ambiguity → null,
+// the caller falls back to its re-pick / stateless path rather than airing a
+// coin-flip.
+export function nearestId(id: string, candidateIds: Iterable<string>): string | null {
+  if (!id || typeof id !== 'string') return null;
+  const ids = [...candidateIds];
+  const prefix = ids.filter((c) =>
+    c !== id
+    && Math.min(c.length, id.length) >= 12
+    && Math.abs(c.length - id.length) <= 3
+    && (c.startsWith(id) || id.startsWith(c)));
+  if (prefix.length === 1) return prefix[0];
+  if (prefix.length > 1) return null;
+  const near = ids.filter((c) => c !== id && editDistanceAtMost2(c, id) <= 1);
+  return near.length === 1 ? near[0] : null;
 }

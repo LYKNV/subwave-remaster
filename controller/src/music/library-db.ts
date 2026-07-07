@@ -17,6 +17,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { readFile, rename, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { STATE_DIR } from '../config.js';
 
 const DB_PATH = `${STATE_DIR}/library.db`;
@@ -62,6 +63,10 @@ const SQL_NO_MOODS = `(moods IS NULL OR json_array_length(moods) = 0)`;
 
 let db: Database.Database | null = null;
 let currentEmbeddingDim: number | null = null;
+// Minted per open() — makes change tokens from different handles (restart,
+// reload, restore-from-backup) never comparable, so a stale 304 can't happen
+// across a swap even though both counters below restart from scratch.
+let dbNonce = '0';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,6 +110,24 @@ export interface TrackRecord {
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
+  // Zero-shot audio moods — top mood labels from scoring the vocabulary against
+  // the track's CLAP audio vector (music/audio-moods.ts). [] until scored;
+  // sound-derived, so they complement (never replace) the LLM `moods`.
+  audioMoods: string[];
+  // Outro (tail) features — the track's measured ending (fade vs cold, tail
+  // loudness/tempo/bar grid). null → no outro signal, today's transitions.
+  outro: TrackOutro | null;
+}
+
+// The measured ending of a track — what the crossfade seam actually lands on.
+// Timestamps are absolute ms into the track.
+export interface TrackOutro {
+  startMs: number;           // where the wind-down starts
+  ending: 'fade' | 'cold';   // fades to silence vs ends at level
+  lufs: number | null;       // integrated tail loudness (BS.1770)
+  bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
+  beats: number[] | null;    // tail beat grid (ms)
+  bars: number[] | null;     // tail downbeat grid (ms)
 }
 
 // A key over a time range: tonic note (sharps) + mode.
@@ -216,8 +239,15 @@ export async function open(opts: {
   }
   currentEmbeddingDim = opts.embeddingDim;
   db = new Database(DB_PATH);
+  dbNonce = randomUUID().slice(0, 8);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
+  // Cap the -wal sidecar: after any checkpoint SQLite truncates it back to this
+  // size instead of leaving it at its high-water mark. Without it a bulk write
+  // pass (acoustic analysis, tagging) balloons the WAL to hundreds of MB — 2.4×
+  // the DB itself in #786 — and every later query walks that giant WAL on
+  // better-sqlite3's synchronous thread, stalling the whole event loop.
+  db.pragma('journal_size_limit = 67108864'); // 64 MiB
   sqliteVec.load(db);
 
   // migrate() may adopt the stored dim; trust its return as the live schema dim.
@@ -231,14 +261,49 @@ export async function open(opts: {
 
 export function close(): void {
   if (db) {
+    // Fold the WAL back into the main DB file before closing. SQLite only
+    // auto-checkpoints on the LAST connection to close, and the controller,
+    // tagger and analyzer can hold the DB concurrently — so an explicit
+    // best-effort TRUNCATE here is what keeps the sidecar from surviving
+    // (and regrowing across) restarts. Synchronous, so it also runs safely
+    // from a process 'exit' hook.
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      /* busy/readonly — the hourly checkpoint or next close gets it */
+    }
     db.close();
     db = null;
     currentEmbeddingDim = null;
+    // reload()/restoreFromFile() both drop the handle through here, so a
+    // reopened (possibly restored-from-backup) library never serves the
+    // previous handle's cached tallies.
+    invalidateStats();
   }
 }
 
 export function isOpen(): boolean {
   return db !== null;
+}
+
+// Best-effort PRAGMA wal_checkpoint(TRUNCATE): fold the WAL into the main DB
+// file and truncate the sidecar to zero. Returns what SQLite reports — busy=1
+// means a concurrent reader/writer kept the checkpoint from completing (fine;
+// the next run catches up) — or null when the DB isn't open. Called after bulk
+// passes and hourly from the scheduler so the WAL can never balloon unbounded
+// again (#786).
+export function checkpointWal(): { busy: number; log: number; checkpointed: number } | null {
+  if (!db) return null;
+  try {
+    const row = db.pragma('wal_checkpoint(TRUNCATE)') as Array<{
+      busy: number;
+      log: number;
+      checkpointed: number;
+    }>;
+    return row?.[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Write a consistent, single-file copy of the live DB to `destPath`. Uses
@@ -256,6 +321,20 @@ export async function backup(destPath: string): Promise<void> {
 export async function restoreFromFile(srcPath: string): Promise<void> {
   close();
   await copyFile(srcPath, DB_PATH);
+  await rm(`${DB_PATH}-wal`, { force: true });
+  await rm(`${DB_PATH}-shm`, { force: true });
+}
+
+// Delete the entire on-disk DB — every track row, mood/energy tag, text +
+// audio embedding, acoustic-analysis column, and enrichment cache — plus the
+// WAL/SHM sidecars, so the next open() recreates an empty schema from scratch.
+// Mirrors restoreFromFile()'s close→swap-file→drop-sidecars shape, and like it
+// leaves the reopen to the caller (music/library.ts:reset()). This is the
+// "start fresh" wipe behind the admin library Reset action — irreversible short
+// of restoring a backup.
+export async function reset(): Promise<void> {
+  close();
+  await rm(DB_PATH, { force: true });
   await rm(`${DB_PATH}-wal`, { force: true });
   await rm(`${DB_PATH}-shm`, { force: true });
 }
@@ -396,40 +475,99 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 9');
   }
 
-  // The vec0 virtual table carries the embedding dim in its schema. If the
-  // stored dim doesn't match the requested one, the caller asked for a model
-  // swap — that's a --reseed operation, not an auto-migration.
+  if (userVersion < 10) {
+    // Task-prefix mode of the text-embedding index: 'plain' (texts embedded
+    // bare) or 'prefixed' (embedded with the model's document prefix, e.g.
+    // nomic's `search_document:`). NULL (legacy rows) = 'plain'. Lives with the
+    // index provenance because query embeds must match how the documents were
+    // embedded (music/embeddings.ts resolveIndexTextMode).
+    runDdl(d, `ALTER TABLE embedding_meta ADD COLUMN text_mode TEXT;`);
+    d.pragma('user_version = 10');
+  }
+
+  if (userVersion < 11) {
+    // Zero-shot audio moods (music/audio-moods.ts) — the mood vocabulary scored
+    // against each track's CLAP audio vector via the CLAP text tower, so tags
+    // come from how the track SOUNDS rather than what its title suggests.
+    // audio_moods holds the top mood labels as a JSON array (same shape as
+    // `moods`, so songsByMood can json_each both); audio_mood_scores_json the
+    // full {mood: cosine} map for tuning/observatory use. mood_vocab_hash on the
+    // audio meta row invalidates scores when the vocabulary/prompts change.
+    // NULL everywhere → no audio moods, today's behaviour.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN audio_moods            TEXT;
+      ALTER TABLE tracks ADD COLUMN audio_mood_scores_json TEXT;
+      ALTER TABLE audio_embedding_meta ADD COLUMN mood_vocab_hash TEXT;
+    `);
+    d.pragma('user_version = 11');
+  }
+
+  if (userVersion < 12) {
+    // Outro (tail) features (JSON {startMs,ending,lufs?,bpm?,beats?,bars?}) —
+    // the outgoing track's measured ending, analysed off the END of a complete
+    // file. Nullable; NULL → no outro signal, today's transition behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN outro_json TEXT;`);
+    d.pragma('user_version = 12');
+  }
+
+  // Reconcile the requested embedding dim against what physically exists.
+  //
+  // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
+  // NOT embedding_meta, which is written separately (by the tagger, post-probe)
+  // and can lag the table. Keying off the meta row alone misses the case that
+  // bit qwen3-embedding users: the live controller creates track_vectors at the
+  // name→dim GUESS (resolveEmbeddingDim → 768 for an unknown model) on a fresh
+  // DB and writes NO meta row; the tagger then probes the real dim (1024) but,
+  // because the meta was absent, the old check neither recreated the table nor
+  // errored — so every embed insert crashed with "Expected 768 dimensions but
+  // received 1024", and wiping the DB didn't help (the controller re-created the
+  // 768 table on the next boot). Read the real width from the table itself.
   const meta = d.prepare('SELECT model, dim FROM embedding_meta WHERE pk = 1').get() as
     | { model: string; dim: number }
     | undefined;
+  const tableDim = vecTableDim(d); // null when track_vectors doesn't exist yet
   // Effective dim for the vec0 table. Defaults to what the caller asked for; the
-  // branches below may adopt the stored dim or reseed at the new dim instead.
+  // branches below may adopt the on-disk dim or drop+recreate at the new dim.
   let effectiveDim = embeddingDim;
-  if (meta && meta.dim !== embeddingDim) {
+  if (tableDim !== null && tableDim !== embeddingDim) {
+    const modelHint = meta?.model ? ` (model: ${meta.model})` : '';
     if (adoptStoredDim) {
-      // Live controller: the stored vectors are authoritative. Honour their dim
-      // so the picker keeps working off a tagged index even when the model name
+      // Live controller: the physical index is authoritative. Honour its dim so
+      // the picker keeps working off a tagged index even when the model name
       // resolves to a different default. A real model swap is reconciled by the
       // tagger's --reseed path, not silently here (#319).
       console.warn(
-        `[library-db] adopting stored embedding dim ${meta.dim} (model: ${meta.model}); ` +
+        `[library-db] adopting on-disk embedding dim ${tableDim}${modelHint}; ` +
           `caller requested ${embeddingDim}. Re-tag with --reseed to switch models.`,
       );
-      effectiveDim = meta.dim;
+      effectiveDim = tableDim;
+    } else if (vecCount(d) === 0) {
+      // Empty index at the wrong width — nothing to protect, so recreate it at
+      // the requested dim without demanding --reseed. This self-heals the
+      // guessed-dim table the live controller created before the tagger probed
+      // the real one, so a plain tag run works for any embedding model / dim.
+      console.warn(
+        `[library-db] track_vectors is empty at ${tableDim}-d${modelHint}; ` +
+          `recreating at ${embeddingDim}-d for the current embedding model`,
+      );
+      runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     } else if (!reseed) {
       throw new Error(
-        `embedding dim mismatch: state/library.db has ${meta.dim}-d vectors (model: ${meta.model}), ` +
-          `but the current settings ask for ${embeddingDim}-d. ` +
-          `Run \`npm run tag -- --reseed\` to re-embed.`,
+        `embedding dim mismatch: state/library.db has ${tableDim}-d vectors${modelHint}, ` +
+          `but the current embedding model needs ${embeddingDim}-d. You changed the embedding ` +
+          `model, so the library must be re-embedded to switch. In the admin UI: Library → ` +
+          `Start tagging → Re-scan tab → “Re-embed all tracks” (your mood tags are kept). ` +
+          `Or from the CLI: \`npm run tag -- --reseed\`.`,
       );
     } else {
-      // Reseed across a model/dim change: the stored vectors are unusable at the
-      // new dim, so drop them (the table is recreated at `effectiveDim` just
-      // below) and clear the stale meta row so a later setEmbeddingMeta() seeds
-      // it fresh and the next open() sees a matching (or absent) dim.
+      // Reseed across a model/dim change on a POPULATED index: the stored vectors
+      // are unusable at the new dim, so drop them (the table is recreated at
+      // `effectiveDim` just below) and clear the stale meta row so a later
+      // setEmbeddingMeta() seeds it fresh and the next open() sees a matching dim.
       console.warn(
-        `[library-db] reseed: embedding dim ${meta.dim}→${embeddingDim} ` +
-          `(model: ${meta.model}); dropping vectors for re-embed`,
+        `[library-db] reseed: embedding dim ${tableDim}→${embeddingDim}${modelHint}; ` +
+          `dropping vectors for re-embed`,
       );
       runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
       d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
@@ -467,6 +605,25 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
 // identical to db.exec(sql).
 function runDdl(d: Database.Database, sql: string): void {
   (d as any).exec(sql);
+}
+
+// The embedding width baked into the track_vectors vec0 schema — the authority
+// for what inserts accept (embedding_meta is written separately and can lag).
+// Parsed from the stored CREATE statement; null when the table doesn't exist.
+function vecTableDim(d: Database.Database): number | null {
+  const row = d
+    .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+    .get() as { sql: string | null } | undefined;
+  if (!row?.sql) return null;
+  const m = row.sql.match(/embedding\s+FLOAT\[(\d+)\]/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Row count of the text-vector index. Used to decide whether a dim mismatch can
+// self-heal (empty table → free to recreate) or must gate behind --reseed
+// (populated index → the operator's vectors are at stake).
+function vecCount(d: Database.Database): number {
+  return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
 }
 
 // ---------------------------------------------------------------------------
@@ -545,20 +702,39 @@ async function archiveMoodsJson(): Promise<void> {
 // Embedding meta
 // ---------------------------------------------------------------------------
 
-export function getEmbeddingMeta(): { model: string; dim: number } | null {
+// `textMode` records whether the vectors were embedded with the model's
+// document prefix ('prefixed') or bare ('plain'); null = legacy row from
+// before mode tracking (equivalent to 'plain' — see resolveIndexTextMode).
+export type EmbeddingTextMode = 'plain' | 'prefixed';
+
+export function getEmbeddingMeta(): {
+  model: string;
+  dim: number;
+  textMode: EmbeddingTextMode | null;
+} | null {
   const row = requireDb()
-    .prepare('SELECT model, dim FROM embedding_meta WHERE pk = 1')
-    .get() as { model: string; dim: number } | undefined;
-  return row || null;
+    .prepare('SELECT model, dim, text_mode FROM embedding_meta WHERE pk = 1')
+    .get() as { model: string; dim: number; text_mode: string | null } | undefined;
+  if (!row) return null;
+  return {
+    model: row.model,
+    dim: row.dim,
+    textMode: row.text_mode === 'prefixed' || row.text_mode === 'plain' ? row.text_mode : null,
+  };
 }
 
-export function setEmbeddingMeta(model: string, dim: number): void {
+export function setEmbeddingMeta(
+  model: string,
+  dim: number,
+  textMode: EmbeddingTextMode | null = null,
+): void {
   requireDb()
     .prepare(
-      `INSERT INTO embedding_meta (pk, model, dim, set_at) VALUES (1, ?, ?, ?)
-       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim, set_at = excluded.set_at`,
+      `INSERT INTO embedding_meta (pk, model, dim, set_at, text_mode) VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim,
+         set_at = excluded.set_at, text_mode = excluded.text_mode`,
     )
-    .run(model, dim, new Date().toISOString());
+    .run(model, dim, new Date().toISOString(), textMode);
 }
 
 // Audio-embedding provenance — which CLAP model wrote the current audio
@@ -589,6 +765,50 @@ export function getTrack(id: string): TrackRecord | null {
     .prepare(`SELECT * FROM tracks WHERE id = ?`)
     .get(id) as any;
   return row ? rowToTrack(row) : null;
+}
+
+export interface TrackLite {
+  genre: string | null;
+  bpm: number | null;
+  musicalKey: string | null;
+  moods: string[];
+  energy: string | null;
+  year: number | null;
+}
+
+// Lean read for the /now-playing hot path (polled every ~5s by every listener).
+// Selects only the light scalar columns the player's metadata strip renders,
+// skipping the heavy acoustic *_json blobs (structure/pace/beats/bars/key/vocal
+// ranges) that a full getTrack() → rowToTrack() SELECTs and JSON.parses on every
+// call. After acoustic analysis those blobs are populated and fat, so parsing
+// them per poll — on better-sqlite3's single synchronous thread — stalled every
+// concurrent HTTP response, making the whole UI sluggish (#723).
+export function getTrackLite(id: string): TrackLite | null {
+  const row = requireDb()
+    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year FROM tracks WHERE id = ?`)
+    .get(id) as any;
+  if (!row) return null;
+  return {
+    genre: row.genre ?? null,
+    bpm: row.bpm ?? null,
+    musicalKey: row.musical_key ?? null,
+    moods: row.moods ? safeParseArray(row.moods) : [],
+    energy: row.energy ?? null,
+    year: row.year ?? null,
+  };
+}
+
+// COUNT(*) of tagged tracks — the O(1)-ish query behind the coverage meter's
+// "tagged" tally. Replaces allTaggedIds().length, which materialised a ~30k-
+// element JS id array on every coverage poll only to read its .length (#723).
+// Predicate is `moods IS NOT NULL` to match allTaggedIds() exactly (NOT the
+// stricter SQL_HAS_MOODS) so the coverage percentage is unchanged.
+export function countTagged(): number {
+  return (
+    requireDb().prepare(`SELECT COUNT(*) AS n FROM tracks WHERE moods IS NOT NULL`).get() as {
+      n: number;
+    }
+  ).n;
 }
 
 export function hasTags(id: string): boolean {
@@ -704,6 +924,10 @@ export interface TrackAnalysisWrite {
   beats?: number[] | null;
   bars?: number[] | null;
   keyRanges?: TrackKeyRange[] | null;
+  // Outro features — null keeps an existing value (COALESCE, like vocal): a
+  // pass that couldn't compute the tail (capped download, url path) must not
+  // wipe an outro a previous complete-file pass measured.
+  outro?: TrackOutro | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -729,6 +953,9 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
         -- analysed instrumental) overwrites; null keeps what's there.
         vocal_ranges_json   = COALESCE(?, vocal_ranges_json),
+        -- Same for the outro: only computable off a COMPLETE file, so a pass
+        -- that analysed a capped download passes null and keeps what's there.
+        outro_json          = COALESCE(?, outro_json),
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -745,6 +972,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
+      a.outro != null ? JSON.stringify(a.outro) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -761,16 +989,23 @@ export function needsAnalysisIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
-export function clearAnalysis(): void {
+// Drop the acoustic analysis so a --re-analyze can recompute it. `keepVocal`
+// preserves vocal_ranges_json — used when re-analysing bpm/key + sounds-like
+// WITHOUT redoing the (very slow) Demucs vocal pass, so existing vocal data
+// isn't wiped and left NULL (it wouldn't be rebuilt that run). #646-adjacent.
+export function clearAnalysis(opts: { keepVocal?: boolean } = {}): void {
   const d = requireDb();
+  const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
+      key_ranges_json = NULL, outro_json = NULL,${vocalCol} analysis_version = NULL,
+      audio_moods = NULL, audio_mood_scores_json = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
+  // Audio moods above go with them: they're derived from those vectors.
   d.prepare('DELETE FROM track_audio_vectors').run();
 }
 
@@ -942,6 +1177,108 @@ export function audioVectorCount(): number {
   }).n;
 }
 
+// ---------------------------------------------------------------------------
+// Zero-shot audio moods (music/audio-moods.ts) — mood labels derived by scoring
+// the vocabulary's CLAP TEXT embeddings against each track's stored audio
+// vector. Sound-derived, so they complement the LLM's metadata-guessed `moods`.
+// ---------------------------------------------------------------------------
+
+export function setTrackAudioMoods(
+  id: string,
+  moods: string[],
+  scores: Record<string, number>,
+): void {
+  requireDb()
+    .prepare(`UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`)
+    .run(JSON.stringify(moods), JSON.stringify(scores), id);
+}
+
+// Transactional bulk write for the scoring pass — one commit per batch instead
+// of one per track (the pass touches every vector-carrying row).
+export function setTrackAudioMoodsBulk(
+  rows: Array<{ id: string; moods: string[]; scores: Record<string, number> }>,
+): void {
+  if (rows.length === 0) return;
+  const d = requireDb();
+  const stmt = d.prepare(
+    `UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`,
+  );
+  d.transaction((rs: typeof rows) => {
+    for (const r of rs) stmt.run(JSON.stringify(r.moods), JSON.stringify(r.scores), r.id);
+  })(rows);
+}
+
+// Every id carrying an audio vector — the full re-score scope when the mood
+// vocabulary/prompts change. JOINed to tracks so a vector whose track row was
+// pruned is never scored.
+export function audioVectorIds(): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT v.id FROM track_audio_vectors v JOIN tracks t ON t.id = v.id ORDER BY v.id`,
+    )
+    .all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Ids with an audio vector but no audio moods yet — the incremental scope for
+// an unchanged vocabulary (newly analysed tracks since the last scoring pass).
+export function idsNeedingAudioMoods(): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT v.id FROM track_audio_vectors v JOIN tracks t ON t.id = v.id
+       WHERE t.audio_moods IS NULL ORDER BY v.id`,
+    )
+    .all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// The full {mood: cosine} score map behind a track's audio_moods — the
+// dossier/tuning surface only (hot paths read the pre-picked audio_moods
+// labels; this column is never parsed on a playback path).
+export function getAudioMoodScores(id: string): Record<string, number> | null {
+  const row = requireDb()
+    .prepare('SELECT audio_mood_scores_json AS s FROM tracks WHERE id = ?')
+    .get(id) as { s: string | null } | undefined;
+  if (!row?.s) return null;
+  try {
+    const v = JSON.parse(row.s);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// The vocabulary hash the current audio_moods were scored with, or null (never
+// scored / legacy meta row). A mismatch re-scores everything.
+export function getAudioMoodVocabHash(): string | null {
+  const row = requireDb()
+    .prepare('SELECT mood_vocab_hash FROM audio_embedding_meta WHERE pk = 1')
+    .get() as { mood_vocab_hash: string | null } | undefined;
+  return row?.mood_vocab_hash ?? null;
+}
+
+export function setAudioMoodVocabHash(hash: string): void {
+  // The meta row normally exists by the time moods are scored (the analyze pass
+  // stamps it with the first vector), but seed defensively — model/dim are
+  // NOT NULL, and setAudioEmbeddingMeta's own upsert never touches the hash.
+  requireDb()
+    .prepare(
+      `INSERT INTO audio_embedding_meta (pk, model, dim, set_at, mood_vocab_hash)
+       VALUES (1, 'unknown', ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET mood_vocab_hash = excluded.mood_vocab_hash`,
+    )
+    .run(AUDIO_EMBEDDING_DIM, new Date().toISOString(), hash);
+}
+
+// Tracks with vocal-activity analysis done — vocal_ranges_json IS NOT NULL,
+// where a stored "[]" (analysed instrumental) counts as done. The inverse of
+// needsVocalIds, surfaced as a coverage meter (#646).
+export function vocalAnalyzedCount(): number {
+  return (requireDb().prepare(
+    'SELECT COUNT(*) AS n FROM tracks WHERE vocal_ranges_json IS NOT NULL',
+  ).get() as { n: number }).n;
+}
+
 // Ids that have no audio vector yet (never embedded). Resumable, ordered for
 // stable resumption, independent of the bpm/key analysis scope so the audio
 // backfill can run on its own cadence. LEFT JOIN where the vector row is absent.
@@ -1013,18 +1350,35 @@ export function analysedCount(): number {
   }).n;
 }
 
+// IDs of tracks that already carry acoustic analysis (bpm filled). The re-scan
+// "Re-analyse" scope — capture BEFORE clearAnalysis() so the redo targets only
+// the previously-analysed population, not the whole (mostly un-analysed) library.
+export function analysedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM tracks WHERE bpm IS NOT NULL ORDER BY id')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
 // ---------------------------------------------------------------------------
 // Mood-keyed reads (drop-in replacements for the old library.ts in-memory loops)
 // ---------------------------------------------------------------------------
 
 export function songsByMood(mood: string): TrackRecord[] {
+  // Match the LLM's editorial moods OR the zero-shot audio moods (scored from
+  // the track's actual sound — music/audio-moods.ts). The blend widens thin
+  // mood buckets and covers tracks the metadata-only tagger couldn't read
+  // (instrumentals, non-English titles); a track matching both appears once.
   const rows = requireDb()
     .prepare(
       `SELECT * FROM tracks
-       WHERE moods IS NOT NULL
-         AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?)`,
+       WHERE (moods IS NOT NULL
+              AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?))
+          OR (audio_moods IS NOT NULL
+              AND EXISTS (SELECT 1 FROM json_each(tracks.audio_moods) WHERE value = ?))`,
     )
-    .all(mood) as any[];
+    .all(mood, mood) as any[];
   return rows.map(rowToTrack);
 }
 
@@ -1040,6 +1394,54 @@ export function allTaggedIds(): string[] {
   return (
     requireDb()
       .prepare('SELECT id FROM tracks WHERE moods IS NOT NULL')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+// Directly-decided tags with a vector — the trusted sample for the propagation
+// self-check (music/propagation-eval.ts). Excludes 'propagated' rows (they ARE
+// the propagation output — scoring against them would be circular) and
+// vectorless rows (KNN can't run). Null source = legacy import, decided by an
+// LLM at the time, so it counts.
+export function trustedTaggedIds(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE ${SQL_HAS_MOODS}
+            AND (source IS NULL OR source != 'propagated')
+            AND id IN (SELECT id FROM track_vectors)
+          ORDER BY id`,
+      )
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+// Tagged rows whose LLM provenance has gone stale — their prompt_hash or model
+// differs from the current ones (or is NULL, e.g. a legacy-v1 import). Drives
+// the re-scan "Re-decide moods" pass: re-LLM-tag only what a prompt/model change
+// invalidated. NEVER source='manual' — operator-set tags are ground truth and
+// don't go stale. With no prompt/model change this returns [], so re-decide is a
+// clean no-op. `IS NOT ?` is SQLite's null-safe inequality (NULL counts stale).
+export function staleTaggedIds(promptHash: string, model: string, limit?: number): string[] {
+  const sql =
+    `SELECT id FROM tracks
+       WHERE ${SQL_HAS_MOODS}
+         AND (source IS NULL OR source != 'manual')
+         AND (prompt_hash IS NOT ? OR model IS NOT ?)
+       ORDER BY id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(sql).all(promptHash, model) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Tracks that already carry enrichment (Last.fm tags / lyrics fetched at least
+// once). The re-scan "Re-enrich" scope — redo metadata only for what was done,
+// never the untouched remainder. Distinct from the raw --re-enrich widening,
+// which spans the full live catalogue (issue #531).
+export function enrichedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM tracks WHERE enriched_at IS NOT NULL')
       .all() as Array<{ id: string }>
   ).map(r => r.id);
 }
@@ -1062,6 +1464,17 @@ export function unembeddedIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
+// Tracks that currently have a vector. The re-scan "Re-embed" scope — capture
+// this BEFORE dropVectors() (after the drop every track looks unembedded), then
+// rebuild exactly these, never the untouched untagged remainder.
+export function embeddedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM track_vectors')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
 // Bucket every untagged track by (genre, decade). Used by seed-selector to
 // stratify so rare-mood corners of the library each get a seed pick.
 export function trackIdsByGenreDecade(): Map<string, string[]> {
@@ -1077,6 +1490,45 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
     const list = out.get(key) ?? [];
     list.push(r.id);
     out.set(key, list);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Per-genre embedding centroids — the mean text-embedding vector across every
+// tagged+embedded track in each genre. Powers the genre-cloud 2D projection
+// (music/genre-cloud.ts): semantically similar genres land near each other.
+// One streaming SQL join so a multi-thousand-track library stays light on
+// memory — vectors are accumulated into per-genre running sums, never all held
+// at once.
+// ---------------------------------------------------------------------------
+export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
+  const stmt = requireDb().prepare(
+    `SELECT t.genre AS genre, v.embedding AS embedding
+       FROM tracks t JOIN track_vectors v ON v.id = t.id
+      WHERE t.genre IS NOT NULL AND TRIM(t.genre) != ''`,
+  );
+  const sums = new Map<string, { sum: Float64Array; count: number }>();
+  let dim = 0;
+  for (const row of stmt.iterate() as Iterable<{ genre: string; embedding: Buffer }>) {
+    const b = row.embedding;
+    const vec = new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+    if (!dim) dim = vec.length;
+    if (vec.length !== dim) continue; // defensive: skip any stray off-dim rows
+    let acc = sums.get(row.genre);
+    if (!acc) {
+      acc = { sum: new Float64Array(dim), count: 0 };
+      sums.set(row.genre, acc);
+    }
+    for (let i = 0; i < dim; i++) acc.sum[i] += vec[i];
+    acc.count++;
+  }
+  const out: Array<{ genre: string; count: number; centroid: Float32Array }> = [];
+  for (const [genre, { sum, count }] of sums) {
+    if (!count) continue;
+    const centroid = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) centroid[i] = sum[i] / count;
+    out.push({ genre, count, centroid });
   }
   return out;
 }
@@ -1197,7 +1649,45 @@ export function allTaggedSampled(max: number, totalTagged: number): TrackRecord[
 // Stats
 // ---------------------------------------------------------------------------
 
+// stats() runs ~7 full-table scans/GROUP BYs (byMood alone is a json_each walk
+// over every row). It's polled every 30s by the admin Library panel and hit by
+// several admin pages (/library, /debug, /observatory) + /settings. Post-
+// analysis the fattened rows make each scan slow, so uncached these stacked up
+// on the synchronous DB thread and blocked listener polls (#723). A short TTL
+// collapses page-load / multi-tab bursts into one computation; 5s is well within
+// the display's freshness needs, and analysis writes don't change these tallies
+// anyway (they touch bpm/*_json, not moods/genre/energy).
+let statsCache: { at: number; value: LibraryStats } | null = null;
+const STATS_TTL_MS = 5000;
+
+// Drop the memoised stats() result — call when the DB handle is swapped
+// (reset/reload) so a fresh library never briefly serves the old one's tallies.
+export function invalidateStats(): void {
+  statsCache = null;
+}
+
 export function stats(): LibraryStats {
+  const now = Date.now();
+  if (statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
+  const value = computeStats();
+  statsCache = { at: now, value };
+  return value;
+}
+
+// A cheap opaque token that changes whenever ANY write lands in the library:
+// `data_version` bumps on commits from OTHER connections (the tagger and
+// analyzer hold the DB concurrently), `total_changes()` counts THIS
+// connection's row changes, and the per-open nonce covers handle swaps. Both
+// reads are O(1). Powers the observatory ETag — anything derived purely from
+// library rows can be revalidated with this instead of rebuilding the payload.
+export function changeToken(): string {
+  const d = requireDb();
+  const dataVersion = d.pragma('data_version', { simple: true }) as number;
+  const ownChanges = (d.prepare('SELECT total_changes() AS c').get() as { c: number }).c;
+  return `${dbNonce}.${dataVersion}.${ownChanges}`;
+}
+
+function computeStats(): LibraryStats {
   const d = requireDb();
   const total =
     (d.prepare(`SELECT COUNT(*) AS n FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as {
@@ -1302,7 +1792,32 @@ function rowToTrack(row: any): TrackRecord {
     beats: row.beats_json ? parseMsArray(row.beats_json) : null,
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
+    audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
   };
+}
+
+// Parse an outro_json column into TrackOutro or null. Malformed → null.
+function parseOutroJson(s: string): TrackOutro | null {
+  try {
+    const v = JSON.parse(s);
+    const startMs = Number(v?.startMs);
+    const ending = v?.ending;
+    if (!Number.isFinite(startMs) || startMs < 0) return null;
+    if (ending !== 'fade' && ending !== 'cold') return null;
+    const msList = (x: unknown): number[] | null =>
+      Array.isArray(x) && x.length ? x.filter((n): n is number => Number.isFinite(n)) : null;
+    return {
+      startMs: Math.round(startMs),
+      ending,
+      lufs: Number.isFinite(v?.lufs) ? v.lufs : null,
+      bpm: Number.isFinite(v?.bpm) ? v.bpm : null,
+      beats: msList(v?.beats),
+      bars: msList(v?.bars),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Parse a key_ranges_json column into TrackKeyRange[] or null. Empty/malformed → null.

@@ -47,6 +47,10 @@ export const config = {
     password: process.env.NAVIDROME_PASS || '',
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
+    // Per-request cap on Subsonic API calls. Without one, a slow or hung
+    // Navidrome leaves fetches pending forever and admin routes stack up
+    // behind them (#786's "recent failed (500)").
+    timeoutMs: parseInt(process.env.NAVIDROME_TIMEOUT_MS || '', 10) || 30_000,
   },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
@@ -64,15 +68,23 @@ export const config = {
   },
   // Acoustic analysis (bpm/key/intro) — runs librosa, which deliberately does
   // NOT live in the controller image. Two backends, resolved in music/
-  // analyzer.ts: the tts-heavy sidecar (production) or a local Python venv
+  // analyzer.ts: an analysis sidecar (production) or a local Python venv
   // (offline/dev — set ANALYZE_PYTHON to a venv with librosa installed). When
   // neither is reachable the analysis phase skips cleanly.
   analyzer: {
+    // Base URL for the analysis sidecar — the default-on `subwave-analyzer`
+    // image (`subwave-analyzer-heavy` for CLAP/Demucs, via ANALYZER_HEAVY=1).
+    // analyzer.ts probes /health and uses it when it reports the 'analyze'
+    // engine. tts-heavy no longer carries the analyzer (it's TTS-only), so there
+    // is no TTS_HEAVY_URL fallback here anymore.
+    urls: [process.env.ANALYZE_URL].filter((u): u is string => !!u),
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
-    // 60s is enough for stable BPM (beat_track) / key (chroma); intro
-    // detection only needs the first ~20-30s. Env-overridable.
-    seconds: parseFloat(process.env.ANALYZE_SECONDS || '60'),
+    // 40s is enough for stable BPM (beat_track) / key (chroma); intro
+    // detection only needs the first ~20-30s. Env-overridable; Demucs cost
+    // scales linearly with the window. Keep in sync with analyze_worker.py
+    // and docker/analyzer/server.py.
+    seconds: parseFloat(process.env.ANALYZE_SECONDS || '40'),
     requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
   },
   kokoro: {
@@ -81,7 +93,7 @@ export const config = {
     model: process.env.KOKORO_MODEL || '/opt/kokoro/models/kokoro-v1.0.onnx',
     voices: process.env.KOKORO_VOICES || '/opt/kokoro/models/voices-v1.0.bin',
     voice: process.env.KOKORO_VOICE || 'bf_isabella',   // British female, BBC-ish
-    lang: process.env.KOKORO_LANG || 'en-gb',
+    lang: process.env.KOKORO_LANG || '',
     speed: parseFloat(process.env.KOKORO_SPEED || TTS_SPEED),
   },
   // Chatterbox is opt-in: the default controller image does not bundle the
@@ -190,7 +202,20 @@ export const config = {
     // queue.history is capped at 50 (~3h) and only lives in-memory, which is
     // why we keep a separate, longer-lived store.
     recentPlaysFile: `${STATE_DIR}/recent-plays.json`,
-    recentPlaysMax: 300,
+    // Rolling 24h play log cap. With a 3-min max-track cap the station can burn
+    // ~550 plays/day, so 300 entries barely spanned the 12h anti-repeat window
+    // (issue #874); 600 keeps the full window populated at that churn.
+    recentPlaysMax: 600,
+    // Count-based hard no-repeat guard: the picker (both pool and agent paths)
+    // never re-airs any of the last N DISTINCT plays. Unlike the time-window
+    // guard (recencyWindowsForLibrary) this is non-relaxable — it survives the
+    // filterPickerCandidates starvation cascade, closing the hole where a
+    // thin/over-visited mood cluster let the cascade drop the recent-track guard
+    // and re-serve a just-played song. Clamped to library size at use
+    // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
+    // disables. Seeds settings.llm.noRepeatWindow — the live, admin-tunable
+    // value; env wins. Listener requests stay exempt (request path is untouched).
+    noRepeatWindow: parseInt(process.env.NO_REPEAT_WINDOW || '100', 10),
   },
   curiosity: {
     // Durable dedup ledger for the `curiosity` segment capability. Holds every

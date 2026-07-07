@@ -36,10 +36,38 @@ export async function reload() {
   await load();
 }
 
+// Wipe the whole library (tags, embeddings, acoustic analysis, enrichment) and
+// reopen an empty DB, so the picker/tools immediately see a clean slate without
+// a controller restart. Backs the admin library "Reset" action. Unlike
+// reload(), this deletes the file first (db.reset()) for a true fresh start.
+export async function reset() {
+  loaded = false;
+  await db.reset();
+  await load();
+}
+
 // SQLite WAL writes are durable per statement — no batched save needed. Kept
 // as a no-op so existing callers that call save() at intervals still work.
 export async function save() {
   // no-op
+}
+
+// Fold the WAL sidecar back into library.db (best-effort TRUNCATE checkpoint).
+// Safe to call whether or not the DB is open. Wired to the scheduler's hourly
+// cleanup and the server's shutdown path (#786).
+export function checkpoint(): void {
+  if (!db.isOpen()) return;
+  const r = db.checkpointWal();
+  if (r && r.busy) {
+    console.log('[library] WAL checkpoint incomplete (concurrent reader/writer); will retry next pass');
+  }
+}
+
+// Close the backing DB (checkpointing the WAL on the way out). The graceful-
+// shutdown counterpart to load(); a later load() reopens.
+export function shutdown(): void {
+  if (db.isOpen()) db.close();
+  loaded = false;
 }
 
 export function get(songId: string): any {
@@ -53,6 +81,7 @@ export function get(songId: string): any {
     year: t.year,
     genre: t.genre,
     moods: t.moods,
+    audioMoods: t.audioMoods,
     energy: t.energy,
     source: t.source,
     confidence: t.confidence,
@@ -63,6 +92,12 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
+    // Loudness surface for queue.applyLoudnessGain's library-lookup fallback —
+    // Subsonic-sourced picks (requests, similar-songs) resolve their measured
+    // LUFS/peak through here. Without these the fallback always saw null and
+    // those tracks played at unity gain.
+    loudnessLufs: t.loudnessLufs,
+    peakDb: t.peakDb,
     // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
     // (slim() in llm/tools.ts). Library-sourced candidates already carry these
     // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
@@ -70,6 +105,29 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
+    // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
+    // queue's ending-aware exit canvas + effect gating. null = no signal.
+    outro: t.outro,
+  };
+}
+
+// A usable tempo measurement, or null. Navidrome emits an ID3-derived `bpm: 0`
+// on files with no tempo tag, so a non-positive bpm means "unknown", never a
+// measurement (#862).
+export function realBpm(v: any): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+// Resolve {bpm, key} for a track: the analyzer's numbers from the library DB
+// first, then whatever the track object itself carries (a Subsonic candidate's
+// bpm is the file's ID3 tag). Single source of truth for the pick/transition
+// paths — per-caller "carries analysis?" guards let Navidrome's bpm 0 skip the
+// DB lookup and mask the analyzed value (#862).
+export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
+  const rec = track?.id ? get(track.id) : null;
+  return {
+    bpm: realBpm(rec?.bpm) ?? realBpm(track?.bpm),
+    key: rec?.musicalKey ?? track?.musicalKey ?? null,
   };
 }
 
@@ -103,6 +161,21 @@ export function has(songId: string): boolean {
 
 export function allTaggedIds(): string[] {
   return loaded ? db.allTaggedIds() : [];
+}
+
+// COUNT(*) of tagged tracks — for callers that only need the tally (e.g. the
+// coverage meter), not the id list. Avoids materialising a ~30k-element array
+// just to read its length (#723).
+export function countTagged(): number {
+  return loaded ? db.countTagged() : 0;
+}
+
+// Lean metadata for the /now-playing hot path — only the fields the player's
+// metadata strip renders (genre · BPM · key · mood · energy · year). Backed by
+// db.getTrackLite so a per-listener poll never SELECTs or JSON.parses the heavy
+// acoustic *_json blobs the way the full get()/getTrack() path does (#723).
+export function getPlaybackMeta(songId: string): db.TrackLite | null {
+  return loaded ? db.getTrackLite(songId) : null;
 }
 
 // Musically-adjacent moods. The LLM tagger is told to tag by how a track
@@ -174,6 +247,13 @@ export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): n
     : null;
 }
 
+// Structural-part count over the opening (arrangement complexity), or null
+// when un-analysed. Shared by both pick payloads (pool + agent) so `sections`
+// means the same thing on either path.
+export function sectionCount(t: { structure?: any[] | null } | null | undefined): number | null {
+  return Array.isArray(t?.structure) && t.structure.length ? t.structure.length : null;
+}
+
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
 // out so the new embedding-similar helpers can share the same projection.
 function slimTrack(r: db.TrackRecord) {
@@ -185,6 +265,10 @@ function slimTrack(r: db.TrackRecord) {
     year: r.year,
     genre: r.genre,
     moods: r.moods,
+    // Zero-shot audio moods (sound-derived; music/audio-moods.ts). [] until
+    // scored. Kept separate from the editorial `moods` so consumers can tell
+    // "the LLM read the metadata" from "the audio actually sounds like this".
+    audioMoods: r.audioMoods,
     energy: r.energy,
     // Track length (seconds) so the max-track-length cap (issue #447) can act on
     // library-sourced candidates too — keeps them symmetric with Subsonic's
@@ -264,6 +348,14 @@ export function tracksLikeThisAudio(seed: string, k: number): any[] {
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
   return out;
+}
+
+// The task-prefix mode the text-embedding index was built in — query embeds
+// must match it (embeddings.embedQueryText). 'plain' when the DB isn't loaded
+// or the meta predates mode tracking (legacy indexes were embedded bare).
+export function embeddingIndexTextMode(): 'plain' | 'prefixed' {
+  if (!loaded) return 'plain';
+  return db.getEmbeddingMeta()?.textMode ?? 'plain';
 }
 
 // KNN against an externally-computed query vector. The lyric-search tool

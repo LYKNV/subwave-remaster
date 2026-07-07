@@ -7,6 +7,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
@@ -152,7 +153,7 @@ async function ensureWorker(): Promise<KokoroWorker> {
 
 export async function speak(
   text: string,
-  { outPath: customPath, voice, speedScale }: { outPath?: string; voice?: string; speedScale?: number } = {},
+  { outPath: customPath, voice, lang, speedScale }: { outPath?: string; voice?: string; lang?: string; speedScale?: number } = {},
 ): Promise<string> {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   await mkdir(config.piper.outDir, { recursive: true });
@@ -165,7 +166,7 @@ export async function speak(
   const msg = await w.send(id, {
     text: text.trim(),
     voice: voice || config.kokoro.voice,
-    lang: config.kokoro.lang,
+    lang: lang || config.kokoro.lang,
     // Per-call speedScale (daypart energy) composes on top of the config speed.
     speed: config.kokoro.speed * (speedScale != null ? speedScale : 1),
     out: outPath,
@@ -173,6 +174,16 @@ export async function speak(
   return msg.path;
 }
 
+// Mirrors chatterbox/pocket-tts: existsSync the actual on-disk assets rather
+// than trusting the config paths (which always have env defaults). Kokoro's
+// model + voices files are downloaded at image build — if that wget failed
+// (transient GitHub 429/5xx) the worker would spawn and then die on load, so a
+// path-only check would report `kokoro: true` on the Debug page while every
+// segment silently falls back to Piper. Checking the files keeps availableEngines()
+// honest and lets the dispatcher skip the doomed spawn.
 export function isAvailable() {
-  return Boolean(config.kokoro.python && config.kokoro.workerScript);
+  return existsSync(config.kokoro.python)
+    && existsSync(config.kokoro.workerScript)
+    && existsSync(config.kokoro.model)
+    && existsSync(config.kokoro.voices);
 }

@@ -83,12 +83,27 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   const reEnrich = req.body?.reEnrich === true;
   const reAnalyze = req.body?.reAnalyze === true;
   const upgrade = req.body?.upgrade === true;
+  // "Re-embed, then continue tagging" — only acted on when reseed is the sole
+  // re-* pass (startTagger enforces this); drops --rescan so the raw --reseed
+  // forward pass re-embeds the whole library then tags the untagged remainder.
+  const thenTag = req.body?.thenTag === true;
+  // Forward-run step toggles from the admin Run tab. Only an explicit boolean
+  // is forwarded; absent fields stay undefined → that phase runs (a full run,
+  // back-compat with callers that don't send steps). A reconcile-*only*
+  // selection is routed by the client to POST /library/reconcile instead.
+  const stepBool = (v: unknown) => (typeof v === 'boolean' ? v : undefined);
   startTagger({
     limit: Number.isFinite(limit) ? limit : undefined,
     reseed,
     reEnrich,
     reAnalyze,
     upgrade,
+    thenTag,
+    reconcile: stepBool(req.body?.reconcile),
+    enrich: stepBool(req.body?.enrich),
+    tagMoods: stepBool(req.body?.tagMoods),
+    analyze: stepBool(req.body?.analyze),
+    vocal: stepBool(req.body?.vocal),
   });
   res.json({ ok: true, tagger });
 });

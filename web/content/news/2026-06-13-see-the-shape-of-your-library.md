@@ -10,7 +10,14 @@ The DJ holds a lot in its head: every track's mood, energy, tempo, key, and a pa
 
 ## What's new
 
-It's a full-screen map of every track you've tagged. Each one is a point, sitting near others in its genre, lit on an ink-to-vermilion ramp by how energetic it is. Faint lines wire close neighbours together. Pan around, scroll to zoom. The panels down the right keep a running count: energy split, mood field, a tempo histogram, a loudness histogram, a Camelot key wheel, and the major/minor and vocal/instrumental balance.
+It's a full-screen map of every track you've tagged. Each one is a point, sitting near others in its genre, lit on an ink-to-vermilion ramp by how energetic it is. Faint lines wire close neighbours together. Pan around, scroll to zoom.
+
+The panels down the right keep a running count:
+
+- Energy split and mood field
+- A tempo histogram and a loudness histogram
+- A Camelot key wheel
+- The major/minor and vocal/instrumental balance
 
 ![The Library Observatory: every tagged track placed by genre, lit by energy, with stat panels alongside](/screenshots/observatory.webp)
 
@@ -26,7 +33,7 @@ Click any point to open its dossier: BPM, key, energy, loudness, its mood and la
 
 ![A track dossier: BPM, key, energy, mood tags, acoustic meters, the text and audio embedding fingerprints, and the nearest tracks in vector space](/screenshots/observatory-track.webp)
 
-Big library? Use the MAP SIZE control in the rail. It draws up to 10,000 tracks by default and goes to 50,000. Past that it shows an even sample across genres, so the shape stays honest.
+Big library? Use the MAP SIZE control in the rail. It draws up to 25,000 tracks by default and goes to 100,000. Past that it shows an even sample across genres, so the shape stays honest.
 
 ## Why it helps
 

@@ -2,7 +2,8 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow } from './settings.js';
+import { resolveActiveShow, get as getSettings } from './settings.js';
+import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate } from './time.js';
 
@@ -12,38 +13,34 @@ export function getTimeContext(date = new Date()) {
   if (h >= 9 && h < 12) return { period: 'morning', mood: 'morning', vibe: 'productive', show: 'morning' };
   if (h >= 12 && h < 14) return { period: 'midday', mood: 'energetic', vibe: 'lunch hour', show: 'midday' };
   if (h >= 14 && h < 17) return { period: 'afternoon', mood: 'focus', vibe: 'sustained energy', show: 'afternoon' };
-  if (h >= 17 && h < 19) return { period: 'drive-time', mood: 'driving', vibe: 'drive home', show: 'drive-time' };
+  // vibe reads 'end of the workday', not 'drive home': the vibe string lands in
+  // every spoken-segment prompt (Period: drive-time (…)) and the commute framing
+  // had the DJ doing traffic-jockey patter for two hours a day. The period/mood
+  // keep their names — they drive pick energy, not talk.
+  if (h >= 17 && h < 19) return { period: 'drive-time', mood: 'driving', vibe: 'end of the workday', show: 'drive-time' };
   if (h >= 19 && h < 22) return { period: 'evening', mood: 'evening', vibe: 'wind down', show: 'evening' };
   if (h >= 22 || h < 1) return { period: 'late-evening', mood: 'night', vibe: 'late hours', show: 'late' };
   return { period: 'after-hours', mood: 'reflective', vibe: 'after hours', show: 'graveyard' };
 }
 
-// Festival calendar — general / cross-cultural defaults. Edit to taste; the
-// DJ leans into `mood` around these dates. Fixed-date only; lunar holidays
-// (Easter, Eid, Lunar New Year) shift year-to-year and would need a
-// per-year lookup.
-const FESTIVALS = [
-  { month: 1, day: 1, name: "New Year's Day", mood: 'celebratory' },
-  { month: 2, day: 14, name: "Valentine's Day", mood: 'romantic' },
-  { month: 3, day: 17, name: "St. Patrick's Day", mood: 'celebratory' },
-  { month: 4, day: 13, name: 'Vaisakhi', mood: 'festival', windowDays: 1 },
-  { month: 5, day: 1, name: 'May Day', mood: 'festival' },
-  { month: 6, day: 21, name: 'Summer Solstice', mood: 'celebratory' },
-  { month: 10, day: 31, name: 'Halloween', mood: 'festival' },
-  { month: 11, day: 1, name: 'Diwali', mood: 'festival', windowDays: 3 },
-  { month: 11, day: 5, name: 'Bonfire Night', mood: 'festival' },
-  { month: 12, day: 21, name: 'Winter Solstice', mood: 'reflective' },
-  { month: 12, day: 25, name: 'Christmas', mood: 'celebratory', windowDays: 1 },
-  { month: 12, day: 26, name: 'Boxing Day', mood: 'celebratory' },
-  { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
-];
+// Festival calendar — read from persisted settings so the operator can
+// add/edit/remove entries from the admin UI. settings.load() seeds
+// FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty
+// (the operator turned the calendar off), so no fallback here.
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function getFestivalContext(date = new Date()) {
-  const { month: m, day: d } = zonedParts(date);
-  for (const f of FESTIVALS) {
+  const { year: y, month: m, day: d } = zonedParts(date);
+  const today = Date.UTC(y, m - 1, d);
+  for (const f of getSettings().festivals ?? []) {
     const window = f.windowDays || 0;
-    if (f.month === m && Math.abs(f.day - d) <= window) {
-      return { name: f.name, mood: f.mood };
+    // Compare real dates so the window spans month and year boundaries
+    // (New Year's Day with windowDays 3 is active from Dec 29). Adjacent
+    // years cover a window reaching across Dec 31 / Jan 1.
+    for (const yy of [y - 1, y, y + 1]) {
+      if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
+        return { name: f.name, mood: f.mood, description: f.description || '' };
+      }
     }
   }
   return null;
@@ -113,15 +110,85 @@ function weatherToMood(condition) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Geocoding via Open-Meteo (no API key required) — powers the admin/onboarding
+// location picker: type a place name, get back coordinates + IANA timezone so
+// the operator never hand-copies lat/lng. Same provider we already use for
+// weather, so no new dependency. Results are cached per lowercased query for a
+// day (place coordinates don't move) with a soft entry cap to stay polite.
+// ---------------------------------------------------------------------------
+export interface GeocodeResult {
+  name: string;
+  admin1?: string;
+  country?: string;
+  countryCode?: string;
+  lat: number;
+  lng: number;
+  timezone?: string;
+  label: string;
+}
+
+const GEOCODE_TTL_MS = 24 * 60 * 60 * 1000;
+const GEOCODE_CACHE_MAX = 200;
+const geocodeCache = new Map<string, { results: GeocodeResult[]; fetchedAt: number }>();
+
+export async function geocodePlace(query: string): Promise<GeocodeResult[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+
+  const key = q.toLowerCase();
+  const hit = geocodeCache.get(key);
+  if (hit && Date.now() - hit.fetchedAt < GEOCODE_TTL_MS) {
+    // Refresh recency — Map iteration order is insertion order, so delete+set
+    // keeps the oldest entry first for eviction.
+    geocodeCache.delete(key);
+    geocodeCache.set(key, hit);
+    return hit.results;
+  }
+
+  const url =
+    'https://geocoding-api.open-meteo.com/v1/search?name=' +
+    encodeURIComponent(q) +
+    '&count=6&language=en&format=json';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`geocoding upstream ${res.status}`);
+  const data = (await res.json()) as { results?: any[] };
+  const results: GeocodeResult[] = (data.results || []).map((r: any) => {
+    const name = r.name as string;
+    const admin1 = r.admin1 as string | undefined;
+    const country = r.country as string | undefined;
+    return {
+      name,
+      admin1,
+      country,
+      countryCode: r.country_code,
+      lat: r.latitude,
+      lng: r.longitude,
+      timezone: r.timezone,
+      label: [name, admin1, country].filter(Boolean).join(', '),
+    };
+  });
+
+  geocodeCache.set(key, { results, fetchedAt: Date.now() });
+  if (geocodeCache.size > GEOCODE_CACHE_MAX) {
+    geocodeCache.delete(geocodeCache.keys().next().value!);
+  }
+  return results;
+}
+
 const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December'];
 
-// Northern-hemisphere meteorological seasons — the box is in Wolverhampton.
-function seasonFor(month /* 1-12 */) {
-  if (month === 12 || month <= 2) return 'winter';
-  if (month <= 5) return 'spring';
-  if (month <= 8) return 'summer';
+// Meteorological seasons, hemisphere-aware. Open-Meteo hands us the station's
+// latitude, so a southern-hemisphere station (negative lat) reads July as
+// winter, not summer (issue: Buenos Aires DJ talking about "summer" and "heat"
+// in July). The southern seasons are the northern ones shifted six months.
+function seasonFor(month /* 1-12 */, lat = config.weather.lat) {
+  const m = lat < 0 ? ((month + 5) % 12) + 1 : month;
+  if (m === 12 || m <= 2) return 'winter';
+  if (m <= 5) return 'spring';
+  if (m <= 8) return 'summer';
   return 'autumn';
 }
 
@@ -157,8 +224,8 @@ export function getClockContext(date = new Date()) {
 // kokoro, cloud). `register` is a coarse delivery label carried forward for
 // future style/emotion hints (cloud/chatterbox) — Stage 1 only acts on speed.
 //
-// Pure function of the existing daypart + clock so there's a single source of
-// truth and it's trivially testable. A daypart that maps to speed 1.0
+// Function of the daypart + clock + the scheduled show (if it pins an energy)
+// so there's a single source of truth. A daypart that maps to speed 1.0
 // (afternoon) yields no change at all, so a station with the default
 // afternoon profile behaves exactly as before.
 const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
@@ -172,7 +239,22 @@ const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
   'after-hours':   { speed: 0.92, register: 'intimate' },  // graveyard
 };
 
+// A show's pinned energy overrides the daypart profile wholesale — including
+// the late-night/commute clamps below, because a schedule slot is an explicit
+// operator call (a high-energy evening show should not speak at the 0.97
+// wind-down pace, and a 2am workout show should not be forced intimate).
+// '' (Any) keeps the autonomous daypart behaviour. Values stay inside the
+// daypart table's range so a pin never sounds outside the station's normal
+// delivery envelope.
+const SHOW_ENERGY_DELIVERY: Record<string, { speed: number; register: string }> = {
+  high:   { speed: 1.06, register: 'up' },
+  medium: { speed: 1.0,  register: 'even' },
+  low:    { speed: 0.94, register: 'intimate' },
+};
+
 export function energyForDaypart(date = new Date()) {
+  const pinned = SHOW_ENERGY_DELIVERY[resolveActiveShow(date)?.energy ?? ''];
+  if (pinned) return pinned;
   const { period } = getTimeContext(date);
   const { isLateNight, isCommute } = getClockContext(date);
   const base = DAYPART_ENERGY[period] || { speed: 1.0, register: 'even' };
@@ -184,18 +266,42 @@ export function energyForDaypart(date = new Date()) {
   return base;
 }
 
-// Combined snapshot — what's the vibe right now?
-export async function getFullContext() {
-  const now = new Date();
+// Combined snapshot — what's the vibe right now? Pass `at` to resolve the
+// clock-derived parts (time, festival, date, clock, active show, and therefore
+// dominantMood) for a future moment instead — the queue watcher uses this to
+// pick the NEXT track under the rules of the show that will actually be on air
+// when it plays (issue: a pick made minutes before a show boundary followed the
+// outgoing show's brief). Weather and listener count stay live: they're
+// station-now facts and drift too little over one track to matter.
+export async function getFullContext(at?: Date) {
+  const now = at ?? new Date();
   const time = getTimeContext(now);
   const weather = await getWeather();
   const festival = getFestivalContext(now);
   const date = getDateContext(now);
   const clock = getClockContext(now);
 
+  // Open-Meteo reports whether the sun is up at the station right now; ride it
+  // on the clock so the DJ stops describing dusk/daylight after dark (issue:
+  // "night is starting to claim its place" / "shadows lengthen" said two hours
+  // past sunset). Only set when known — a failed weather fetch leaves it unset
+  // and the model falls back to inferring from the wall-clock time.
+  if (typeof weather?.isDay === 'boolean') (clock as any).isDark = !weather.isDay;
+
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.
-  const activeShow = resolveActiveShow(now);
+  const activeShow: any = resolveActiveShow(now);
+
+  // Programme shows: ride today's episode angle on the show context so every
+  // prompt built from it (links, picker brief, segments) breathes the same
+  // episode. Only once the session has actually rolled into this show — a
+  // lingering previous session's plan must not leak across the boundary.
+  if (activeShow?.programme) {
+    const sess = session.getSession();
+    if (sess?.key === `show:${activeShow.id}` && sess.programme?.plan?.angle) {
+      activeShow.episodeAngle = String(sess.programme.plan.angle);
+    }
+  }
 
   // Show > festival > weather > time, in that order of priority for mood.
   const dominantMood = activeShow?.mood || festival?.mood || weather.mood || time.mood;

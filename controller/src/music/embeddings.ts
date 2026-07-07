@@ -20,8 +20,11 @@ import {
   embeddingInfoOf,
   resolveEmbeddingCfg,
   buildEmbeddingModel,
+  isHeavyEmbeddingModel,
+  isLocalEmbeddingProvider,
+  embeddingTextPrefixes,
 } from '../llm/provider.js';
-import type { EmbeddingCfg } from '../llm/provider.js';
+import type { EmbeddingCfg, EmbeddingTextPrefixes } from '../llm/provider.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 import crypto from 'node:crypto';
 
@@ -52,6 +55,31 @@ export function isAvailable(): boolean {
 
 export function activeModelLabel(): string {
   return activeEmbeddingModelLabel();
+}
+
+export interface EmbeddingPerfAdvisory {
+  model: string;
+  provider: string;
+  // The embedding work runs on the operator's own hardware (CPU/NAS-bound), so a
+  // heavy model directly slows re-embeds. Cloud providers do the work off-box.
+  local: boolean;
+  // Large + slow on CPU relative to the light default (nomic-embed-text).
+  heavy: boolean;
+}
+
+// Performance profile of the active embedding model — drives the doctor's
+// "embedding model" advisory. A heavy LOCAL model (bge-m3, *-large) is the quiet
+// cause of slow re-embeds + Ollama RAM thrash on a CPU/NAS box; cloud models are
+// never a perf concern (the work runs off-box), so `local` gates the warning.
+// Pure + name-based: never probes, never throws.
+export function embeddingPerfAdvisory(): EmbeddingPerfAdvisory {
+  const { provider, model } = embeddingProviderInfo();
+  return {
+    model,
+    provider,
+    local: isLocalEmbeddingProvider(provider),
+    heavy: isHeavyEmbeddingModel(model),
+  };
 }
 
 // Used by library.ts on first open — we need the schema dim before any
@@ -98,6 +126,81 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 }
 
 // ---------------------------------------------------------------------------
+// Task-prefix handling — some embedding models (nomic-embed-text, the shipped
+// default) are trained with mandatory task prefixes: `search_document:` on
+// indexed texts and `search_query:` on queries. Document prefixes change the
+// stored vectors, so the index records its mode in embedding_meta.text_mode
+// ('plain' = embedded bare, 'prefixed' = embedded with the document prefix)
+// and every query embed must match it. See embeddingTextPrefixes in
+// llm/internal/provider/embedding.ts for the per-model table.
+// ---------------------------------------------------------------------------
+
+export type IndexTextMode = 'plain' | 'prefixed';
+
+function activePrefixes(): EmbeddingTextPrefixes {
+  return embeddingTextPrefixes(embeddingProviderInfo().model);
+}
+
+// The mode a FRESH index should be built in for the active model: 'prefixed'
+// when the model has a document prefix, else 'plain'.
+export function preferredTextMode(): IndexTextMode {
+  return activePrefixes().document ? 'prefixed' : 'plain';
+}
+
+// Resolve the mode of an EXISTING index. Stored mode always wins (consistency
+// beats preference — a prefixed query against bare documents is worse than
+// bare-vs-bare). A populated index with no recorded mode predates mode
+// tracking and was embedded bare; an empty one is free to adopt the model's
+// preferred mode.
+export function resolveIndexTextMode(
+  stored: IndexTextMode | null | undefined,
+  vectorCount: number,
+): IndexTextMode {
+  if (stored) return stored;
+  if (vectorCount > 0) return 'plain';
+  return preferredTextMode();
+}
+
+// Pure prefix application, exported for tests. `prefixes` defaults to the
+// active model's table entry.
+export function applyDocPrefix(
+  text: string,
+  mode: IndexTextMode,
+  prefixes: EmbeddingTextPrefixes = activePrefixes(),
+): string {
+  return mode === 'prefixed' && prefixes.document ? prefixes.document + text : text;
+}
+
+// A query prefix applies when the index carries document prefixes too
+// ('prefixed'), OR when the model prefixes queries only (mxbai-style — the
+// documents embed bare by design, so the index mode doesn't gate it).
+export function applyQueryPrefix(
+  text: string,
+  indexMode: IndexTextMode,
+  prefixes: EmbeddingTextPrefixes = activePrefixes(),
+): string {
+  if (!prefixes.query) return text;
+  if (!prefixes.document || indexMode === 'prefixed') return prefixes.query + text;
+  return text;
+}
+
+// Embed texts destined for the index (tracks). `mode` is the index's mode —
+// callers get it from embedding_meta via resolveIndexTextMode.
+export function embedDocTexts(texts: string[], mode: IndexTextMode): Promise<number[][]> {
+  return embedTexts(texts.map(t => applyDocPrefix(t, mode)));
+}
+
+// Embed a search query against an index built in `indexMode`. Returns null
+// when the provider comes back empty (callers already handle a missing vector).
+export async function embedQueryText(
+  text: string,
+  indexMode: IndexTextMode,
+): Promise<number[] | null> {
+  const [vec] = await embedTexts([applyQueryPrefix(text, indexMode)]);
+  return vec ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Preflight — classify the common configuration failures BEFORE running a
 // 28,000-track embedding job so the operator gets an actionable message
 // instead of a Node stack trace. Issue #174.
@@ -120,6 +223,10 @@ export interface ProbeResult {
   // Vector length measured from a successful probe. Authoritative dim for the
   // schema — beats guessing from the model name (#319). Only set when code==ok.
   dim?: number;
+  // Resolved embedding provider ("follow LLM" already resolved). Lets callers
+  // tailor messaging — e.g. the Test endpoint's Ollama auto-pull note — without
+  // re-deriving the provider.
+  provider?: string;
 }
 
 function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
@@ -182,7 +289,7 @@ function actionableMessage(
         return (
           `Embedding model "${model}" isn't installed in your Ollama at ${ollamaUrl}.\n` +
           `  Fix:  ollama pull ${model}\n` +
-          `  Or pick another model in /admin/settings → Embedding (e.g. mxbai-embed-large).`
+          `  Or pick another model in /admin/settings → Embedding (e.g. nomic-embed-text).`
         );
       }
       return (
@@ -343,10 +450,10 @@ export async function probeEmbeddingConfig(
     // Measure the real vector length from the live server — authoritative dim,
     // independent of the name→dim guess table (#319).
     const dim = Array.isArray(embeddings?.[0]) ? embeddings[0].length : undefined;
-    return { code: 'ok', message: 'ok', dim };
+    return { code: 'ok', message: 'ok', dim, provider: info.provider };
   } catch (err: any) {
     const { code, raw } = classifyEmbeddingError(err);
-    return { code, message: actionableMessage(code, raw, info) };
+    return { code, message: actionableMessage(code, raw, info), provider: info.provider };
   }
 }
 

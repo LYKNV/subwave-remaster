@@ -5,7 +5,15 @@
 # State + sounds + radio.liq are bind-mounted from the repo so dev cycles
 # don't need image rebuilds. The prod composes bake them into images instead.
 
-x-state: &state-mount ./state:/var/sub-wave
+x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
+
+# Cap container log growth so a long dev session can't fill the host disk.
+# 10m × 3 files = ~30MB ceiling per service. Applied via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   # -------------------------------------------------------------------------
@@ -23,11 +31,12 @@ services:
     # syscall fails with `Unix.Unix_error(EUNKNOWNERR 0, "", "")` — the
     # clock loop dies on every boot and Icecast ends up with no source.
     # The savonet/liquidsoap:v2.2.5 base is multi-arch, so building natively
-    # (arm64 on M-series Macs, amd64 on Linux dev hosts) just works. Prod
-    # composes still pin amd64 because the GHCR-published images are amd64
-    # only for now.
+    # (arm64 on M-series Macs, amd64 on Linux dev hosts) just works. The prod
+    # composes don't pin broadcast/controller platform either — the GHCR images
+    # are multi-arch and auto-select per host.
     container_name: sub-wave-broadcast
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "7702:7702"
     environment:
@@ -48,7 +57,7 @@ services:
       - ./liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
       - ./sounds:/sounds:ro
       - *state-mount
-      - ./state/logs:/var/log/liquidsoap
+      - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
       interval: 5s
@@ -64,12 +73,23 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest); unset → falls
+        # back to controller/package.json. The dev web UI runs `npm run dev`
+        # outside Docker, where next.config.js resolves it via `git describe`.
+        - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective `up -d controller` — so the Stats system panel works without a
+      # separate full `up -d`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       - TZ=${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
@@ -78,6 +98,9 @@ services:
       # below; unreachable URL → fall back to Piper. Dev usage:
       #   docker compose -f docker-compose.dev.yml --profile tts-heavy up -d
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
+      # Acoustic-analysis sidecar (the `analyzer` service below, default-on).
+      # Probed, then a local venv. (tts-heavy is TTS-only — no analyzer there.)
+      - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
       # Per-container CPU/memory for the admin Stats page (GET /system) is read
       # from the docker-socket-proxy sidecar over TCP — the controller never
       # touches the raw Docker socket. Unset this to disable the panel.
@@ -106,6 +129,15 @@ services:
       # /app/node_modules with the (possibly empty) host node_modules.
       - ./controller/src:/app/src
       - ./controller/scripts:/app/scripts
+    # curl is present in the controller image (see docker/Dockerfile.controller).
+    # /health is served at the router root on :7701 (routes/public.ts). start_period
+    # is generous here: dev runs under `tsx watch`, which is slower to first boot.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -115,11 +147,13 @@ services:
   # other section refused by default). The controller reads per-container
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller never holds the socket. No host port. Optional: remove this
-  # service (and the controller's DOCKER_HOST above) to drop the Stats panel.
+  # service (plus the controller's DOCKER_HOST and its docker-socket-proxy
+  # depends_on entry above) to drop the Stats panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - CONTAINERS=1
     volumes:
@@ -138,21 +172,25 @@ services:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
       args:
-        # Optional — bake the gated PocketTTS cloning weights in at build time.
-        HF_TOKEN: ${HF_TOKEN:-}
-        # CLAP audio-embedding stack ("sounds-like", ~1.5GB) + Demucs vocal
-        # ranges. Baked into the published image; these apply to a source build
-        # only, defaulted on to match. Both lazy-load at runtime (disk cost only).
-        WITH_CLAP: ${WITH_CLAP:-1}
-        WITH_DEMUCS: ${WITH_DEMUCS:-1}
         # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
         # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: ${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: ${CHATTERBOX_TORCH_SPEC:-}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: cap the resident set so a runaway model load (a huge
+    # reference WAV, a wedged PyTorch allocation) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast
+    # or the controller down with it. Default is generous — real Chatterbox +
+    # PocketTTS peaks sit well under it. Raise/lower via TTS_HEAVY_MEM_LIMIT in .env.
+    mem_limit: ${TTS_HEAVY_MEM_LIMIT:-10g}
     profiles: ["tts-heavy"]
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
@@ -161,12 +199,6 @@ services:
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
       # HF_TOKEN in your .env. Built-in voices need no token.
       - HF_TOKEN=${HF_TOKEN:-}
-      # Optional — force CLAP embeddings on for the whole analyze pass. Usually
-      # unnecessary: the admin "sounds-like" toggle drives this per request and
-      # the published image already carries CLAP.
-      - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
-      - CLAP_MODEL=${CLAP_MODEL:-}
-      - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
     volumes:
       - *state-mount
       # Persist the per-engine Hugging Face caches across container recreates.
@@ -175,11 +207,55 @@ services:
       # recreate. With them it happens once.
       - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
       - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
-      # CLAP weights for the analyzer (only populated when audio embeddings
-      # are enabled and no local CLAP_MODEL_PATH is given).
-      - tts-heavy-analyzer-cache:/opt/analyzer/hf-cache
+
+  # -------------------------------------------------------------------------
+  # ANALYZER — acoustic-analysis sidecar (bpm / key / intro / loudness;
+  # + CLAP "sounds-like" embeddings and Demucs vocal-activity ranges).
+  # -------------------------------------------------------------------------
+  # Starts by default alongside the core services. The controller probes
+  # ANALYZE_URL (this service), then a local venv. Only the heavy voices
+  # (Chatterbox/PocketTTS) stay opt-in under `tts-heavy`; analysis is default-on.
+  # (tts-heavy is TTS-only — no analyzer there.)
+  analyzer:
+    # Default: LEAN, multi-arch. ANALYZER_HEAVY=1 → CLAP + Demucs heavy image.
+    image: ghcr.io/perminder-klair/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.analyzer
+      args:
+        # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY is set.
+        WITH_CLAP: ${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
+    container_name: sub-wave-analyzer
+    restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: cap the resident set so a runaway analysis (a long track,
+    # a CLAP/Demucs allocation spike on the heavy image) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast or
+    # the controller down with it. Default is generous — librosa passes sit well
+    # under it, and even CLAP + Demucs on the heavy image fit. Raise/lower via
+    # ANALYZER_MEM_LIMIT in .env.
+    mem_limit: ${ANALYZER_MEM_LIMIT:-6g}
+    environment:
+      - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
+      - ANALYZE_VOCAL_ACTIVITY=${ANALYZE_VOCAL_ACTIVITY:-}
+      - CLAP_MODEL=${CLAP_MODEL:-}
+      - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
+      # Demucs model + analysis-window overrides (worker reads both; see
+      # .env.example "Optional model overrides").
+      - DEMUCS_MODEL=${DEMUCS_MODEL:-}
+      - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
+      # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
+      # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
+      # and both sidecars pick it up.
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - *state-mount
+      - analyzer-cache:/opt/analyzer/hf-cache
 
 volumes:
   tts-heavy-chatterbox-cache:
   tts-heavy-pocket-cache:
-  tts-heavy-analyzer-cache:
+  analyzer-cache:

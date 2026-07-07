@@ -12,7 +12,7 @@ import { providerOptions, forcedToolChoice } from '../provider/capabilities.js';
 
 export async function objectViaToolCall(
   leg: any,
-  { system, prompt, messages, schema, temperature, maxOutputTokens }: any,
+  { system, prompt, messages, schema, temperature, maxOutputTokens, signal }: any,
 ): Promise<{ object: any; usage: any }> {
   let captured: any;
   const emit = tool({
@@ -21,7 +21,9 @@ export async function objectViaToolCall(
     execute: async (input: any) => { captured = input; return 'received'; },
   });
   const result = await generateText({
-    model: leg.model,
+    // Forced single-tool call — always no-think (the no-think model is identical
+    // to leg.model except for OpenRouter, where reasoning is fixed at build time).
+    model: leg.noThinkModel ?? leg.model,
     system,
     ...(messages ? { messages } : { prompt }),
     temperature,
@@ -34,6 +36,7 @@ export async function objectViaToolCall(
     toolChoice: forcedToolChoice(leg.cfg),
     stopWhen: stepCountIs(1),
     providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+    ...(signal ? { abortSignal: signal } : {}),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');
   return { object: schema.parse(captured), usage: usageOf(result) };

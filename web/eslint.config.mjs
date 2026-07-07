@@ -97,6 +97,7 @@ export default defineConfig([
             '^field-hint$',
             '^rule-label$',
             '^term$',
+            '^term-crt$',
             '^log$',
             '^msg$',
             '^t$',
@@ -133,6 +134,9 @@ export default defineConfig([
             // .is-spotlight — accent-rail card modifier (.admin-root
             // .card.is-spotlight) used by DJ Doc's verdict card.
             '^is-spotlight$',
+            // .is-flat — flat-section card modifier (.admin-root .card.is-flat)
+            // used inside EditorDialog so sections read as divider-separated.
+            '^is-flat$',
             '^strip-mobile$',
             // bare state / descendant classes used with .lib-* parents
             '^on$',
@@ -209,8 +213,28 @@ export default defineConfig([
   // per-mood and per-size (face/antenna dimensions, tilt, scale) over the theme
   // tokens, so it's intrinsically inline-styled and can't be static Tailwind
   // utilities — same dynamic-styling deal as the Observatory above.
+  //
+  // ModelCombobox is also here: its dropdown is portalled to <body> and
+  // absolutely positioned from a runtime getBoundingClientRect (top/left/width),
+  // so the position style is intrinsically dynamic. It was previously inline in
+  // SettingsPanel (already exempt) before being extracted for reuse.
   {
-    files: ['components/BoothBuddy.tsx'],
+    files: ['components/BoothBuddy.tsx', 'components/admin/SettingsPanel.tsx', 'components/admin/llm/ModelCombobox.tsx'],
+    rules: {
+      'react/forbid-dom-props': 'off',
+    },
+  },
+
+  // Exemption for the Skill Edit Card — the /admin/skills "segment sheet" modal,
+  // a faithful port of a Claude Design prototype (claude.ai/design "Skill Edit
+  // Card"). Its styling is intrinsically state-driven: per-chip on/off fills,
+  // active-preset inversion, the on-air toggle thumb transform, status colours
+  // and the body dim are all computed from the form's live state over the theme
+  // tokens — the same dynamic-styling deal as the Observatory / Booth Sprite
+  // ports above. Its keyframes + pseudo-elements live in app/globals.css under
+  // `.sw-seg`.
+  {
+    files: ['components/admin/skills/SkillEditModal.tsx'],
     rules: {
       'react/forbid-dom-props': 'off',
     },

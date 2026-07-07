@@ -12,8 +12,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { Card } from './ui';
-import type { Persona, PersonaTts, FormState, SettingsResponse } from './personas/types';
+import { Card, Btn, Pill } from './ui';
+import { V3AlertDialog } from '../ui/alert-dialog';
+import { Modal } from '../ui/modal';
+import type { Persona, PersonaTts, FormState, SettingsResponse, CommunityPersona } from './personas/types';
 import { DIAL_NEUTRAL, PERSONA_MAX, PROMPT_MIN, PROMPT_MAX } from './personas/constants';
 import {
   clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl, personaValid, voiceForSave, cloudIssue,
@@ -31,6 +33,11 @@ export default function PersonasPanel() {
   const [busy, setBusy] = useState(false);
   // index of the persona being edited
   const [focusIdx, setFocusIdx] = useState(0);
+  // whether the full-screen persona editor is open (the roster is the browse
+  // view; selecting a card or adding a persona opens this).
+  const [editorOpen, setEditorOpen] = useState(false);
+  // id of a freshly-added persona — the AI-draft field shows only while creating.
+  const [creatingId, setCreatingId] = useState<string | null>(null);
   // toggles the system-prompt editor card
   const [showPrompt, setShowPrompt] = useState(false);
   // Bumped on every avatar mutation. Appended as ?v=… so the admin <img>
@@ -40,6 +47,12 @@ export default function PersonasPanel() {
   // Per-persona "uploading" flag — drives the spinner / disables the buttons
   // while the request is in flight.
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  // Index of the persona pending a delete-confirm (null = no dialog open).
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+  // The shipped community persona catalog (best-effort; null = still loading).
+  const [community, setCommunity] = useState<CommunityPersona[] | null>(null);
+  const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
+  const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
   // The editor block. After adding a persona we scroll it into view so the
   // operator actually sees the new persona open for editing — it stacks below
   // the roster and would otherwise be off-screen.
@@ -101,6 +114,7 @@ export default function PersonasPanel() {
               cloudProvider: p.tts?.cloudProvider ?? 'openai',
               voice: p.tts?.voice ?? 'bf_isabella',
               gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
+              speed: typeof p.tts?.speed === 'number' ? p.tts.speed : 1,
             },
             skills: Array.isArray(p.skills) ? p.skills : allSkills,
           })),
@@ -108,6 +122,18 @@ export default function PersonasPanel() {
           useCustomPrompt: custom,
           systemPrompt: custom ? stored : defaultPrompt,
         });
+      }
+    })();
+    // The community catalog is best-effort — a failure here shouldn't blank the
+    // roster, so it fetches independently and just leaves the modal empty.
+    (async () => {
+      try {
+        const r = await adminFetch('/personas/community');
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        const j = (await r.json()) as { community?: CommunityPersona[] };
+        setCommunity(Array.isArray(j.community) ? j.community : []);
+      } catch {
+        setCommunity([]);
       }
     })();
   }, [hydrated, needsAuth, adminFetch]);
@@ -132,18 +158,19 @@ export default function PersonasPanel() {
     // The new persona lands at the end of the roster — its index is the
     // current length. Capture it before the append so we can focus it.
     const newIdx = form.personas.length;
+    const newId = clientMintId();
     setForm(f => {
       if (!f) return f;
       if (f.personas.length >= PERSONA_MAX) return f;
       return {
         ...f,
         personas: [...f.personas, {
-          id: clientMintId(), name: 'New persona', tagline: '',
+          id: newId, name: 'New persona', tagline: '',
           frequency: 'moderate', scriptLength: 'concise', djMode: false,
           humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
           language: '',
           avatar: '',
-          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0 },
+          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
           skills: (data?.skills?.catalog || []).map(s => s.name),
         }],
       };
@@ -152,9 +179,56 @@ export default function PersonasPanel() {
     // with a toast — otherwise the add is silent and the operator never notices
     // the entry tucked at the end of the roster.
     scrollToEditorRef.current = true;
+    setCreatingId(newId);
     setFocusIdx(newIdx);
+    setEditorOpen(true);
     notify.ok('New persona added. Fill in its details, then Save persona.');
   };
+  // Install a community persona: the controller appends it to the persisted
+  // roster (off-air, default voice) and returns the stored persona. We append
+  // that to the local form too — mapped through the same defaulting as the
+  // initial load — so any unsaved edits to other personas survive.
+  const installCommunity = async (slug: string) => {
+    setInstalling(slug);
+    try {
+      const r = await adminFetch(`/personas/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; persona?: Partial<Persona> | null };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const p = j.persona;
+      if (p && typeof p.id === 'string') {
+        const allSkills = (data?.skills?.catalog || []).map(s => s.name);
+        setForm(f => f ? {
+          ...f,
+          personas: [...f.personas, {
+            id: p.id as string,
+            name: p.name ?? '',
+            tagline: p.tagline ?? '',
+            frequency: p.frequency ?? 'moderate',
+            scriptLength: p.scriptLength ?? 'concise',
+            djMode: p.djMode === true,
+            humour: typeof p.humour === 'number' ? p.humour : DIAL_NEUTRAL,
+            localColour: typeof p.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
+            warmth: typeof p.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
+            soul: p.soul ?? '',
+            language: typeof p.language === 'string' ? p.language : '',
+            avatar: '',
+            tts: {
+              engine: p.tts?.engine ?? 'piper',
+              cloudProvider: p.tts?.cloudProvider ?? 'openai',
+              voice: p.tts?.voice ?? '',
+              gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
+              speed: typeof p.tts?.speed === 'number' ? p.tts.speed : 1,
+            },
+            skills: Array.isArray(p.skills) ? p.skills : allSkills,
+          }],
+        } : f);
+      }
+      notify.ok(`Installed “${p?.name || slug}” — off air until you put them on the desk`);
+    } catch (e) {
+      notify.err(`Install failed: ${errorMessage(e)}`);
+    } finally { setInstalling(null); }
+  };
+
   const removePersona = (i: number) =>
     setForm(f => {
       if (!f) return f;
@@ -246,8 +320,8 @@ export default function PersonasPanel() {
   const canSave = !!form && allPersonasOk && promptOk
     && form.personas.some(p => p.id === form.activePersonaId);
 
-  const save = async () => {
-    if (!canSave || !form) return;
+  const save = async (): Promise<boolean> => {
+    if (!canSave || !form) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/settings', {
@@ -277,6 +351,8 @@ export default function PersonasPanel() {
               voice: voiceForSave(p.tts.engine, p.tts.voice.trim()),
               // Per-persona voice-level trim (dB). Server clamps to ±12.
               gainDb: p.tts.gainDb ?? 0,
+              // Per-persona speech-rate multiplier. Server clamps to 0.5–2.0×.
+              speed: p.tts.speed ?? 1,
             },
             skills: p.skills,
           })),
@@ -288,8 +364,10 @@ export default function PersonasPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('personas saved, applies on the next spoken line');
       await load();
+      return true;
     } catch (e) {
       notify.err(errorMessage(e));
+      return false;
     } finally { setBusy(false); }
   };
 
@@ -346,10 +424,6 @@ export default function PersonasPanel() {
         onAirShow={onAirShow}
         defaultEngine={defaultEngine}
         onAirCloudIssue={onAirCloudIssue}
-        personaCount={form.personas.length}
-        showPrompt={showPrompt}
-        onTogglePrompt={() => setShowPrompt(s => !s)}
-        onAdd={addPersona}
       />
 
       {showPrompt && (
@@ -360,9 +434,13 @@ export default function PersonasPanel() {
           promptOk={promptOk}
           promptText={promptText}
           busy={busy}
+          canSave={canSave}
+          allPersonasOk={allPersonasOk}
           onSetUseCustom={(custom) => setForm(f => f ? ({ ...f, useCustomPrompt: custom }) : f)}
           onChangePrompt={(text) => setForm(f => f ? ({ ...f, systemPrompt: text }) : f)}
           onRestore={() => setForm(f => f ? ({ ...f, systemPrompt: data?.defaults?.djPrompt || '' }) : f)}
+          onSave={() => { save(); }}
+          onDiscard={() => { load(); }}
         />
       )}
 
@@ -370,11 +448,97 @@ export default function PersonasPanel() {
         personas={form.personas}
         activePersonaId={form.activePersonaId}
         onAirPersonaId={onAirPersonaId}
-        focusedIdx={safeIdx}
         avatarTick={avatarTick}
-        onSelect={setFocusIdx}
+        showPrompt={showPrompt}
+        onTogglePrompt={() => setShowPrompt(s => !s)}
         onAdd={addPersona}
+        onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
+        communityCount={community?.length ?? null}
+        onCommunity={() => setCommunityOpen(true)}
       />
+
+      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
+      <Modal
+        open={communityOpen}
+        onOpenChange={setCommunityOpen}
+        title="community"
+        sub="personas shared by other stations"
+        width={640}
+      >
+        <div className="text-[12px] leading-[1.65] text-muted">
+          These personas ship with SUB/WAVE and update when you do.
+          <strong> Install</strong> adds one to your roster as your own editable persona — it
+          arrives <strong>off air</strong> with your station&rsquo;s default voice, so give it a
+          voice and an avatar, then put it on the desk. Made one worth sharing? Hit{' '}
+          <strong>Edit → Share to community</strong> on any persona.
+        </div>
+        <div className="mt-4 grid gap-3">
+          {community && community.length > 0 ? (
+            community.map(c => {
+              const inRoster = form.personas.some(
+                p => p.name.trim().toLowerCase() === c.displayName.trim().toLowerCase(),
+              );
+              return (
+                <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-extrabold">{c.displayName}</span>
+                      <Pill className="text-[8px]">{c.frequency}</Pill>
+                      {c.scriptLength === 'extended' && <Pill className="text-[8px]">extended</Pill>}
+                      {c.djMode && <Pill className="text-[8px]">dj mode</Pill>}
+                      {c.language && <Pill className="max-w-[120px] truncate text-[8px]">{c.language}</Pill>}
+                    </div>
+                    {c.tagline && (
+                      <div className="mt-0.5 text-[11px] font-bold text-muted">{c.tagline}</div>
+                    )}
+                    <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.soul}</div>
+                    {(c.submittedBy || c.dateAdded) && (
+                      <div className="mt-1.5 text-[10px] leading-[1.5] text-muted">
+                        {c.submittedBy && (
+                          <>
+                            by{' '}
+                            <a
+                              href={`https://github.com/${c.submittedBy}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                            >
+                              @{c.submittedBy}
+                            </a>
+                          </>
+                        )}
+                        {c.submittedBy && c.dateAdded && ' · '}
+                        {c.dateAdded && <>added {c.dateAdded}</>}
+                        {c.dateAdded && c.dateModified && c.dateModified !== c.dateAdded && (
+                          <> · updated {c.dateModified}</>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    {inRoster ? (
+                      <Pill tone="accent" dot>in roster</Pill>
+                    ) : (
+                      <Btn
+                        tone="accent"
+                        onClick={() => installCommunity(c.slug)}
+                        disabled={installing === c.slug || form.personas.length >= PERSONA_MAX}
+                        title={form.personas.length >= PERSONA_MAX ? 'The roster is full' : undefined}
+                      >
+                        {installing === c.slug ? 'Installing…' : 'Install'}
+                      </Btn>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="py-6 text-center text-[13px] text-muted italic">
+              No community personas yet.
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <PersonaEditor
         persona={focused}
@@ -390,6 +554,9 @@ export default function PersonasPanel() {
         cloudIssueText={focusedCloudIssue}
         skillCatalog={skillCatalog}
         editorRef={editorRef}
+        open={editorOpen}
+        isNew={focused.id === creatingId}
+        onClose={() => setEditorOpen(false)}
         setPersona={setPersona}
         setPersonaTts={setPersonaTts}
         setPersonaSkills={setPersonaSkills}
@@ -397,14 +564,38 @@ export default function PersonasPanel() {
         onGenerateAvatar={generateAvatar}
         onClearAvatar={clearAvatar}
         onSetActive={() => setForm(f => f ? ({ ...f, activePersonaId: focused.id }) : f)}
-        onRemove={() => { removePersona(safeIdx); setFocusIdx(i => Math.max(0, i - 1)); }}
+        onRemove={() => setConfirmDeleteIdx(safeIdx)}
         canSave={canSave}
         focusedOk={focusedOk}
         allPersonasOk={allPersonasOk}
         promptOk={promptOk}
         busy={busy}
-        onSave={save}
-        onDiscard={load}
+        onSave={async () => { if (await save()) setEditorOpen(false); }}
+        onDiscard={() => { load(); setEditorOpen(false); }}
+      />
+
+      <V3AlertDialog
+        open={confirmDeleteIdx !== null}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteIdx(null); }}
+        title="Delete persona"
+        description={
+          <>
+            Remove{' '}
+            <b>{confirmDeleteIdx !== null ? (form.personas[confirmDeleteIdx]?.name.trim() || 'this persona') : 'this persona'}</b>
+            {' '}from the roster? Nothing is permanent until you Save persona.
+          </>
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => {
+          if (confirmDeleteIdx !== null) {
+            removePersona(confirmDeleteIdx);
+            setFocusIdx(i => Math.max(0, i - 1));
+          }
+          setConfirmDeleteIdx(null);
+          setEditorOpen(false);
+        }}
       />
     </div>
   );

@@ -7,13 +7,15 @@ import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { getFullContext } from '../context.js';
+import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
-import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
+import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
+import { listCommunitySkills } from '../skills/loader.js';
+import { listCommunityPersonas } from '../personas/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 
 export const router = express.Router();
@@ -39,6 +41,21 @@ function mimeForAvatar(filename: string): string {
 // avatar is set, so callers don't need to check for "is it set".
 function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
+}
+
+// Resolve the public origin to build tune-in URLs from. SITE_URL (set by the
+// operator) wins — it's the trusted, canonical address and is immune to a
+// spoofed Host header on a misconfigured reverse proxy. When it's unset we fall
+// back to how the listener actually reached us (X-Forwarded-Proto/Host from the
+// proxy, else the request's own protocol/host) so LAN, Tailscale, and ad-hoc
+// custom-domain deployments still emit a URL that resolves for the listener.
+export function publicOrigin(req: express.Request): string {
+  const fromEnv = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
+  if (fromEnv) return fromEnv;
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = xfProto || req.protocol || 'http';
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  return host ? `${proto}://${host}` : `http://localhost`;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +168,9 @@ router.get('/now-playing', async (req, res) => {
     // reader of now-playing.json. A not-yet-tagged track (or unloaded DB)
     // yields null here and the fields are simply omitted.
     if (nowPlaying?.subsonic_id) {
-      const rec = library.get(nowPlaying.subsonic_id);
+      // Lean read: only the scalar fields the metadata strip renders, so this
+      // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
+      const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
       if (rec) {
         nowPlaying.genre = rec.genre ?? null;
         nowPlaying.bpm = rec.bpm ?? null;
@@ -178,6 +197,13 @@ router.get('/now-playing', async (req, res) => {
                 avatar: avatarUrlFor(ctx.activeShow.persona.id),
               }
             : null,
+          // Guest co-hosts on the current show, same shape as persona. Empty
+          // for a solo show, so existing clients see a harmless extra [].
+          guests: (ctx.activeShow.guests || []).map((g: any) => ({
+            id: g.id,
+            name: g.name,
+            avatar: avatarUrlFor(g.id),
+          })),
         }
       : null;
     const s = session.getSession();
@@ -195,6 +221,23 @@ router.get('/now-playing', async (req, res) => {
       listeners: stream.listeners,
       streamOnline: stream.online,
       streamBitrate: stream.bitrate,
+      // Structured description of the live broadcast for hardware players and
+      // tune-in helpers (the /listen.pls + /listen.m3u routes mirror this). The
+      // flat streamOnline/streamBitrate above stay for the existing web player;
+      // this `stream` object is additive. mount/format describe the always-
+      // served MP3 floor; the *Enabled flags tell clients which optional mounts
+      // (/stream.opus, /stream.flac, /stream.aac) are also live so they can
+      // discover them without scraping the tune-in files.
+      stream: {
+        mount: '/stream.mp3',
+        format: 'mp3',
+        bitrate: stream.bitrate,
+        sampleRate: stream.sampleRate,
+        channels: stream.channels,
+        opusEnabled: stationSettings.stream?.opusEnabled === true,
+        flacEnabled: stationSettings.stream?.flacEnabled === true,
+        aacEnabled: stationSettings.stream?.aacEnabled === true,
+      },
       // Cumulative since-boot LLM token total — drives the listener-facing
       // token ticker next to the now-playing time. Aggregate integer only; no
       // model/cost breakdown (that stays on the admin-gated /stats surface).
@@ -209,6 +252,57 @@ router.get('/now-playing', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /listen.pls and GET /listen.m3u — one-paste tune-in files for hardware
+// and software players (Sonos, VLC, moOde, car receivers). A listener adds the
+// station by pasting one URL instead of hunting for the raw /stream.mp3 mount.
+//
+// All wrap the always-served MP3 floor first (the universal entry every player
+// can decode); the optional Opus / FLAC / AAC mounts are appended only when the
+// operator has enabled each. Origin comes from publicOrigin() (SITE_URL when
+// set, else the request host) so the link works from however the listener
+// reached the site. Unauthenticated by design — these expose nothing beyond the
+// already-public stream URL and station name.
+// ---------------------------------------------------------------------------
+function listenMounts(req: express.Request) {
+  const origin = publicOrigin(req);
+  const s = settings.get();
+  const station = s.station || 'SUB/WAVE';
+  const entries = [{ url: `${origin}/stream.mp3`, title: station }];
+  if (s.stream?.opusEnabled === true) {
+    entries.push({ url: `${origin}/stream.opus`, title: `${station} (Opus)` });
+  }
+  if (s.stream?.flacEnabled === true) {
+    entries.push({ url: `${origin}/stream.flac`, title: `${station} (FLAC)` });
+  }
+  if (s.stream?.aacEnabled === true) {
+    entries.push({ url: `${origin}/stream.aac`, title: `${station} (AAC)` });
+  }
+  return { station, entries };
+}
+
+router.get('/listen.pls', (req, res) => {
+  const { entries } = listenMounts(req);
+  const lines = ['[playlist]', `NumberOfEntries=${entries.length}`];
+  entries.forEach((e, i) => {
+    const n = i + 1;
+    lines.push(`File${n}=${e.url}`, `Title${n}=${e.title}`, `Length${n}=-1`);
+  });
+  lines.push('Version=2');
+  res.setHeader('Content-Type', 'audio/x-scpls; charset=utf-8');
+  res.setHeader('Content-Disposition', 'inline; filename="listen.pls"');
+  res.send(lines.join('\n') + '\n');
+});
+
+router.get('/listen.m3u', (req, res) => {
+  const { entries } = listenMounts(req);
+  const lines = ['#EXTM3U'];
+  for (const e of entries) lines.push(`#EXTINF:-1,${e.title}`, e.url);
+  res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
+  res.setHeader('Content-Disposition', 'inline; filename="listen.m3u"');
+  res.send(lines.join('\n') + '\n');
 });
 
 // ---------------------------------------------------------------------------
@@ -321,7 +415,7 @@ router.get('/state', (req, res) => {
 router.get('/themes', async (req, res) => {
   try {
     const s = settings.get();
-    const themes = await listThemes();
+    const themes = await listThemesAnnotated();
     const stationDefault = s?.theme?.active || DEFAULT_THEME_ID;
     const activeShow = settings.resolveActiveShow();
     // Show override wins only if it still resolves to a known theme. A stale
@@ -359,6 +453,64 @@ router.get('/session', (req, res) => {
     },
     messages: s.messages.filter(m => m.kind !== 'sfx').slice(-120),
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /skills/community — the shipped community skill catalog (prompt-only DJ
+// segments contributed via the community-submission flow, COPYd into the
+// image). Browse-only public reference: the same catalog the admin Skills →
+// Community modal installs from, minus the per-station `installed`/`reserved`
+// annotations (those are meaningful only inside a specific station's admin).
+// Powers the public /skills showcase page. Never throws — an empty catalog
+// (no community/ dir shipped) returns []. No admin gate: it's static shipped
+// data, identical across every install of the same version.
+// ---------------------------------------------------------------------------
+router.get('/skills/community', async (req, res) => {
+  try {
+    const community = await listCommunitySkills();
+    res.json({ community });
+  } catch (err) {
+    queue.log('error', `/skills/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /personas/community — the shipped community persona catalog (DJ personas
+// contributed via the community-submission flow, COPYd into the image). Same
+// posture as /skills/community: browse-only public reference powering the
+// public /personas showcase AND the admin Personas → Community modal (which
+// computes per-station "installed" client-side from the roster it already
+// holds). Never throws — an empty catalog returns []. No admin gate: static
+// shipped data, identical across every install of the same version.
+// ---------------------------------------------------------------------------
+router.get('/personas/community', async (req, res) => {
+  try {
+    const community = await listCommunityPersonas();
+    res.json({ community });
+  } catch (err) {
+    queue.log('error', `/personas/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /geocode?q= — place-name lookup for the admin/onboarding location picker.
+// Thin proxy over Open-Meteo's free, keyless geocoding API (the web layer never
+// calls external hosts directly — the controller owns all external IO). Returns
+// { results: [...] } with coordinates + IANA timezone so the picker can fill
+// lat/lng/name and set the station clock in one tap. Unauthenticated: onboarding
+// runs pre-auth and this is harmless public reference data. On upstream failure
+// returns 502 so the client can fall back to manual coordinate entry.
+// ---------------------------------------------------------------------------
+router.get('/geocode', async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  try {
+    const results = await geocodePlace(q);
+    res.json({ results });
+  } catch {
+    res.status(502).json({ error: 'geocode_unavailable' });
+  }
 });
 
 // ---------------------------------------------------------------------------

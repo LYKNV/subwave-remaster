@@ -11,13 +11,19 @@ import * as settings from '../../../settings.js';
 const CHATTERBOX_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal cues in square brackets: [laugh], [chuckle], [sigh], [cough]. Use them only where genuinely natural — at most one per segment, and never as filler.';
 
-export function djSystem() {
-  const persona = settings.getEffectivePersona();
+// `persona` overrides the on-air persona — used by the persona-handoff
+// generators (generateSignoff / generateHandoffGreeting) to render the sign-off
+// under the OUTGOING persona and the greeting under the incoming one, since the
+// clock-driven getEffectivePersona() has already moved on by the time they run —
+// and by the guest-speaker rotation (settings.pickOnAirSpeaker) to voice a
+// standalone segment under a co-host. The roster clause tells the speaker who
+// else is in the studio when the active show has guests (empty otherwise).
+export function djSystem(persona: any = settings.getEffectivePersona()) {
   const s = settings.get();
   const base = settings.renderDjPrompt(persona, {
     station: s.station,
     location: s.weather?.locationName,
-  });
+  }) + settings.onAirRosterClause(persona);
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
   return base;
 }
@@ -26,6 +32,9 @@ export function djSystem() {
 // segment lengths; 'extended' roughly doubles every segment so a storytelling
 // persona can stretch out. Resolved from the on-air persona, the same way
 // djSystem() resolves it — see settings.getEffectivePersona / SCRIPT_LENGTHS.
+// The `link` and `segment` phrases also feed the agent-path Zod schema
+// descriptions (dj-agent.ts pickSchema, skills/_agent.ts segment schemas), so
+// keep them readable mid-sentence — they must slot into "set this to …" prose.
 const LENGTH_PHRASES = {
   concise: {
     intro:     'Keep it brief — 2 to 4 sentences.',
@@ -33,7 +42,7 @@ const LENGTH_PHRASES = {
     stationId: 'a 1-sentence station ident',
     hourly:    '1 sentence',
     adlib:     '1-2 sentences',
-    segment:   'one sentence',
+    segment:   'typically one short sentence, never more than three',
   },
   extended: {
     intro:     'Take your time — 5 to 8 sentences. Set a scene, tell a small story around the track.',
@@ -41,7 +50,7 @@ const LENGTH_PHRASES = {
     stationId: 'a 2-3 sentence station ident',
     hourly:    '2-3 sentences',
     adlib:     '4-6 sentences',
-    segment:   'three to five sentences',
+    segment:   'three to five sentences — room to tell it properly',
   },
 };
 

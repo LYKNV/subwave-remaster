@@ -6,7 +6,8 @@
 import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { STATE_DIR } from './config.js';
+import { STATE_DIR, config } from './config.js';
+import { writeFileAtomic } from './util/atomic-file.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
@@ -26,14 +27,14 @@ const SCHEDULE_PATH = `${STATE_DIR}/schedule.json`;
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
 // any custom template that drops it, so dialogue can never become anonymous.
-export const DEFAULT_DJ_PROMPT_TEMPLATE = `You are {name}, the on-air DJ for {station}, a personal radio station broadcasting from a homelab in {location}. {soul}.
+export const DEFAULT_DJ_PROMPT_TEMPLATE = `You are {name}, the on-air DJ for {station}, a personal radio station broadcasting from {location}. {soul}.
 
 Hard rules:
 - Output ONLY the words to be spoken aloud. No stage directions, no asterisks, no quotes around your dialogue.
-- Keep it to 2-4 sentences unless asked for longer.
+- Keep it brief by default — each task says how long.
 - Never use radio-cliché tells: "and now", "next up", "coming up next", "and that was", or back-announcing with "that was [song] by [artist]". Be more natural.
 - Don't repeat the artist and title robotically. Reference them in passing if at all.
-- Reference the actual context (time, weather, what's coming) naturally.
+- Reference the context you're given naturally; never invent facts that aren't in it (the weather, news, events, what's happening outside).
 - Vary your opener and shape every time — never start the same way twice in a row, never use the same metaphor or framing as your last few lines.`;
 
 // Seed souls — the SEED_PERSONAS roster picks from these. renderDjPrompt()
@@ -117,19 +118,32 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
+// Single gate for the transition effects (filter sweep + echo washout): they're
+// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
+// schema/prompt builders use this to decide whether to offer the DJ the
+// `transition` choice; when off, the guidance is never shown and nothing is
+// applied.
+export function effectsActive(persona: any = getEffectivePersona()): boolean {
+  return !!persona?.djMode;
+}
+
 // TTS engines. Every spoken segment is voiced by the on-air persona's own
 // `tts` config (see audio/tts.js); only jingle rendering falls back to the
 // global defaultEngine.
 //
 // `cloud` routes through the AI SDK (OpenAI / ElevenLabs speech models) —
 // see llm/speech.js. `piper`, `kokoro`, `chatterbox`, and `pocket-tts` are
-// local engines. Chatterbox and PocketTTS are opt-in — the default controller
-// image doesn't bundle either; build the image with `--build-arg WITH_CHATTERBOX=1`
-// or `--build-arg WITH_POCKETTTS=1` (see docker/Dockerfile.controller) to
-// include the runtime. The dispatcher gates each engine on isAvailable() so
-// settings can reference it safely even when the runtime is absent (the
-// engine just falls back to Piper).
-export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
+// local engines. `remote` is a first-class self-hosted HTTP engine: it POSTs
+// to a configurable /speak endpoint and gets the rendered audio back in the
+// response body (no shared volume, so the endpoint can live on any host),
+// gated on a /health probe. Configure the URL in settings.tts.remote.url.
+// Chatterbox and PocketTTS are opt-in — the
+// default controller image doesn't bundle either; build the image with
+// `--build-arg WITH_CHATTERBOX=1` or `--build-arg WITH_POCKETTTS=1` (see
+// docker/Dockerfile.controller) to include the runtime. The dispatcher gates
+// each engine on isAvailable() so settings can reference it safely even when
+// the runtime is absent (the engine just falls back to Piper).
+export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
 
 // DJ-voice level trim, in dB. A per-engine gain levels the loudness gap between
 // TTS engines (only PocketTTS self-normalises today, so it sits quieter than
@@ -156,6 +170,40 @@ export function clampTtsGain(v: any): number {
 function normalizeTtsGainMap(raw: any): Record<string, number> {
   const out: Record<string, number> = {};
   for (const e of TTS_ENGINES) out[e] = clampTtsGain(raw?.[e]);
+  return out;
+}
+
+// DJ-voice speech-rate multiplier. A per-engine speed corrects an engine's
+// out-of-the-box pace (Piper/Kokoro/cloud each read at a different default);
+// a per-persona speed stacks on top as a character trim (a laid-back host
+// slower than a hyper morning one). Both compose multiplicatively with the
+// daypart energy already carried in audio/tts.ts, on top of the env base
+// (PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED) — see audio/tts.ts:speak(). A
+// MULTIPLIER where 1.0 = no change (today's behaviour); lower = slower. Only
+// Piper/Kokoro/cloud honour it — chatterbox/pocket-tts workers ignore speed,
+// so their map entries are inert (kept for symmetry with the gain map).
+export const TTS_SPEED_MIN = 0.5;
+export const TTS_SPEED_MAX = 2.0;
+export const TTS_SPEED_DEFAULT = 1.0;
+
+// Coerce any value to a clean speed multiplier: finite number, clamped to
+// [TTS_SPEED_MIN, TTS_SPEED_MAX], rounded to 0.05. Garbage / non-finite →
+// 1.0 (unity, i.e. today's behaviour).
+export function clampTtsSpeed(v: any): number {
+  // Treat unset (null/undefined/'') as unity, NOT as 0 — unlike gain, 0 is not
+  // this dial's default and would clamp to the 0.5 floor instead of no-change.
+  if (v === null || v === undefined || v === '') return TTS_SPEED_DEFAULT;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return TTS_SPEED_DEFAULT;
+  const c = Math.max(TTS_SPEED_MIN, Math.min(TTS_SPEED_MAX, n));
+  return Math.round(c * 20) / 20;
+}
+
+// Normalise a per-engine speed map to exactly one clean multiplier per known
+// engine (default 1.0). Drops unknown keys, mirroring normalizeTtsGainMap.
+function normalizeTtsSpeedMap(raw: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of TTS_ENGINES) out[e] = clampTtsSpeed(raw?.[e]);
   return out;
 }
 
@@ -186,17 +234,17 @@ export const LLM_PROVIDERS = [
 // to a local Ollama and failed with a misleading "can't reach <provider>" error
 // (#493). `openrouter` was originally in that chat-only set, but OpenRouter
 // shipped an OpenAI-compatible embeddings endpoint, so it's back in (#522) and
-// routes through llm/internal/provider/embedding.ts. `anthropic` stays in too —
-// it has no first-party embedding model, but embedding.ts routes it to OpenAI
-// (needs OPENAI_API_KEY), as the picker hint already explains.
+// routes through llm/internal/provider/embedding.ts. `anthropic` was dropped —
+// it has no first-party embedding model and only worked by transparently routing
+// to OpenAI (needs OPENAI_API_KEY), which confused operators; pick OpenAI (or any
+// other embedding provider) directly instead.
 export const EMBEDDING_PROVIDERS = [
   'ollama',
   'openai-compatible',
   'locca',
-  'anthropic',
+  'openrouter',
   'openai',
   'google',
-  'openrouter',
   'requesty',
 ];
 
@@ -236,6 +284,38 @@ function clampBudgetSoftPct(raw: any, def: number): number {
   return Math.min(100, Math.max(0, Math.floor(raw)));
 }
 
+// Per-call max output tokens (issue #712). 0 is a first-class value meaning
+// "off — use each strategy's built-in default", so it passes through unclamped.
+// Any other value is floored and clamped to [MAX_OUTPUT_TOKENS_MIN,
+// MAX_OUTPUT_TOKENS_MAX]; non-numeric/NaN falls back to `def`.
+export const MAX_OUTPUT_TOKENS_MIN = 500;
+export const MAX_OUTPUT_TOKENS_MAX = 8000;
+export function clampMaxOutputTokens(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  if (n <= 0) return 0;
+  return Math.min(MAX_OUTPUT_TOKENS_MAX, Math.max(MAX_OUTPUT_TOKENS_MIN, n));
+}
+
+// Resolve the effective per-call output-token cap. Returns the operator's
+// configured value when set (> 0), else `fallback` — the strategy's own
+// built-in default. The single read point for settings.llm.maxOutputTokens;
+// strategy/text|object|agent all default their maxOutputTokens param through it.
+export function resolveMaxOutputTokens(fallback: number): number {
+  const v = get().llm?.maxOutputTokens;
+  return typeof v === 'number' && v > 0 ? v : fallback;
+}
+
+// Count-based hard no-repeat window (distinct plays). Floored to an integer in
+// [0, 290]: 0 disables; the 290 ceiling stays under the 300-entry _recentPlays
+// cap so the requested window is never silently truncated by a too-short
+// sidecar. Library-size clamping happens separately at use time
+// (effectiveNoRepeatWindow). Non-numeric/NaN falls back to `def`.
+function clampNoRepeatWindow(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(290, Math.max(0, Math.floor(raw)));
+}
+
 // Validate + apply the connection fields shared by the primary LLM leg and its
 // optional fallback (provider/model/apiKey/ollamaUrl/baseUrl/reasoning/numCtx).
 // `target` is the live settings sub-object to mutate; `patch` is the incoming
@@ -256,11 +336,10 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
     if (v.length > 100) throw new Error(`${label}.model must be 0-100 chars`);
     target.model = v;
   }
-  // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-  // round-tripped settings form doesn't overwrite the real key.
-  if (l.apiKey !== undefined && l.apiKey !== 'set') {
-    target.apiKey = String(l.apiKey);
-  }
+  // NB: the inline API key is NOT handled here — it's routed per-provider into
+  // settings.llm.keys by applyInlineKey() at the call site, after the leg's
+  // provider has been resolved. Keeping it out of the shared leg patch is what
+  // stops one provider's key leaking into another's slot (issue #657).
   if (l.ollamaUrl !== undefined) {
     const v = String(l.ollamaUrl).trim();
     if (v.length > 200) throw new Error(`${label}.ollamaUrl must be 0-200 chars`);
@@ -294,6 +373,52 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
   }
 }
 
+// Route an incoming inline API key to its provider's slot in `llmHost.keys`
+// (issue #657). `provider` is the leg's already-resolved provider, so the key
+// lands under the identity it belongs to and can never shadow another
+// provider's key after a switch. '' clears that provider's entry; 'set' (the
+// getRedacted() sentinel) and undefined leave it untouched.
+function applyInlineKey(llmHost: any, provider: string, rawApiKey: any): void {
+  if (rawApiKey === undefined || rawApiKey === 'set') return;
+  const v = String(rawApiKey);
+  if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
+  if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
+  if (v) llmHost.keys[provider] = v;
+  else delete llmHost.keys[provider];
+}
+
+// Build the per-provider inline-key map from a stored settings.llm blob.
+// Sanitises any persisted `keys` (string values, known providers only) and
+// migrates the two legacy single slots (settings.llm.apiKey /
+// settings.llm.fallback.apiKey). Those were only ever written by the
+// openai-compatible / locca inline-key path, so a value found while the leg's
+// provider is something else is a STALE compat token that leaked into the
+// shared slot (issue #657) — attribute it to its true owner (openai-compatible)
+// rather than the current provider, which both preserves the real key and keeps
+// the env-var provider's slot empty so it resolves from secrets.env again.
+function normalizeLlmKeys(storedLlm: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = storedLlm?.keys;
+  if (raw && typeof raw === 'object') {
+    for (const p of Object.keys(raw)) {
+      if (LLM_PROVIDERS.includes(p) && typeof raw[p] === 'string' && raw[p]) out[p] = raw[p];
+    }
+  }
+  const ownerFor = (prov: any) =>
+    prov === 'openai-compatible' || prov === 'locca' ? prov : 'openai-compatible';
+  const legacyPrimary = typeof storedLlm?.apiKey === 'string' ? storedLlm.apiKey : '';
+  if (legacyPrimary) {
+    const owner = ownerFor(storedLlm?.provider);
+    if (!out[owner]) out[owner] = legacyPrimary;
+  }
+  const legacyFallback = typeof storedLlm?.fallback?.apiKey === 'string' ? storedLlm.fallback.apiKey : '';
+  if (legacyFallback) {
+    const owner = ownerFor(storedLlm?.fallback?.provider);
+    if (!out[owner]) out[owner] = legacyFallback;
+  }
+  return out;
+}
+
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
 // any self-hosted OpenAI-compatible speech server (Chatterbox, Qwen3 TTS,
 // VibeVoice, etc.) via the operator-supplied `tts.cloud.baseUrl` — mirrors the
@@ -310,7 +435,9 @@ export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
-// overrides the autonomous dominantMood, so it must come from this list.
+// overrides the autonomous dominantMood, so a non-empty value must come from
+// this list. Empty string means "Any": the show pins no mood and the
+// autonomous chain (festival > weather > time) applies while it's on air.
 export const SHOW_MOODS = [
   'energetic',
   'calm',
@@ -335,21 +462,65 @@ export const SHOW_MOODS = [
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
 export const SHOW_ENERGY = ['low', 'medium', 'high'];
 
-// British English Kokoro voices — the ones that fit a BBC 6 Music tone. The
-// underlying model ships 54 voices total; we expose only the British subset to
-// keep the UI tidy. Any voice matching KOKORO_VOICE_RE still passes validation.
-export const KOKORO_VOICES_BRITISH = [
-  { id: 'bm_george', label: 'George (M)' },
-  { id: 'bm_fable', label: 'Fable (M)' },
-  { id: 'bm_daniel', label: 'Daniel (M)' },
-  { id: 'bm_lewis', label: 'Lewis (M)' },
-  { id: 'bf_emma', label: 'Emma (F)' },
-  { id: 'bf_isabella', label: 'Isabella (F)' },
-  { id: 'bf_alice', label: 'Alice (F)' },
-  { id: 'bf_lily', label: 'Lily (F)' },
+// Default festival calendar — the seeded set the admin UI shows on first boot.
+// After the operator edits the list, persisted festivals replace these.
+export const FESTIVAL_DEFAULTS = [
+  { month: 1, day: 1, name: "New Year's Day", mood: 'celebratory' },
+  { month: 2, day: 14, name: "Valentine's Day", mood: 'romantic' },
+  { month: 3, day: 17, name: "St. Patrick's Day", mood: 'celebratory' },
+  { month: 4, day: 13, name: 'Vaisakhi', mood: 'festival', windowDays: 1 },
+  { month: 5, day: 1, name: 'May Day', mood: 'festival' },
+  { month: 6, day: 21, name: 'Summer Solstice', mood: 'celebratory' },
+  { month: 10, day: 31, name: 'Halloween', mood: 'festival' },
+  { month: 11, day: 1, name: 'Diwali', mood: 'festival', windowDays: 3 },
+  { month: 11, day: 5, name: 'Bonfire Night', mood: 'festival' },
+  { month: 12, day: 21, name: 'Winter Solstice', mood: 'reflective' },
+  { month: 12, day: 25, name: 'Christmas', mood: 'celebratory', windowDays: 1 },
+  { month: 12, day: 26, name: 'Boxing Day', mood: 'celebratory' },
+  { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
 ];
 
+// All 54 official Kokoro voices from kokoro-onnx v1.0. The UI filters by
+// language prefix and formats display names from the code (bm_george → "George (M)").
+// Any voice matching KOKORO_VOICE_RE passes validation.
+export const KOKORO_VOICES = [
+  'af_alloy', 'af_aoede', 'af_bella', 'af_heart', 'af_jessica', 'af_kore',
+  'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
+  'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael',
+  'am_onyx', 'am_puck', 'am_santa',
+  'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
+  'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
+  'ef_dora', 'em_alex', 'em_santa',
+  'ff_siwis',
+  'hf_alpha', 'hf_beta', 'hm_omega', 'hm_psi',
+  'if_sara', 'im_nicola',
+  'jf_alpha', 'jf_gongitsune', 'jf_nezumi', 'jf_tebukuro', 'jm_kumo',
+  'pf_dora', 'pm_alex', 'pm_santa',
+  'zf_xiaobei', 'zf_xiaoni', 'zf_xiaoxiao', 'zf_xiaoyi',
+  'zm_yunjian', 'zm_yunxi', 'zm_yunxia', 'zm_yunyang',
+];
+
+export const KOKORO_VOICE_LANGUAGES: Record<string, string> = {
+  'a': 'English (US)',
+  'b': 'English (UK)',
+  'e': 'Spanish',
+  'f': 'French',
+  'h': 'Hindi',
+  'i': 'Italian',
+  'j': 'Japanese',
+  'p': 'Portuguese (Brazilian)',
+  'z': 'Mandarin Chinese',
+};
+
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
+
+// Kokoro language override — the set of phonemizer languages the worker accepts.
+// The worker builds an espeak.EspeakG2P for the chosen language (see _phonemize
+// in kokoro_worker.py). Empty string = auto-detect from the voice-code prefix.
+// Synced with the prefix→lang mapping in controller/scripts/kokoro_worker.py.
+export const KOKORO_LANGS = ['en-gb', 'en-us', 'es', 'it', 'fr', 'hi', 'pt-br', 'ja', 'cmn'];
+const KOKORO_LANG_RE = new RegExp(`^(${KOKORO_LANGS.join('|')})$`);
+
 // PocketTTS built-in voices — the curated set the admin UI offers. Issue #213
 // also surfaced zero-shot cloning, so `tts.voice` for pocket-tts may now be
 // either an entry from this list (or another id passing POCKET_TTS_VOICE_RE)
@@ -387,10 +558,74 @@ export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
-const PERSONA_LIMIT = 12;
+// Exported for the community-persona install route (routes/personas.ts), which
+// gives a friendly 409 before settings.update() would throw on an oversize roster.
+export const PERSONA_LIMIT = 48;
 const SHOWS_LIMIT = 64;
+// Guest co-hosts per show. Small on purpose: each guest is a full persona the
+// speaker rotation can hand a segment to, and past ~3 the host stops sounding
+// like the host.
+const GUESTS_PER_SHOW = 3;
+const PLAYLISTS_PER_SHOW = 10;
+const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
+
+// A show can anchor to one or more Navidrome playlists: the playlist union
+// becomes the show's candidate pool. Stored as Subsonic playlist ids; deduped,
+// trimmed, capped. Never validated against the live Navidrome here (offline
+// validation, same as `genre` free-text) — an id that no longer exists simply
+// contributes nothing at pick time (never-starve). Empty = no anchor.
+// A show's guest co-hosts: persona ids other than the host, resolved against
+// the live persona list. Order preserved (it's the operator's billing order);
+// dupes, the host itself, and dangling ids are dropped.
+function coerceGuestPersonaIds(raw: any, hostId: string, personaIds: string[]): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || id === hostId || seen.has(id) || !personaIds.includes(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= GUESTS_PER_SHOW) break;
+  }
+  return out;
+}
+
+function coercePlaylistIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= PLAYLISTS_PER_SHOW) break;
+  }
+  return out;
+}
+
+// A show can exclude tracks from one or more Navidrome playlists: any track
+// that appears in these playlists is dropped from the candidate pool at pick
+// time. Same shape/rules as coercePlaylistIds. Empty = no exclusions.
+function coerceExcludedPlaylistIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= EXCLUDED_PLAYLISTS_PER_SHOW) break;
+  }
+  return out;
+}
 
 // Event names the outbound webhook fan-out can subscribe to. Kept in sync
 // with broadcast/webhooks.ts WEBHOOK_EVENTS — duplicated here so settings.ts
@@ -451,6 +686,18 @@ export function effectiveMaxTrackSec(
   return sec && sec > 0 ? sec : null;
 }
 
+// Smallest non-zero max-track-length (seconds) validation accepts and the
+// admin/show UI offers. The on-air cut fires a crossfade that BEGINS
+// crossfadeDuration before the cut point, so a cap below the crossfade is
+// degenerate and below 2× leaves the track no solo airtime. 0 (= unlimited) is
+// always allowed — this is only the floor for a POSITIVE cap. Surfaced to the UI
+// via /settings.values.minTrackSeconds so client and server share one rule.
+export function minTrackSeconds(s: any = get()): number {
+  const xf = Number(s?.crossfadeDuration);
+  const cross = Number.isFinite(xf) && xf > 0 ? xf : DEFAULTS.crossfadeDuration;
+  return Math.max(30, Math.ceil(2 * cross));
+}
+
 function mintId(prefix) {
   return prefix + randomBytes(3).toString('hex');
 }
@@ -479,7 +726,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[0],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0, speed: 1 },
   },
   {
     id: 'p_default1',
@@ -490,7 +737,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[1],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0, speed: 1 },
   },
   {
     id: 'p_default2',
@@ -501,14 +748,20 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[3],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0, speed: 1 },
   },
 ];
 
-// Allowed archive bitrates. Matches the literal branches in radio.liq —
+// Allowed MP3 bitrates — shared by the hourly archive and the live
+// /stream.mp3 mount. Matches the literal branches in radio.liq —
 // %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
 // this small set. Add a branch in radio.liq if you add a value here.
-export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+// Opus + AAC encoders share the same parse-time-literal constraint as %mp3, so
+// each is pre-baked for a small set in radio.liq. Add a branch there if you add
+// a value here.
+export const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
+export const AAC_BITRATES = [128, 192, 256] as const;
 
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
@@ -525,13 +778,33 @@ const DEFAULTS = {
   // container — operators who don't use the archives can switch this off to
   // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
   // mono in a future change) also helps for operators who want the tape.
-  archive: { enabled: true, bitrate: 128 },
+  // retentionDays: hourly recordings older than this many days are deleted by
+  // the scheduler's hourly cleanup. 0 = keep forever — the default, because a
+  // retention default would silently delete archives operators already have.
+  archive: { enabled: true, bitrate: 128, retentionDays: 0 },
   // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
   // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
   // 44.1→48k resample, so operators opt in rather than pay that CPU unasked.
   // The mandatory /stream.mp3 mount always serves everyone.
-  stream: { opusEnabled: false },
+  stream: {
+    opusEnabled: false,
+    opusBitrate: 96,
+    flacEnabled: false,
+    aacEnabled: false,
+    aacBitrate: 192,
+    bitrate: 192,
+  },
+  // Per-track loudness normalisation (music/mix.ts gainForLoudness). targetLufs
+  // is what every measured track is pulled toward; maxBoostDb caps the upward
+  // direction only — cuts have a fixed wide clamp, and the boost is further
+  // limited by the track's own measured peak headroom, so widening this on a
+  // dynamic library won't slam the broadcast limiter. Read live per track at
+  // annotate time; no mixer restart.
+  loudness: {
+    targetLufs: -14,
+    maxBoostDb: 6,
+  },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -553,6 +826,10 @@ const DEFAULTS = {
   // ${STATE_DIR}/themes/. Stored as id only; the actual token map lives with
   // the theme registry so it stays in sync with the file on disk.
   theme: { active: DEFAULT_THEME_ID },
+  // Festival calendar — mood-forming dates the DJ leans into. Persisted here
+  // so operators can add/edit/remove entries from the admin UI. Fall back to
+  // FESTIVAL_DEFAULTS when empty/absent.
+  festivals: FESTIVAL_DEFAULTS,
   // Listener-player UI toggles — purely presentational, station-wide. The web
   // player reads these via GET /state (alongside the theme) and applies them
   // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
@@ -578,7 +855,7 @@ const DEFAULTS = {
     // is the source of truth. This is purely for the UI to show consistent
     // state and for the CLI to know whether to write COMPOSE_PROFILES.
     heavyEnabled: false,
-    kokoro: { voice: 'bf_isabella' },
+    kokoro: { voice: 'bf_isabella', lang: '' },
     // Global Chatterbox fallback — used as the reference voice when the
     // engine resolves to chatterbox but no persona-level voice is set.
     // Empty filename means "use the model's built-in default voice".
@@ -602,17 +879,36 @@ const DEFAULTS = {
       // provider === 'openai-compatible'.
       baseUrl: '',
     },
+    // Remote engine — a user-configured self-hosted TTS endpoint that renders
+    // audio over HTTP (POST /speak → audio body, gated on a /health probe).
+    // The TTS equivalent of the LLM's custom base URL. Empty → engine reports
+    // unavailable; the dispatcher falls back.
+    remote: { url: '' },
     // Per-engine voice level trim (dB), applied via Liquidsoap's liq_amplify on
     // every spoken segment that resolves to that engine. Levels the loudness gap
     // between engines (e.g. boost PocketTTS to match raw Piper). Stacks with each
     // persona's own tts.gainDb. All 0 = unity = today's behaviour. See
     // TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
-    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0 },
+    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0, remote: 0 },
+    // Per-engine speech-rate multiplier (0.5–2.0×, 1.0 = no change), composed
+    // on top of the daypart energy and each persona's own tts.speed in
+    // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
+    // pocket-tts/remote ignore speed so their entries are inert. See clampTtsSpeed().
+    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
   },
   llm: {
     provider: 'ollama',
     model: '',
+    // Legacy single inline-key slot. Superseded by `keys` (per-provider) — kept
+    // only so an old settings.json migrates cleanly. Always '' after load();
+    // resolution reads `keys`, never this. See llmKeyFor() / normalizeLlmKeys().
     apiKey: '',
+    // Per-provider inline API keys, keyed by provider id (issue #657). Only the
+    // inline-key providers (openai-compatible, locca) ever populate this from the
+    // UI — env-var providers (openrouter, anthropic, …) keep their key in
+    // state/secrets.env. Namespacing by provider means switching providers can
+    // never leave one provider's key in the slot another provider then reads.
+    keys: {},
     // Ollama server URL. Empty → fall back to config.ollama.url. Only used
     // when provider === 'ollama'.
     ollamaUrl: '',
@@ -651,6 +947,14 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // Count-based hard no-repeat window: the picker never re-airs any of the
+    // last N DISTINCT plays. Non-relaxable (survives the filterPickerCandidates
+    // starvation cascade), so it closes the hole where a thin mood cluster let
+    // the cascade re-serve a just-played song. Clamped to library size at use
+    // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
+    // disables. Seeded from config.queue.noRepeatWindow (env NO_REPEAT_WINDOW);
+    // listener requests stay exempt. See music/recency.ts + broadcast/queue.ts.
+    noRepeatWindow: config.queue.noRepeatWindow,
     // When on, the listener-request agent (djAgentRequest only — never the
     // per-track picker) gets an extra `identifyRequestedTrack` tool that resolves
     // a DESCRIBED track ("the song from the new Dune movie") via web search, then
@@ -690,6 +994,15 @@ const DEFAULTS = {
     // over the cap fall through to the stateless matcher cascade like every
     // other LLM path. No effect until dailyTokenCap is set.
     exemptRequests: true,
+    // Per-call max OUTPUT tokens — distinct from dailyTokenCap (a cumulative
+    // daily budget). This caps the size of each individual model response. The
+    // strategy primitives default to generous built-ins (4000 text / 8000
+    // object / 8000 agent); 0 = use those defaults. Set a value (clamped
+    // 500–8000) to override all three — the lever for a local model on a small
+    // context window, where an 8000-token response allowance can crowd out the
+    // system prompt / tool listing and risk truncation, and is pure waste with
+    // reasoning off. Resolved via resolveMaxOutputTokens(); see issue #712.
+    maxOutputTokens: 0,
     // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
     // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
     // last 10, newest first) and dumped to stderr — a copy-pasteable view of
@@ -742,11 +1055,28 @@ const DEFAULTS = {
     baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty -> inherit settings.llm.apiKey
-    seedCount: 0,         // 0 → auto max(200, ceil(sqrt(library)))
-    knnNeighbours: 5,
-    moodVoteThreshold: 0.6,
-    confidenceThreshold: 0.6,
+    seedCount: 0,         // 0 → auto (see autoSeedCount in tag-library.ts: ~4% of
+                          //   the library, floored 200 / capped 2500)
+    // Propagation defaults. These were 5 / 0.6 / 0.6 and propagated almost
+    // nothing: confidence is topSim×coverage (a product of two sub-1 terms — see
+    // tag-propagator.ts), so a 0.6 gate rejected even strong matches and dumped
+    // the library into expensive active-learning. Loosened so KNN propagation
+    // actually carries the bulk of tagging. NOTE: only affects NEW installs / a
+    // reset — an existing settings.json keeps its saved values (loadWithDefaults
+    // below prefers a stored value), so operators are never silently overridden.
+    knnNeighbours: 10,        // was 5 — a broader, more stable neighbour vote
+    moodVoteThreshold: 0.4,   // was 0.6 — a mood carried by ~a third propagates
+    confidenceThreshold: 0.35, // was 0.6 — see the topSim×coverage note above
     maxActiveLearningRounds: 3,
+    // CLAP audio fusion in mood propagation: tracks with a "sounds-like"
+    // audio vector also pull neighbours from the audio-KNN space, scaled by
+    // this weight, before the mood vote (tag-propagator.ts fuseNeighbours).
+    // Sound is the stronger mood signal for instrumentals / thin-metadata
+    // tracks, and CLAP neighbours don't cluster by album. 0 = text-only
+    // (today's behaviour); 1 = trust audio similarity as much as text. Only
+    // bites where the acoustic analysis has produced audio vectors.
+    audioFusionWeight: 0.5,
+    batchSize: 25,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
       // null = auto (fetch only when a Last.fm api_key is configured — see
@@ -801,8 +1131,15 @@ const DEFAULTS = {
   },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
-  // call. Empty by default — operators add hooks via the admin UI.
+  // call. `track.play` can be listener-gated via webhooksPolicy (off by
+  // default — see broadcast/queue.ts). Empty by default — operators add hooks
+  // via the admin UI.
   webhooks: [] as any[],
+  webhooksPolicy: {
+    // When true, track.play POSTs only when listener count > 0 (fail-closed on
+    // null/unknown/non-finite, like scrobble). Default false = always send.
+    trackPlayListenerGated: false,
+  },
   // Station-wide scrobbling. Each backend is independent; both are paste-only
   // (no OAuth) and both are gated on listener count > 0 at scrobble time (a
   // null/unknown count is treated as zero — fail closed, see broadcast/
@@ -820,6 +1157,9 @@ const DEFAULTS = {
       enabled: false,
       userToken: '',
       username: '',
+      // Optional override for self-hosted LB-compatible scrobblers (e.g. Koito).
+      // Full submit URL is `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
+      baseUrl: '',
     },
   },
 };
@@ -830,9 +1170,16 @@ const BOUNDS = {
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
+  // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
+  loudnessTargetLufs: { min: -23, max: -9, type: 'float' },
+  // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty — the
+  // per-track peak headroom cap bites long before that on dynamic material.
+  loudnessMaxBoostDb: { min: 0, max: 12, type: 'float' },
 };
 
-const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
+const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
+const OPUS_BITRATE_SET = new Set<number>(OPUS_BITRATES);
+const AAC_BITRATE_SET = new Set<number>(AAC_BITRATES);
 
 let cache: any = null;
 
@@ -900,16 +1247,18 @@ function normalizeTts(raw: any) {
     voice = '';
   // openai-compatible voices are server-specific (often arbitrary cloning ref
   // names) — no canonical default; leave empty so generateSpeech omits the
-  // field and the server picks its own.
+  // field and the server picks its own. Remote engine voices likewise:
+  // server-specific (id, reference-wav filename, or VoiceDesign prompt), no
+  // Subwave-side default.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
-  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
-  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb) };
+  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper' && engine !== 'remote') voice = 'bf_isabella';
+  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb), speed: clampTtsSpeed(raw?.speed) };
 }
 
 function normalizePersona(raw: any) {
   if (!raw || typeof raw !== 'object') return null;
   const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
-  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 400) : '';
+  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 1000) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
@@ -958,7 +1307,9 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 60) : '';
     if (!name) continue;
     if (!personaIds.includes(item.personaId)) continue; // drop dangling owner
-    if (!SHOW_MOODS.includes(item.mood)) continue;
+    // Empty mood = "Any" (the autonomous mood applies on air). An unknown mood
+    // string is coerced to Any rather than dropping the whole show on the floor.
+    const mood = SHOW_MOODS.includes(item.mood) ? item.mood : '';
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
@@ -980,27 +1331,60 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const fromYear = Number.isFinite(item.fromYear) ? Math.trunc(item.fromYear) : null;
     const toYear = Number.isFinite(item.toYear) ? Math.trunc(item.toYear) : null;
     const energy = SHOW_ENERGY.includes(item.energy) ? item.energy : '';
-    // Opt-in: hard-filter the pick pool to `genre` instead of the default soft
-    // lean. Only meaningful when a genre is set; defaults off so existing shows
-    // and soft shows are byte-for-byte unchanged.
-    const genreStrict = item.genreStrict === true;
+    // Opt-in: hard-filter the pick pool to EVERY set music filter (mood, genre,
+    // era, energy) instead of the default soft leans. Only meaningful when at
+    // least one filter is set; defaults OFF. The legacy genre-only `genreStrict`
+    // is deliberately NOT carried over: the toggle now spans every filter, so
+    // auto-migrating an old genre-strict show would silently harden mood/era/
+    // energy too. Old shows come back soft; the operator re-opts into strict.
+    const filtersStrict = item.filtersStrict === true;
     // Per-show track-length override (seconds). null = inherit the station-wide
     // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
     const maxTrackSeconds = coerceMaxTrackSeconds(rawMaxTrackSec(item), true);
+    // Optional Navidrome playlist anchor — the union of these playlists becomes
+    // the show's candidate pool. playlistStrict (default off) makes the playlist
+    // the show's ENTIRE universe; soft just lets it dominate. Both default empty
+    // so existing shows are byte-for-byte unchanged.
+    const playlistIds = coercePlaylistIds(item.playlistIds);
+    const playlistStrict = item.playlistStrict === true;
+    // Optional Navidrome playlist blocklist — tracks from these playlists are
+    // excluded from the candidate pool. Empty = no exclusions.
+    const excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
+    // Optional guest co-hosts. Lenient path: dangling persona ids (persona
+    // deleted under our feet) and the host itself are silently dropped so the
+    // show survives with whatever roster is still real.
+    const guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
+    // Scripted banter breaks (multi-voice exchanges). Only meaningful with
+    // guests — stored as given, checked against the live roster at air time.
+    const banter = item.banter === true;
+    // Programme mode: the show airs as a produced episode (intro → feature →
+    // outro arc — broadcast/programme.ts). segmentSkill optionally pins the
+    // feature beat to one segment capability kind; free text, resolved against
+    // the live skill catalog at air time (a stale kind degrades to the
+    // producer's choice, same tolerance as playlistIds).
+    const programme = item.programme === true;
+    const segmentSkill = typeof item.segmentSkill === 'string' ? item.segmentSkill.trim().slice(0, 64) : '';
     out.push({
       id,
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
-      mood: item.mood,
+      guestPersonaIds,
+      banter,
+      programme,
+      segmentSkill,
+      mood,
       themeId,
       genre,
       fromYear,
       toYear,
       energy,
-      genreStrict,
+      filtersStrict,
       maxTrackSeconds,
+      playlistIds,
+      playlistStrict,
+      excludedPlaylistIds,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1075,7 +1459,7 @@ export async function load() {
   );
 
   const archiveBitrate =
-    typeof stored.archive?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.archive.bitrate)
+    typeof stored.archive?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.archive.bitrate)
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
@@ -1089,12 +1473,52 @@ export async function load() {
           ? stored.archive.enabled
           : DEFAULTS.archive.enabled,
       bitrate: archiveBitrate,
+      retentionDays:
+        Number.isInteger(stored.archive?.retentionDays) && stored.archive.retentionDays >= 0
+          ? stored.archive.retentionDays
+          : DEFAULTS.archive.retentionDays,
     },
     stream: {
       opusEnabled:
         typeof stored.stream?.opusEnabled === 'boolean'
           ? stored.stream.opusEnabled
           : DEFAULTS.stream.opusEnabled,
+      opusBitrate:
+        typeof stored.stream?.opusBitrate === 'number' &&
+        OPUS_BITRATE_SET.has(stored.stream.opusBitrate)
+          ? stored.stream.opusBitrate
+          : DEFAULTS.stream.opusBitrate,
+      flacEnabled:
+        typeof stored.stream?.flacEnabled === 'boolean'
+          ? stored.stream.flacEnabled
+          : DEFAULTS.stream.flacEnabled,
+      aacEnabled:
+        typeof stored.stream?.aacEnabled === 'boolean'
+          ? stored.stream.aacEnabled
+          : DEFAULTS.stream.aacEnabled,
+      aacBitrate:
+        typeof stored.stream?.aacBitrate === 'number' &&
+        AAC_BITRATE_SET.has(stored.stream.aacBitrate)
+          ? stored.stream.aacBitrate
+          : DEFAULTS.stream.aacBitrate,
+      bitrate:
+        typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
+          ? stored.stream.bitrate
+          : DEFAULTS.stream.bitrate,
+    },
+    loudness: {
+      targetLufs:
+        typeof stored.loudness?.targetLufs === 'number' &&
+        stored.loudness.targetLufs >= BOUNDS.loudnessTargetLufs.min &&
+        stored.loudness.targetLufs <= BOUNDS.loudnessTargetLufs.max
+          ? stored.loudness.targetLufs
+          : DEFAULTS.loudness.targetLufs,
+      maxBoostDb:
+        typeof stored.loudness?.maxBoostDb === 'number' &&
+        stored.loudness.maxBoostDb >= BOUNDS.loudnessMaxBoostDb.min &&
+        stored.loudness.maxBoostDb <= BOUNDS.loudnessMaxBoostDb.max
+          ? stored.loudness.maxBoostDb
+          : DEFAULTS.loudness.maxBoostDb,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -1130,6 +1554,10 @@ export async function load() {
           ? stored.theme.active.trim()
           : DEFAULTS.theme.active,
     },
+    // Festivals loaded from settings.json. Seeded from FESTIVAL_DEFAULTS only
+    // when the key is absent/invalid — a persisted empty array means the
+    // operator deleted every entry and must stay empty (calendar off).
+    festivals: Array.isArray(stored.festivals) ? stored.festivals : FESTIVAL_DEFAULTS,
     ui: {
       boothBuddy:
         typeof stored.ui?.boothBuddy === 'boolean'
@@ -1156,6 +1584,11 @@ export async function load() {
           KOKORO_VOICE_RE.test(stored.tts.kokoro.voice)
             ? stored.tts.kokoro.voice
             : DEFAULTS.tts.kokoro.voice,
+        lang:
+          typeof stored.tts?.kokoro?.lang === 'string' &&
+          KOKORO_LANG_RE.test(stored.tts.kokoro.lang)
+            ? stored.tts.kokoro.lang
+            : DEFAULTS.tts.kokoro.lang,
       },
       chatterbox: {
         referenceVoice:
@@ -1197,16 +1630,28 @@ export async function load() {
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
       },
+      remote: {
+        url:
+          typeof stored.tts?.remote?.url === 'string'
+            ? stored.tts.remote.url.trim()
+            : DEFAULTS.tts.remote.url,
+      },
       // Per-engine gain map — one clean gain per known engine, missing keys → 0,
       // unknown keys dropped. So an older save (no gainDb) loads at unity.
       gainDb: normalizeTtsGainMap(stored.tts?.gainDb),
+      // Per-engine speed map — one clean multiplier per known engine, missing
+      // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
+      speed: normalizeTtsSpeedMap(stored.tts?.speed),
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
-      apiKey: typeof stored.llm?.apiKey === 'string' ? stored.llm.apiKey : DEFAULTS.llm.apiKey,
+      // Legacy single slot is migrated into `keys` below, then cleared — there
+      // is exactly one source of truth for inline keys (issue #657).
+      apiKey: '',
+      keys: normalizeLlmKeys(stored.llm),
       ollamaUrl:
         typeof stored.llm?.ollamaUrl === 'string'
           ? stored.llm.ollamaUrl.trim()
@@ -1225,6 +1670,9 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // Clamped to [0, 290] (≤ the 300-entry sidecar cap); pre-field
+      // settings.json picks up the config/env-seeded default.
+      noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
@@ -1240,6 +1688,9 @@ export async function load() {
       // up the defaults (0 = disabled, so they behave exactly as before).
       dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
       budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
+      // Per-call output cap (issue #712) — pre-existing settings.json lacks the
+      // field and picks up the 0 default (= built-in per-strategy defaults).
+      maxOutputTokens: clampMaxOutputTokens(stored.llm?.maxOutputTokens, DEFAULTS.llm.maxOutputTokens),
       exemptRequests:
         typeof stored.llm?.exemptRequests === 'boolean'
           ? stored.llm.exemptRequests
@@ -1257,7 +1708,9 @@ export async function load() {
             ? fb.provider
             : DEFAULTS.llm.fallback.provider,
           model: typeof fb.model === 'string' ? fb.model.trim() : DEFAULTS.llm.fallback.model,
-          apiKey: typeof fb.apiKey === 'string' ? fb.apiKey : DEFAULTS.llm.fallback.apiKey,
+          // Legacy fallback slot migrated into settings.llm.keys above, then
+          // cleared. The fallback resolves its key from `keys[fb.provider]`.
+          apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
           baseUrl:
@@ -1322,6 +1775,14 @@ export async function load() {
         && stored.embedding.maxActiveLearningRounds >= 0
           ? Math.floor(stored.embedding.maxActiveLearningRounds)
           : DEFAULTS.embedding.maxActiveLearningRounds,
+      audioFusionWeight:
+        Number.isFinite(stored.embedding?.audioFusionWeight)
+          ? clamp01(stored.embedding.audioFusionWeight)
+          : DEFAULTS.embedding.audioFusionWeight,
+      batchSize:
+        Number.isFinite(stored.embedding?.batchSize) && stored.embedding.batchSize >= 1
+          ? Math.max(1, Math.min(50, Math.floor(stored.embedding.batchSize)))
+          : DEFAULTS.embedding.batchSize,
       enrichment: {
         lastfmTags:
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
@@ -1350,6 +1811,12 @@ export async function load() {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
+    webhooksPolicy: {
+      trackPlayListenerGated:
+        typeof stored.webhooksPolicy?.trackPlayListenerGated === 'boolean'
+          ? stored.webhooksPolicy.trackPlayListenerGated
+          : DEFAULTS.webhooksPolicy.trackPlayListenerGated,
+    },
     scrobble: {
       lastfm: {
         enabled:
@@ -1385,6 +1852,10 @@ export async function load() {
         username:
           typeof stored.scrobble?.listenbrainz?.username === 'string'
             ? stored.scrobble.listenbrainz.username.trim().slice(0, 40)
+            : '',
+        baseUrl:
+          typeof stored.scrobble?.listenbrainz?.baseUrl === 'string'
+            ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
     },
@@ -1434,11 +1905,31 @@ export function getDefaults() {
   return DEFAULTS;
 }
 
+// Resolve the operator-entered inline API key for a provider from the
+// per-provider map (issue #657). Returns '' when none is stored, in which case
+// the registry/embedding layer falls through to the provider's env var
+// (OPENROUTER_API_KEY etc.) exactly as before. This is the single resolution
+// chokepoint — leg assembly (registry.llmCfg / legs.fallbackLeg) and the
+// openai-compatible probe/discovery routes all go through it.
+export function llmKeyFor(provider: string): string {
+  const keys = get().llm?.keys || {};
+  const v = keys[provider];
+  return typeof v === 'string' ? v : '';
+}
+
 // Settings with secret fields masked — for the admin /settings response.
 export function getRedacted() {
   const s = get();
   const clone = JSON.parse(JSON.stringify(s));
-  if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+  if (clone.llm) {
+    clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+    // Per-provider inline keys masked to 'set' | '' per entry, so the admin UI
+    // can show which providers have a key on file without exposing the value.
+    clone.llm.keys = {};
+    for (const p of Object.keys(s.llm?.keys || {})) {
+      clone.llm.keys[p] = s.llm.keys[p] ? 'set' : '';
+    }
+  }
   if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
@@ -1506,6 +1997,11 @@ function validateTtsBlock(raw, where) {
     } else if (voice.length < 1 || voice.length > 100) {
       throw new Error(`${where}.tts.voice must be 1-100 chars`);
     }
+  } else if (t.engine === 'remote') {
+    // Remote engine voices are server-specific — the sidecar interprets them
+    // (built-in id, reference-wav filename, or VoiceDesign prompt). Empty is
+    // valid: the sidecar picks its own default.
+    if (voice.length > 100) throw new Error(`${where}.tts.voice must be 0-100 chars`);
   } else {
     // piper: empty = use the baked-in default voice. Otherwise the value must
     // be an .onnx filename (no path separators) referencing a model the operator
@@ -1521,7 +2017,7 @@ function validateTtsBlock(raw, where) {
       );
     }
   }
-  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb) };
+  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb), speed: clampTtsSpeed(t.speed) };
 }
 
 export function validatePersonasStrict(raw) {
@@ -1535,8 +2031,8 @@ export function validatePersonasStrict(raw) {
     if (name.length < 1 || name.length > 40)
       throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 400)
-      throw new Error(`personas[${i}].soul must be 1-400 chars`);
+    if (soul.length < 1 || soul.length > 1000)
+      throw new Error(`personas[${i}].soul must be 1-1000 chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
@@ -1648,8 +2144,12 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (!personaIds.includes(item.personaId)) {
       throw new Error(`shows[${i}].personaId must reference an existing persona`);
     }
-    if (!SHOW_MOODS.includes(item.mood)) {
-      throw new Error(`shows[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    // Empty/missing mood means "Any": the show pins no mood and the autonomous
+    // dominantMood chain (festival > weather > time) applies while it's on air.
+    // A non-empty mood must come from the canonical vocabulary.
+    const mood = item.mood == null || item.mood === '' ? '' : String(item.mood);
+    if (mood && !SHOW_MOODS.includes(mood)) {
+      throw new Error(`shows[${i}].mood must be empty (any) or one of: ${SHOW_MOODS.join(', ')}`);
     }
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
@@ -1671,8 +2171,12 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (energy && !SHOW_ENERGY.includes(energy)) {
       throw new Error(`shows[${i}].energy must be one of: ${SHOW_ENERGY.join(', ')}`);
     }
-    // Opt-in hard genre filter (vs the default soft lean). Boolean, defaults off.
-    const genreStrict = item.genreStrict === true;
+    // Opt-in hard filter across every set music constraint — mood, genre, era,
+    // energy (vs the default soft leans). Boolean, defaults OFF. The legacy
+    // genre-only `genreStrict` is deliberately NOT carried over (see the load
+    // path): the toggle now spans every filter, so migrating it would silently
+    // harden mood/era/energy an old show never opted into.
+    const filtersStrict = item.filtersStrict === true;
     const parseYear = (v, field) => {
       if (v == null || v === '') return null;
       const n = Number(v);
@@ -1698,12 +2202,81 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
           `shows[${i}].maxTrackSeconds must be an integer between ${BOUNDS.maxTrackSeconds.min} and ${BOUNDS.maxTrackSeconds.max}`,
         );
       }
+      // Same crossfade-relative floor as the station cap (0 = inherit/unlimited
+      // stays allowed). Shows have no own crossfade, so it's the station value.
+      const floor = minTrackSeconds();
+      if (n !== 0 && n < floor) {
+        throw new Error(
+          `shows[${i}].maxTrackSeconds must be 0 (inherit/unlimited) or at least ${floor}s`,
+        );
+      }
       maxTrackSeconds = n;
     }
+    // Optional Navidrome playlist anchor. Shape-checked only (array of strings,
+    // capped) — ids are resolved against the live Navidrome at pick time, never
+    // here, so a stale id is tolerated. playlistStrict is a plain boolean.
+    let playlistIds: string[] = [];
+    if (item.playlistIds !== undefined && item.playlistIds !== null) {
+      if (!Array.isArray(item.playlistIds)) {
+        throw new Error(`shows[${i}].playlistIds must be an array of strings`);
+      }
+      if (item.playlistIds.length > PLAYLISTS_PER_SHOW) {
+        throw new Error(`shows[${i}].playlistIds must have at most ${PLAYLISTS_PER_SHOW} entries`);
+      }
+      for (const v of item.playlistIds) {
+        if (typeof v !== 'string') throw new Error(`shows[${i}].playlistIds entries must be strings`);
+      }
+      playlistIds = coercePlaylistIds(item.playlistIds);
+    }
+    const playlistStrict = item.playlistStrict === true;
+    // Optional Navidrome playlist blocklist. Shape-checked only — same rules as
+    // playlistIds; stale ids contribute nothing at pick time.
+    let excludedPlaylistIds: string[] = [];
+    if (item.excludedPlaylistIds !== undefined && item.excludedPlaylistIds !== null) {
+      if (!Array.isArray(item.excludedPlaylistIds)) {
+        throw new Error(`shows[${i}].excludedPlaylistIds must be an array of strings`);
+      }
+      if (item.excludedPlaylistIds.length > EXCLUDED_PLAYLISTS_PER_SHOW) {
+        throw new Error(`shows[${i}].excludedPlaylistIds must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`);
+      }
+      for (const v of item.excludedPlaylistIds) {
+        if (typeof v !== 'string') throw new Error(`shows[${i}].excludedPlaylistIds entries must be strings`);
+      }
+      excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
+    }
+    // Optional guest co-hosts. Strict path: unknown personas and a guest that
+    // duplicates the host are operator mistakes worth surfacing, not dropping.
+    let guestPersonaIds: string[] = [];
+    if (item.guestPersonaIds !== undefined && item.guestPersonaIds !== null) {
+      if (!Array.isArray(item.guestPersonaIds)) {
+        throw new Error(`shows[${i}].guestPersonaIds must be an array of persona ids`);
+      }
+      if (item.guestPersonaIds.length > GUESTS_PER_SHOW) {
+        throw new Error(`shows[${i}].guestPersonaIds must have at most ${GUESTS_PER_SHOW} entries`);
+      }
+      for (const v of item.guestPersonaIds) {
+        if (typeof v !== 'string' || !personaIds.includes(v)) {
+          throw new Error(`shows[${i}].guestPersonaIds must reference existing personas`);
+        }
+        if (v === item.personaId) {
+          throw new Error(`shows[${i}].guestPersonaIds must not include the show's host persona`);
+        }
+      }
+      guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
+    }
+    // Banter without guests is inert, not an error — the tick re-checks the
+    // live roster anyway, so a stale true can't air a one-person "exchange".
+    const banter = item.banter === true;
+    // Programme mode + optional feature-beat capability pin. The kind is
+    // shape-checked only — resolved against the live skill catalog at air time,
+    // so a stale/misspelled kind degrades instead of blocking a settings save.
+    const programme = item.programme === true;
+    const segmentSkill = String(item.segmentSkill ?? '').trim();
+    if (segmentSkill.length > 64) throw new Error(`shows[${i}].segmentSkill must be 0-64 chars`);
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -1783,6 +2356,41 @@ function validateWebhooksStrict(raw: any, existing: any[] = []) {
   });
 }
 
+const FESTIVALS_LIMIT = 50;
+
+function validateFestivalsStrict(raw) {
+  if (!Array.isArray(raw)) throw new Error('festivals must be an array');
+  if (raw.length > FESTIVALS_LIMIT) {
+    throw new Error(`festivals must be at most ${FESTIVALS_LIMIT} entries`);
+  }
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`festivals[${i}] must be an object`);
+    const name = String(item.name ?? '').trim();
+    if (name.length < 1 || name.length > 80) throw new Error(`festivals[${i}].name must be 1-80 chars`);
+    const month = Number(item.month);
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      throw new Error(`festivals[${i}].month must be an integer 1-12`);
+    }
+    const day = Number(item.day);
+    // Feb allows 29 — in common years a leap-day festival fires Mar 1
+    // (Date.UTC rolls the date over in getFestivalContext).
+    const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
+      throw new Error(`festivals[${i}].day must be an integer 1-${daysInMonth} for month ${month}`);
+    }
+    const mood = String(item.mood ?? '').trim();
+    if (!SHOW_MOODS.includes(mood)) {
+      throw new Error(`festivals[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    }
+    const description = typeof item.description === 'string' ? item.description.trim().slice(0, 200) : '';
+    const windowDays = Number(item.windowDays ?? 0);
+    if (!Number.isInteger(windowDays) || windowDays < 0 || windowDays > 14) {
+      throw new Error(`festivals[${i}].windowDays must be an integer 0-14`);
+    }
+    return { month, day, name, mood, description, windowDays };
+  });
+}
+
 // Validate + persist. Returns { saved, requiresRestart } so the UI can react.
 export async function update(patch) {
   const cur = await load();
@@ -1824,8 +2432,18 @@ export async function update(patch) {
         `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
       );
     }
-    // Picker-only knob (read live by music/picker + the auto-playlist refresh);
-    // no Liquidsoap file is written, so no restart.
+    // Non-zero caps must clear the crossfade-relative floor (0 = unlimited stays
+    // allowed): the track crossfades out starting crossfadeDuration before the
+    // cap, so a shorter cap is degenerate / leaves no solo airtime. Uses next's
+    // crossfade, already applied above if this same patch changed it.
+    const floor = minTrackSeconds(next);
+    if (v !== 0 && v < floor) {
+      throw new Error(
+        `maxTrackSeconds must be 0 (no limit) or at least ${floor}s`,
+      );
+    }
+    // Read live by queue.drainToLiquidsoap + the auto-playlist refresh to stamp
+    // liq_cue_out; no Liquidsoap file is written, so no restart.
     next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {
@@ -1839,15 +2457,24 @@ export async function update(patch) {
     }
     if (a.bitrate !== undefined) {
       const v = parseInt(a.bitrate, 10);
-      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
         throw new Error(
-          `archive.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+          `archive.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
         );
       }
       if (v !== cur.archive.bitrate) {
         next.archive.bitrate = v;
         restart = true;
       }
+    }
+    if (a.retentionDays !== undefined) {
+      const v = parseInt(a.retentionDays, 10);
+      if (!Number.isInteger(v) || v < 0 || v > 3650) {
+        throw new Error('archive.retentionDays must be 0 (keep forever) or 1–3650 days');
+      }
+      // Enforced controller-side (scheduler cleanup), no Liquidsoap file or
+      // restart involved.
+      next.archive.retentionDays = v;
     }
   }
   if ('stream' in patch) {
@@ -1858,6 +2485,77 @@ export async function update(patch) {
         next.stream.opusEnabled = v;
         restart = true;
       }
+    }
+    if (st.opusBitrate !== undefined) {
+      const v = parseInt(st.opusBitrate, 10);
+      if (!Number.isFinite(v) || !OPUS_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.opusBitrate must be one of: ${OPUS_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.opusBitrate) {
+        next.stream.opusBitrate = v;
+        restart = true;
+      }
+    }
+    if (st.flacEnabled !== undefined) {
+      const v = !!st.flacEnabled;
+      if (v !== cur.stream.flacEnabled) {
+        next.stream.flacEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.aacEnabled !== undefined) {
+      const v = !!st.aacEnabled;
+      if (v !== cur.stream.aacEnabled) {
+        next.stream.aacEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.aacBitrate !== undefined) {
+      const v = parseInt(st.aacBitrate, 10);
+      if (!Number.isFinite(v) || !AAC_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.aacBitrate must be one of: ${AAC_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.aacBitrate) {
+        next.stream.aacBitrate = v;
+        restart = true;
+      }
+    }
+    if (st.bitrate !== undefined) {
+      const v = parseInt(st.bitrate, 10);
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.bitrate) {
+        next.stream.bitrate = v;
+        restart = true;
+      }
+    }
+  }
+  if ('loudness' in patch) {
+    // Read live by queue.applyLoudnessGain when each track is annotated — no
+    // Liquidsoap file, no restart. Applies from the next queued track.
+    const lo = patch.loudness || {};
+    if (lo.targetLufs !== undefined) {
+      const v = parseFloat(lo.targetLufs);
+      const b = BOUNDS.loudnessTargetLufs;
+      if (!Number.isFinite(v) || v < b.min || v > b.max) {
+        throw new Error(`loudness.targetLufs must be number in [${b.min}, ${b.max}]`);
+      }
+      next.loudness.targetLufs = v;
+    }
+    if (lo.maxBoostDb !== undefined) {
+      const v = parseFloat(lo.maxBoostDb);
+      const b = BOUNDS.loudnessMaxBoostDb;
+      if (!Number.isFinite(v) || v < b.min || v > b.max) {
+        throw new Error(`loudness.maxBoostDb must be number in [${b.min}, ${b.max}]`);
+      }
+      next.loudness.maxBoostDb = v;
     }
   }
   if ('weather' in patch) {
@@ -1918,6 +2616,9 @@ export async function update(patch) {
       next.theme.active = v;
     }
   }
+  if ('festivals' in patch) {
+    next.festivals = validateFestivalsStrict(patch.festivals);
+  }
   if ('djPrompt' in patch) {
     const v = String(patch.djPrompt ?? '').trim();
     if (v === '') {
@@ -1973,6 +2674,13 @@ export async function update(patch) {
           throw new Error('tts.kokoro.voice must match <lang><gender>_<name>, e.g. bf_isabella');
         }
         next.tts.kokoro.voice = v;
+      }
+      if (k.lang !== undefined) {
+        const v = String(k.lang).trim();
+        if (v && !KOKORO_LANG_RE.test(v)) {
+          throw new Error(`tts.kokoro.lang must be one of: ${KOKORO_LANGS.join(', ')}`);
+        }
+        next.tts.kokoro.lang = v;
       }
     }
     if (t.chatterbox !== undefined) {
@@ -2051,6 +2759,28 @@ export async function update(patch) {
         throw new Error('tts.cloud.baseUrl is required when provider is "openai-compatible"');
       }
     }
+    if (t.remote !== undefined) {
+      const r = t.remote || {};
+      if (r.url !== undefined) {
+        const v = String(r.url).trim();
+        if (v.length > 200) throw new Error('tts.remote.url must be 0-200 chars');
+        if (v) {
+          // Full parse (not just a prefix test) so a malformed host/port —
+          // e.g. http://host:notaport or http://host:99999 — is rejected at
+          // save time instead of silently failing the /health probe later.
+          let parsed: URL;
+          try {
+            parsed = new URL(v);
+          } catch {
+            throw new Error('tts.remote.url must be a valid http:// or https:// URL');
+          }
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            throw new Error('tts.remote.url must start with http:// or https://');
+          }
+        }
+        next.tts.remote.url = v.replace(/\/+$/, ''); // strip trailing slashes
+      }
+    }
     if (t.gainDb !== undefined) {
       if (typeof t.gainDb !== 'object' || t.gainDb === null || Array.isArray(t.gainDb)) {
         throw new Error('tts.gainDb must be an object keyed by engine');
@@ -2062,12 +2792,29 @@ export async function update(patch) {
         next.tts.gainDb[key] = clampTtsGain(t.gainDb[key]);
       }
     }
+    if (t.speed !== undefined) {
+      if (typeof t.speed !== 'object' || t.speed === null || Array.isArray(t.speed)) {
+        throw new Error('tts.speed must be an object keyed by engine');
+      }
+      for (const key of Object.keys(t.speed)) {
+        if (!TTS_ENGINES.includes(key)) {
+          throw new Error(`tts.speed has unknown engine "${key}"; must be one of: ${TTS_ENGINES.join(', ')}`);
+        }
+        next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
+      }
+    }
   }
   if ('llm' in patch) {
     const l = patch.llm || {};
     applyLlmLegPatch(next.llm, l, 'llm');
+    // Route the primary inline key into keys[provider] AFTER the provider is
+    // resolved, so it's stored under the identity it belongs to (issue #657).
+    applyInlineKey(next.llm, next.llm.provider, l.apiKey);
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.noRepeatWindow !== undefined) {
+      next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
@@ -2083,6 +2830,9 @@ export async function update(patch) {
     }
     if (l.budgetSoftPct !== undefined) {
       next.llm.budgetSoftPct = clampBudgetSoftPct(Number(l.budgetSoftPct), next.llm.budgetSoftPct);
+    }
+    if (l.maxOutputTokens !== undefined) {
+      next.llm.maxOutputTokens = clampMaxOutputTokens(Number(l.maxOutputTokens), next.llm.maxOutputTokens);
     }
     if (l.exemptRequests !== undefined) {
       next.llm.exemptRequests = !!l.exemptRequests;
@@ -2103,6 +2853,10 @@ export async function update(patch) {
         next.llm.fallback.enabled = !!fb.enabled;
       }
       applyLlmLegPatch(next.llm.fallback, fb, 'llm.fallback');
+      // Fallback inline key shares the same per-provider map (keys live at
+      // next.llm.keys, not under the fallback) — routed by the fallback's
+      // resolved provider.
+      applyInlineKey(next.llm, next.llm.fallback.provider, fb.apiKey);
       if (
         next.llm.fallback.enabled &&
         next.llm.fallback.provider === 'openai-compatible' &&
@@ -2214,6 +2968,23 @@ export async function update(patch) {
       }
       next.embedding.maxActiveLearningRounds = v;
     }
+    if (e.audioFusionWeight !== undefined) {
+      const v = parseFloat(e.audioFusionWeight);
+      if (!Number.isFinite(v) || v < 0 || v > 1) {
+        throw new Error('embedding.audioFusionWeight must be between 0 and 1');
+      }
+      next.embedding.audioFusionWeight = v;
+    }
+    // LLM tag batch size — how many tracks per tagging call. Weaker models
+    // truncate/error on large batches, so operators can drop this. Clamp kept in
+    // sync with the CLI --batch flag + load() normalisation (music/tag-library.ts).
+    if (e.batchSize !== undefined) {
+      const v = parseInt(e.batchSize, 10);
+      if (!Number.isFinite(v) || v < 1 || v > 50) {
+        throw new Error('embedding.batchSize must be an integer 1-50');
+      }
+      next.embedding.batchSize = v;
+    }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
       if (en.lastfmTags !== undefined) {
@@ -2262,6 +3033,12 @@ export async function update(patch) {
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
   }
+  if ('webhooksPolicy' in patch) {
+    const wp = patch.webhooksPolicy || {};
+    if (wp.trackPlayListenerGated !== undefined) {
+      next.webhooksPolicy.trackPlayListenerGated = !!wp.trackPlayListenerGated;
+    }
+  }
   if ('scrobble' in patch) {
     const sb = patch.scrobble || {};
     if (sb.lastfm !== undefined) {
@@ -2295,6 +3072,14 @@ export async function update(patch) {
         if (v.length > 200) throw new Error('scrobble.listenbrainz.userToken must be 0-200 chars');
         next.scrobble.listenbrainz.userToken = v;
       }
+      if (lb.baseUrl !== undefined) {
+        const trimmed = String(lb.baseUrl ?? '').trim();
+        if (trimmed.length > 500) throw new Error('scrobble.listenbrainz.baseUrl too long');
+        if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+          throw new Error('scrobble.listenbrainz.baseUrl must start with http:// or https://');
+        }
+        next.scrobble.listenbrainz.baseUrl = trimmed;
+      }
     }
   }
 
@@ -2303,6 +3088,11 @@ export async function update(patch) {
   {
     const personaIds = next.personas.map(p => p.id);
     next.shows = next.shows.filter(s => personaIds.includes(s.personaId));
+    // A deleted persona also vanishes from every guest roster (the show itself
+    // survives — losing a guest is not losing the show).
+    for (const s of next.shows) {
+      s.guestPersonaIds = coerceGuestPersonaIds(s.guestPersonaIds, s.personaId, personaIds);
+    }
     const showIds = next.shows.map(s => s.id);
     for (let d = 0; d < 7; d++) {
       for (let h = 0; h < 24; h++) {
@@ -2343,8 +3133,10 @@ export async function update(patch) {
   // resolveActiveShow / getEffectivePersona / the integrity sweep all
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, ...settingsPersist } = next;
-  await writeFile(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
-  await writeFile(
+  // Atomic replace — a crash mid-write must not take the operator's whole
+  // config (or show schedule) with it.
+  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify({ shows: next.shows, schedule: next.schedule }, null, 2),
   );
@@ -2386,13 +3178,18 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     fromYear: Number.isFinite(show.fromYear) ? show.fromYear : null,
     toYear: Number.isFinite(show.toYear) ? show.toYear : null,
     energy: typeof show.energy === 'string' ? show.energy : '',
-    // When true (and a genre is set) the pick pool is hard-filtered to the
-    // genre instead of softly leaned; off-genre tracks only survive as a
-    // never-starve fallback. Defaults off.
-    genreStrict: show.genreStrict === true,
+    // When true, every set music filter (mood, genre, era, energy) is a hard
+    // filter on the pick pool instead of a soft lean; off-filter tracks only
+    // survive as a never-starve fallback. Defaults off.
+    filtersStrict: show.filtersStrict === true,
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
+    // Navidrome playlist anchor: the union of these playlists becomes the show's
+    // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
+    // entire universe; soft just lets it dominate. Empty array = no anchor.
+    playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: any) => typeof v === 'string') : [],
+    playlistStrict: show.playlistStrict === true,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
@@ -2400,6 +3197,18 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     persona: persona
       ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
       : null,
+    // Guest co-hosts, resolved to live personas (a guest deleted after the
+    // show was saved simply vanishes from the roster). Empty = solo show.
+    guests: (Array.isArray(show.guestPersonaIds) ? show.guestPersonaIds : [])
+      .map(gid => s.personas?.find(p => p.id === gid))
+      .filter(Boolean)
+      .map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '' })),
+    // Scripted multi-voice banter breaks — only fires when guests exist.
+    banter: show.banter === true,
+    // Programme mode: produced episode arc (broadcast/programme.ts). The
+    // optional segmentSkill pins the feature beat to one capability kind.
+    programme: show.programme === true,
+    segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
   };
 }
 
@@ -2413,6 +3222,38 @@ export function getEffectivePersona(date: Date = new Date()) {
     if (p) return p;
   }
   return getActivePersona();
+}
+
+// Everyone in the studio right now: the effective persona as host, plus the
+// active show's guest co-hosts (full persona objects — the speaker rotation
+// needs their tts config, not just names). Outside a show, or on a show with
+// no guests, `guests` is empty and the roster degenerates to today's solo DJ.
+export function getOnAirRoster(date: Date = new Date()) {
+  const s: any = get();
+  const host = getEffectivePersona(date);
+  const show: any = resolveActiveShow(date, s);
+  const guests = (show?.guests || [])
+    .map((g: any) => s.personas?.find((p: any) => p.id === g.id))
+    .filter((p: any) => p && p.id !== host?.id);
+  return { host, guests, show };
+}
+
+// How much of the mic the host keeps when guests are in the studio. The rest
+// is split evenly across the guests, so one guest speaks ~2 segments in 5 and
+// the host stays unmistakably the host.
+const HOST_MIC_SHARE = 0.6;
+
+// The persona who speaks the NEXT standalone segment (station ID, hourly
+// check, weather/news/etc.). Weighted random: host most of the time, a guest
+// otherwise. Solo shows and off-show hours always return the effective
+// persona, so every existing call site is behaviour-identical until a show
+// actually lists guests. Track picks and their tied links stay with the host —
+// the pick agent reads the session from the host's perspective.
+export function pickOnAirSpeaker(date: Date = new Date()) {
+  const { host, guests } = getOnAirRoster(date);
+  if (!guests.length || !host) return host;
+  if (Math.random() < HOST_MIC_SHARE) return host;
+  return guests[Math.floor(Math.random() * guests.length)];
 }
 
 // The persona's on-air language as a blunt system-prompt directive. Empty
@@ -2476,21 +3317,44 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
 // opener everywhere. Paste this at the top of any new agent system prompt;
 // never hand-roll the opener.
 //
-// `rules` is OPT-IN, defaulting to true. Pass `false` for tool-loop agents
-// whose primary task is structured exploration + strict JSON output (the
-// track picker and the request agent): the ~600-char humanness block at the
-// top of the prompt competes for the model's attention with the tool-loop
-// instructions and reliably derails small cloud models — they read "sound
-// like a person talking" and emit conversational prose instead of executing
-// the tool loop. The rules belong on agents whose primary task IS spoken
-// output (the segment director), not on agents whose primary task is
-// orchestration with an incidental spoken side-channel.
-export function agentPersonaPreamble(persona, { rules = true } = {}) {
+// Deliberately JUST the opener — no style-rule block. A DJ_HUMANNESS_RULES
+// word-blocklist used to be appendable here (and in renderDjPrompt); it was
+// lost in the a0d58b3 editor-mangle, and when a restore was attempted the
+// operator chose to keep it out: the station ran fine without it for weeks,
+// the ~600-char negative list competes with each persona's soul and flattens
+// voices toward one register, and it taxes every call. Voice steering lives
+// in the persona souls, tone dials, and the operator-editable djPrompt
+// template — add style rules there, not as a hard-coded appended constant.
+export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
-  return rules ? `${opener}` : opener;
+  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}${onAirRosterClause(persona)}`;
+}
+
+// When the active show has guest co-hosts, tell the speaking persona who else
+// is in the studio — from ITS OWN seat (host vs guest). Empty when the show is
+// solo, off-show, or the speaker isn't part of the current roster (so a
+// handoff rendered for the PREVIOUS show's outgoing persona never inherits the
+// new show's cast). Appended to both prompt paths — renderDjPrompt via
+// djSystem, and agentPersonaPreamble for the pick/segment agents. The "never
+// invent quotes" rule matters: only genuinely aired turns reach the session
+// history, so any other words attributed to a co-host would be fabricated.
+export function onAirRosterClause(persona: any, date: Date = new Date()): string {
+  if (!persona?.id) return '';
+  const { host, guests, show } = getOnAirRoster(date);
+  if (!guests.length || !host) return '';
+  const showName = show?.name ? ` on "${show.name}"` : '';
+  if (persona.id === host.id) {
+    const names = guests.map((g: any) => g.name).join(' and ');
+    return `\n\nYou are hosting${showName} with ${names} in the studio as your co-host${guests.length > 1 ? 's' : ''}. They take some of the talk breaks. When it fits, refer to them naturally — react to something they said on air, tee them up, share the room — but never invent quotes or opinions for them; only riff on what they actually said.`;
+  }
+  if (guests.some((g: any) => g.id === persona.id)) {
+    const others = guests.filter((g: any) => g.id !== persona.id).map((g: any) => g.name);
+    const othersClause = others.length ? ` ${others.join(' and ')} ${others.length > 1 ? 'are' : 'is'} also in the studio.` : '';
+    return `\n\nYou are a guest co-host${showName}; ${host.name} is the host and carries the show.${othersClause} Speak as yourself, in your own voice — you're a visitor with a seat at the desk, not the station's main DJ. React to the host and the music naturally, but never invent quotes or opinions for the others; only riff on what they actually said.`;
+  }
+  return '';
 }
 
 // Liquidsoap reads tiny text files instead of JSON.
@@ -2499,6 +3363,11 @@ const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
+const LIQ_OPUS_BITRATE_PATH = `${STATE_DIR}/liquidsoap_opus_bitrate.txt`;
+const LIQ_FLAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_flac_enabled.txt`;
+const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
+const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
+const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
 export async function writeLiquidsoapSettings(s) {
@@ -2507,6 +3376,11 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
+  await writeFile(LIQ_OPUS_BITRATE_PATH, String(s.stream.opusBitrate));
+  await writeFile(LIQ_FLAC_ENABLED_PATH, s.stream.flacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
+  await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }
 
@@ -2519,7 +3393,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_CROSSFADE_PATH) ||
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
-    !existsSync(LIQ_OPUS_ENABLED_PATH)
+    !existsSync(LIQ_OPUS_ENABLED_PATH) ||
+    !existsSync(LIQ_STREAM_BITRATE_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }

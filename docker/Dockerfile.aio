@@ -17,6 +17,13 @@
 # (Chatterbox / PocketTTS) and the docker-socket-proxy Stats panel. Both degrade
 # gracefully — TTS falls back to the bundled Piper voice, the Stats system panel
 # simply hides. Piper + Kokoro are included, so the DJ has a natural voice.
+#
+# Bundled by default: the lean acoustic analyzer (librosa — bpm/key/intro/
+# loudness). In the split stack it's a separate `analyzer` sidecar; the AIO is
+# one container with no sidecars, so it bakes the venv in and runs it via the
+# controller's in-process local backend (ANALYZE_PYTHON). The heavy CLAP
+# "sounds-like" + Demucs vocal stack is OFF here (kept lean/small); CI publishes
+# a `subwave-aio-heavy` tag (WITH_CLAP=1 WITH_DEMUCS=1) for operators who want it.
 
 # ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
 FROM node:22-bookworm-slim AS webbuild
@@ -31,13 +38,20 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # SITE_URL env for live share-card tags.
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
+# Admin-console footer version, inlined into the web bundle at build time. See
+# web/next.config.js. Set from `git describe` by the publish-images CI; unset →
+# falls back to web/package.json.
+ARG SUBWAVE_BUILD_VERSION
+ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
 # ---- caddy binary: lift the glibc build from the official Debian image ------
 FROM caddy:2 AS caddybin
 
 # ---- final: everything under the liquidsoap (Debian bookworm) base ----------
-FROM savonet/liquidsoap:v2.2.5
+# v2.4.5 minimum — same reason as Dockerfile.broadcast: 2.4.4's O(n) clock
+# scan made the per-transition DJ effect chains stall the stream clock.
+FROM savonet/liquidsoap:v2.4.5
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
@@ -91,10 +105,21 @@ RUN mkdir -p /opt/piper/voices && \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 
 # --- Kokoro (optional second TTS, more natural) ----------------------------
-RUN python3 -m venv /opt/kokoro/venv && \
-    /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/kokoro/venv/bin/pip install --no-cache-dir \
-      kokoro-onnx==0.4.9 soundfile==0.12.1
+# kokoro_worker.py imports misaki unconditionally, and kokoro-onnx 0.5.0 pairs
+# with misaki 0.9.4 (the controller image's validated combo). But misaki 0.9.4
+# requires Python <3.13, while this base (liquidsoap/Debian trixie) ships 3.13 —
+# so, unlike the controller (bookworm/py3.11), the system python3 can't build
+# the kokoro venv (misaki 0.9.4 has no 3.13 wheel and pip resolves nothing).
+# Provision a standalone CPython 3.12 via uv for THIS venv only; the analyzer
+# venv below stays on the system python3. The final import mirrors the worker's
+# import block, so a broken combo fails the build instead of silently falling
+# back to Piper at runtime.
+COPY --from=ghcr.io/astral-sh/uv:0.11.27 /uv /usr/local/bin/uv
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+RUN uv venv --python 3.12 /opt/kokoro/venv && \
+    uv pip install --python /opt/kokoro/venv/bin/python --no-cache \
+      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 && \
+    /opt/kokoro/venv/bin/python -c "import kokoro_onnx, misaki; from misaki import espeak"
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
@@ -104,10 +129,72 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
     KOKORO_VOICES=/opt/kokoro/models/voices-v1.0.bin \
     KOKORO_PYTHON=/opt/kokoro/venv/bin/python
 
+# --- Acoustic analyzer (librosa + optional CLAP + Demucs) -------------------
+# The controller's analyze pass (bpm/key/intro/loudness, "sounds-like" CLAP
+# embeddings, Demucs vocal ranges) runs librosa, which isn't in the base
+# controller image — the split stack ships it as the separate `analyzer`
+# sidecar. The AIO has no sidecars, so we bake the same venv in and point the
+# controller at it via ANALYZE_PYTHON (music/analyzer.ts's local backend). The
+# analyze_worker.py copied with controller/scripts below is the single source of
+# truth; ffmpeg + libsndfile1 (installed above) give librosa codec coverage.
+#
+# CLAP ("sounds-like") + Demucs (vocal ranges) are the heavy tier — they add a
+# shared CPU-torch stack (~900MB on top of the lean venv) and are **OFF by
+# default**, so the default `subwave-aio` image stays lean (bpm/key/intro/
+# loudness only). CI also publishes a `subwave-aio-heavy`
+# tag built with WITH_CLAP=1 WITH_DEMUCS=1 — Unraid one-click users who want the
+# extra dimensions repoint their container at that tag. When on, both lazy-load
+# their weights the first time the admin toggles them during a rescan (into
+# HF_HOME, under the persisted state dir).
+#
+# Version pins mirror the analyzer venv in docker/Dockerfile.analyzer — keep the
+# two in lockstep (same wheels, reproducible rebuilds). torch/torchaudio are held
+# at 2.6.0 off the CPU wheel index.
+ARG WITH_CLAP=0
+ARG WITH_DEMUCS=0
+RUN python3 -m venv /opt/analyzer/venv && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
+    if [ "$WITH_CLAP" = "1" ]; then \
+      /opt/analyzer/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
+      /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
+    fi && \
+    if [ "$WITH_DEMUCS" = "1" ]; then \
+      # diffq: decompressor for demucs' quantized checkpoints (mdx_q, …). Tiny,
+      # but without it a DEMUCS_MODEL=*_q override makes demucs fatal() at load.
+      # It ships sdist-only (Cython ext), so lend it gcc + Python headers for the
+      # install and purge in the SAME layer — the lean image never pays for any
+      # of this. Unlike the analyzer image (python:3.11-slim ships headers), this
+      # base's apt python3 has none, so python3-dev is required for Python.h.
+      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev && \
+      /opt/analyzer/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
+      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
+      apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
+    fi && \
+    find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
+# ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME points
+# CLAP/Demucs weight downloads at the persisted state dir so they survive
+# recreates. ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied
+# below), so it needs no override here.
+ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
+    HF_HOME=/var/sub-wave/hf-cache
+
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app
-COPY controller/package*.json ./
-RUN npm install --omit=dev
+# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
+# stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
+# or npm hits ERESOLVE.
+COPY controller/package*.json controller/.npmrc ./
+# npm ci (not install): controller ships a package-lock.json, so ci gives a
+# reproducible, lockfile-exact install. The package*.json glob above already
+# brings the lockfile in before this runs.
+RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
 
@@ -128,9 +215,14 @@ RUN chmod +x /usr/local/bin/subwave-supervisor
 # Shared state dir (the supervisor re-asserts perms on every boot).
 RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 
+# Re-declared for the final stage (ARGs don't cross stage boundaries) so the
+# controller process reports the same version (backup manifest) as the web
+# build above. Same source as the webbuild-stage arg.
+ARG SUBWAVE_BUILD_VERSION
 ENV NODE_ENV=production \
     STATE_DIR=/var/sub-wave \
-    SOUNDS_DIR=/sounds
+    SOUNDS_DIR=/sounds \
+    SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 
 # Single public port: Caddy on :80. Health = the controller's liveness via the
 # edge, which only answers once web + controller are both up.

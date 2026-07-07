@@ -17,7 +17,18 @@
 //   --reseed              drop + rebuild track_vectors; re-embed from scratch
 //   --re-enrich           null out enrichment cache and re-fetch from Navidrome
 //   --skip-enrich         embed using metadata only (debug; verifies enrichment helps)
-//   --upgrade             re-tag only rows with stale promptHash or model
+//   --skip-analyze        skip the acoustic bpm/key pass (Phase 5)
+//   --skip-tag            skip embed + mood tagging (phases 1-4); walk/enrich/
+//                         analyze still run per their flags (admin "Tag moods" off)
+//   --no-prune            walk Navidrome but don't drop orphaned rows (admin
+//                         "Reconcile with Navidrome" step deselected)
+//   --vocal / --no-vocal  force the Phase-5 Demucs vocal pass on / off for this
+//                         run (else defers to settings.audio.vocalActivity)
+//   --upgrade             re-LLM-tag only tagged rows with stale promptHash/model
+//                         (never source='manual'). The "Re-decide moods" pass.
+//   --rescan              re-scan mode: fire ONLY the selected re-* passes, each
+//                         scoped to already-done tracks; never forward-process the
+//                         untagged remainder (set by the admin Re-scan tab)
 //
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
 // tracks table as legacy v1 entries (see library-db.ts).
@@ -29,15 +40,32 @@ import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
 import { selectSeeds } from './seed-selector.js';
 import { selectEnrichIds } from './enrich-scope.js';
-import { vote } from './tag-propagator.js';
+import { vote, fuseNeighbours } from './tag-propagator.js';
+import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '../llm/provider.js';
-import { isUnreachable, isQuotaOrAuthError } from '../llm/sdk.js';
+import { isUnreachable, isQuotaOrAuthError, errReason } from '../llm/sdk.js';
+import { setRawDebugStderrMirror } from '../llm/log.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
-import { reportProgress } from './tagger-progress.js';
+import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings, makeEventLogger } from './tagger-progress.js';
+import { planRun } from './rescan-scope.js';
+import { mapPool, memoizeByKey } from '../util/async-pool.js';
+import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+
+// Emit the terse `[tag] …` console line AND the structured event sentinel the
+// controller relays to the panel — one call site per notable milestone.
+const logEvent = makeEventLogger('tag');
+
+// Close (and TRUNCATE-checkpoint) the library DB on every exit path — this CLI
+// bails via process.exit() from several places, and a bulk run that skips the
+// close leaves the WAL sidecar at its high-water mark forever (#786).
+// db.close() is fully synchronous, so it's safe inside an 'exit' hook.
+process.on('exit', () => {
+  try { if (db.isOpen()) db.close(); } catch { /* best-effort */ }
+});
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -59,7 +87,7 @@ function clamp01(n: number): number {
 
 interface CliFlags {
   limit: number;
-  batchSize: number;
+  batchSize: number | null;
   seedCount: number | null;
   maxRounds: number | null;
   noPropagate: boolean;
@@ -70,13 +98,33 @@ interface CliFlags {
   skipAnalyze: boolean;
   reAnalyze: boolean;
   reconcileOnly: boolean;
+  // Skip embed + mood tagging (phases 1-4). Walk, enrich and analyze still run
+  // per their own flags — the admin "Tag moods" step unchecked.
+  skipTag: boolean;
+  // Walk Navidrome but don't prune orphaned rows — the admin "Reconcile with
+  // Navidrome" step unchecked. (A normal run prunes by default.)
+  noPrune: boolean;
+  // Per-run override of the Demucs vocal-activity backfill in Phase 5. --vocal
+  // forces it on, --no-vocal forces it off; neither falls back to the setting
+  // (settings.audio.vocalActivity / ANALYZE_VOCAL_ACTIVITY). The admin Run tab's
+  // "Vocal activity" sub-checkbox drives these so a run can do bpm/key + CLAP
+  // without the slow Demucs pass (or include it) without touching the setting.
+  vocal: boolean;
+  noVocal: boolean;
+  // Re-scan mode (admin Re-scan tab). Fire ONLY the selected re-* passes, each
+  // scoped to already-done tracks; the forward seed→propagate→active-learn
+  // discovery is suppressed so the untagged remainder is never processed. Raw CLI
+  // re-* flags (no --rescan) keep their documented per-flag, full-library meaning.
+  rescan: boolean;
 }
 
 function parseFlags(): CliFlags {
   const args = process.argv.slice(2);
+  // null = no --batch flag → fall back to settings.embedding.batchSize in main().
+  const rawBatch = parseIntFlag(args, '--batch');
   return {
     limit: parseIntFlag(args, '--limit') ?? Infinity,
-    batchSize: Math.max(1, Math.min(50, parseIntFlag(args, '--batch') ?? 25)),
+    batchSize: rawBatch !== null ? Math.max(1, Math.min(50, rawBatch)) : null,
     seedCount: parseIntFlag(args, '--seeds'),
     // null = fall back to settings.embedding.maxActiveLearningRounds
     maxRounds: parseIntFlag(args, '--max-rounds'),
@@ -84,9 +132,9 @@ function parseFlags(): CliFlags {
     reseed: args.includes('--reseed'),
     reEnrich: args.includes('--re-enrich'),
     skipEnrich: args.includes('--skip-enrich'),
-    // Not implemented yet. When a stale-re-tag pass is built, its row
-    // selection MUST exclude source='manual' — operator-set tags are ground
-    // truth and never go stale with prompt/model changes.
+    // Re-decide moods: re-LLM-tag tagged rows whose prompt/model went stale. Row
+    // selection (db.staleTaggedIds) excludes source='manual' — operator-set tags
+    // are ground truth and never go stale with prompt/model changes.
     upgrade: args.includes('--upgrade'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
@@ -95,6 +143,11 @@ function parseFlags(): CliFlags {
     // button drives this so orphaned entries can be cleared without paying for
     // a full tag/analyze pass (works even at 100% coverage).
     reconcileOnly: args.includes('--reconcile-only'),
+    skipTag: args.includes('--skip-tag'),
+    noPrune: args.includes('--no-prune'),
+    vocal: args.includes('--vocal'),
+    noVocal: args.includes('--no-vocal'),
+    rescan: args.includes('--rescan'),
   };
 }
 
@@ -122,7 +175,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
       reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
     }
   }
-  console.log(`[tag] walked ${walked} total tracks`);
+  logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
   return { walked, liveIds };
 }
 
@@ -183,6 +236,35 @@ async function main() {
   const flags = parseFlags();
   const startedAt = Date.now();
 
+  // Keep the raw-LLM-request debug capture writing to state/logs/llm-debug.log,
+  // but mute its stderr mirror so it doesn't drown the tagger's formatted output
+  // (the `[llm-debug-raw] {...}` JSON dumps). The file still captures everything.
+  setRawDebugStderrMirror(false);
+
+  // Belt-and-braces single-flight: a controller-spawned run is already covered by
+  // the pidfile the controller wrote (MANAGED_ENV set → this is a no-op). A manual
+  // `npm run tag` on a host checkout claims the lock itself and refuses if another
+  // live run holds it, so it can't become a second writer on the same DB.
+  let ownsLock = false;
+  try {
+    ownsLock = acquireStandaloneLock(flags.reconcileOnly ? 'reconcile' : 'tag', process.argv.slice(2));
+  } catch (err: any) {
+    console.error(`[tag] ${err.message}`);
+    process.exit(1);
+  }
+  if (ownsLock) installPidfileCleanup();
+
+  // Per-phase wall-clock. `lap(name)` attributes the time since the previous lap
+  // to `name`, so the breakdown in finish() shows where a slow run actually went
+  // (almost always the chat-model seed/learn phases, not embeddings).
+  const timings: Record<string, number> = {};
+  let phaseT0 = startedAt;
+  const lap = (name: string): void => {
+    const now = Date.now();
+    timings[name] = (timings[name] || 0) + (now - phaseT0);
+    phaseT0 = now;
+  };
+
   await applyWizardOverlay();
   await settings.load();
 
@@ -194,7 +276,7 @@ async function main() {
   }
 
   if (!embeddings.isAvailable()) {
-    console.error('[tag] embeddings not available — set settings.embedding.enabled / provider');
+    logEvent('error', 'Embeddings not available — set settings.embedding.enabled / provider');
     process.exit(1);
   }
 
@@ -206,7 +288,7 @@ async function main() {
   // name→dim guess, so an arbitrarily-named embedding model just works.
   const probe = await embeddings.ensureReady();
   if (probe.code !== 'ok') {
-    console.error(`[tag] embedding preflight failed (${probe.code}):\n${probe.message}`);
+    logEvent('error', `Embedding preflight failed (${probe.code}): ${probe.message}`);
     process.exit(1);
   }
   const embeddingDim = probe.dim ?? embeddings.resolveEmbeddingDim();
@@ -216,31 +298,115 @@ async function main() {
   // runs (the bug in #307). On a same-dim run this is a no-op.
   await db.open({ embeddingDim, reseed: flags.reseed });
 
-  // The DB upserts emit when the model changes; record the current one.
-  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
+  // The DB upserts emit when the model changes; record the current one, plus
+  // the task-prefix mode this run embeds documents in. A reseed re-embeds
+  // everything, so it adopts the active model's preferred mode; otherwise stay
+  // consistent with how the existing vectors were embedded — query embeds must
+  // match the documents (a legacy meta row with no mode = embedded bare).
+  const textMode = flags.reseed
+    ? embeddings.preferredTextMode()
+    : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
+  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode);
+  if (textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {
+    logEvent(
+      'info',
+      `${embeddings.activeModelLabel()} retrieves better with task prefixes — run ` +
+        `“Re-embed all tracks” (admin Re-scan tab, or --reseed) once to upgrade the index.`,
+    );
+  }
 
   // Tunables from settings.embedding, CLI flags override where present.
   const embedCfg: any = (settings.get() as any).embedding ?? {};
   const maxRounds = flags.maxRounds ?? Math.max(0, embedCfg.maxActiveLearningRounds ?? 3);
-  const knnK = Math.max(1, embedCfg.knnNeighbours ?? 5);
-  const moodVoteThreshold = clamp01(embedCfg.moodVoteThreshold ?? 0.6);
-  const confidenceThreshold = clamp01(embedCfg.confidenceThreshold ?? 0.6);
+  const tagBatchSize = flags.batchSize ?? Math.max(1, Math.min(50, embedCfg.batchSize ?? 25));
+  // Fallbacks kept in sync with DEFAULTS.embedding in settings.ts (settings.get()
+  // normally supplies these; the ?? only bites if the field is entirely absent).
+  const knnK = Math.max(1, embedCfg.knnNeighbours ?? 10);
+  const moodVoteThreshold = clamp01(embedCfg.moodVoteThreshold ?? 0.4);
+  const confidenceThreshold = clamp01(embedCfg.confidenceThreshold ?? 0.35);
   const seedCountCfg =
     typeof embedCfg.seedCount === 'number' && embedCfg.seedCount > 0
       ? embedCfg.seedCount
       : null;
 
-  console.log(`[tag] starting. ${db.allTaggedIds().length} tracks already tagged.`);
-  console.log(`[tag] LLM model: ${activeModelLabel()}`);
-  console.log(`[tag] embedding model: ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
-  console.log(
-    `[tag] batch=${flags.batchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
-      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
-  );
+  // Shared vote plumbing for phase 3, the phase-4 re-propagation rounds and
+  // the post-run self-check: KNN → neighbour-tag lookup → similarity-weighted
+  // vote. Same-album+artist neighbours vote at half weight — a track's text
+  // embedding is dominated by artist/album, so its KNN list is mostly its own
+  // album mates; at full weight one mistagged seed swept its whole album, and
+  // cross-album corroboration never got a say (the same-album echo chamber).
+  //
+  // When the track has a CLAP "sounds-like" vector, audio-KNN neighbours are
+  // fused into the list at audioFusionWeight before the vote — sound is the
+  // stronger mood signal for instrumentals / thin-metadata tracks, and CLAP
+  // doesn't cluster by album. knnAudioById returns [] for un-analysed tracks,
+  // so fusion degrades to text-only per track, not per run.
+  const SAME_ALBUM_WEIGHT = 0.5;
+  const audioFusionWeight = clamp01(embedCfg.audioFusionWeight ?? 0.5);
+  const voteForTrack = (id: string) => {
+    const target = db.getTrack(id);
+    const textNeighbours = db.knnById(id, knnK);
+    const neighbours =
+      audioFusionWeight > 0
+        ? fuseNeighbours(textNeighbours, db.knnAudioById(id, knnK), audioFusionWeight, knnK)
+        : textNeighbours;
+    return vote(
+      neighbours,
+      (nId) => {
+        const t = db.getTrack(nId);
+        if (!t || t.moods.length === 0) return null;
+        return { moods: t.moods, energy: t.energy };
+      },
+      {
+        moodVoteThreshold,
+        k: knnK,
+        weightOf: (nId) => {
+          if (!target?.album || !target?.artist) return 1;
+          const n = db.getTrack(nId);
+          return n?.album === target.album && n?.artist === target.artist
+            ? SAME_ALBUM_WEIGHT
+            : 1;
+        },
+      },
+    );
+  };
 
+  logEvent('info', `Starting up — ${db.allTaggedIds().length.toLocaleString('en-GB')} tracks already tagged`);
+  logEvent('info', `Tagging model — ${activeModelLabel()}`);
+  logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
+  console.log(
+    `[tag] batch=${tagBatchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
+      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold} ` +
+      `audioFusion=${audioFusionWeight}`,
+  );
+  if (audioFusionWeight > 0) {
+    const audioVecs = db.audioVectorCount();
+    if (audioVecs > 0) {
+      logEvent(
+        'info',
+        `Audio fusion on — ${audioVecs.toLocaleString('en-GB')} sounds-like vectors ` +
+          `join the mood vote (weight ${audioFusionWeight})`,
+      );
+    }
+  }
+
+  // A re-scan re-embed rebuilds the vector population; a normal --reseed run does
+  // it as part of its forward pass and doesn't need the snapshot below.
+  let reembedIds: string[] = [];
   if (flags.reseed) {
+    // Snapshot the set to rebuild. A SAME-dim reseed still has the old vectors
+    // here, so embeddedIds() captures exactly the already-embedded population. A
+    // DIM-CHANGE reseed already had track_vectors dropped inside open()/migrate
+    // (the old vectors are unusable at the new width), so this comes back empty.
+    if (flags.rescan) reembedIds = db.embeddedIds();
     console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
     db.dropVectors();
+    // Dim change wiped the vectors before we could snapshot them. The UI pass is
+    // "Re-embed all tracks" (its whole purpose is a model change, which usually
+    // changes the dim), so rebuild every track that now needs a vector — after
+    // the reset that's the whole library. Without this the pass silently rebuilt
+    // 0 vectors on exactly the model swap it advertises.
+    if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
   }
 
   const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);
@@ -257,6 +423,7 @@ async function main() {
   // ---- Phase A: iterate Navidrome and upsert track metadata into DB ------
   // Cheap; ensures every Navidrome song is in the tracks table so subsequent
   // phases can operate purely off SQL.
+  lap('setup');
   console.log('[tag] walking Navidrome library...');
   const { walked, liveIds } = await walkNavidrome();
 
@@ -265,22 +432,45 @@ async function main() {
   // (typically after a full rescan that re-mints IDs). Pruning the orphans
   // keeps coverage %, untagged scope and analysis scope honest. Guarded on a
   // non-empty walk so a transient empty Navidrome response can't wipe the DB.
-  if (walked > 0) {
+  if (flags.noPrune) {
+    console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
+  } else if (walked > 0) {
     const pruned = db.pruneMissingTracks(liveIds);
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
   }
+  lap('walk');
 
-  // Honour --limit by capping how many NEW tracks we work on this run.
-  // We do this by selecting the first N untagged ids; ones beyond the cap
-  // wait for the next run.
+  // Which phases run this pass. A re-scan fires only the selected re-* passes and
+  // suppresses forward discovery; a normal run is a full forward pass minus any
+  // deselected steps (pure decision, unit-pinned in rescan-scope.test.ts).
+  const plan = planRun(flags);
+
+  // Forward "Run" scope: the untagged tracks this run discovers + tags. A re-scan
+  // redoes already-done work for the EXISTING population, so its forward scope is
+  // empty — each re-* pass below redoes only the tracks that already carry that
+  // artifact (enriched / embedded / analysed / tagged), never the remainder.
+  // Honour --limit on a forward run by capping how many NEW tracks we work on;
+  // ones beyond the cap wait for the next run.
   const allUntagged = db.untaggedIds();
-  const targetUntagged =
-    flags.limit === Infinity ? allUntagged : allUntagged.slice(0, flags.limit);
-  console.log(
-    `[tag] ${targetUntagged.length} untagged tracks in scope this run (of ${allUntagged.length} total untagged)`,
-  );
+  const targetUntagged = flags.rescan
+    ? []
+    : flags.limit === Infinity
+      ? allUntagged
+      : allUntagged.slice(0, flags.limit);
+  if (flags.rescan) {
+    console.log(
+      `[tag] re-scan mode: redoing selected passes for already-done tracks ` +
+        `(not forward-processing ${allUntagged.length} untagged)`,
+    );
+  } else {
+    logEvent(
+      'info',
+      `${targetUntagged.length.toLocaleString('en-GB')} new tracks to tag ` +
+        `(${allUntagged.length.toLocaleString('en-GB')} still untagged)`,
+    );
+  }
 
   // ---- Phase 0: ENRICH ---------------------------------------------------
   // Normal runs enrich only the in-scope untagged tracks. A --re-enrich pass is
@@ -290,161 +480,114 @@ async function main() {
   // library and made re-enrich a silent no-op (issue #531). The per-track
   // enrichedAt cache is bypassed inside phaseEnrich when reEnrich is set; --limit
   // still caps the count so a partial refresh is possible.
-  if (!flags.skipEnrich) {
+  if (plan.enrich) {
     const enrichIds = selectEnrichIds({
       reEnrich: flags.reEnrich,
+      rescan: flags.rescan,
       limit: flags.limit,
       liveIds,
+      // Re-scan re-enrich redoes only the already-enriched population.
+      enrichedIds: flags.rescan ? db.enrichedIds() : undefined,
       targetUntagged,
     });
     if (flags.reEnrich) {
-      console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} tracks`);
+      const scopeNote = flags.rescan ? 'already-enriched tracks' : 'tracks';
+      console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} ${scopeNote}`);
     }
     await phaseEnrich(enrichIds, flags.reEnrich);
-  } else {
+  } else if (flags.skipEnrich) {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }
+  lap('enrich');
 
-  // ---- Phase 1: EMBED ----------------------------------------------------
-  await phaseEmbed(targetUntagged, flags.batchSize);
-
-  // ---- Phase 2: SEED -----------------------------------------------------
-  // CLI --seeds wins, then settings.embedding.seedCount, then sqrt(N) auto.
-  // When --limit is set, also clamp to the in-scope size — a `--limit 10`
-  // run can never tag more than 10 untagged tracks even if seedCount=200.
-  const rawSeedCount = flags.seedCount ?? seedCountCfg ?? autoSeedCount(walked);
-  const limited = flags.limit !== Infinity;
-  const seedCount = limited
-    ? Math.min(rawSeedCount, targetUntagged.length)
-    : rawSeedCount;
-  if (limited && seedCount < rawSeedCount) {
-    console.log(
-      `[tag] seed budget clamped from ${rawSeedCount} to ${seedCount} by --limit`,
-    );
-  } else {
-    console.log(`[tag] seed budget: ${seedCount}`);
-  }
-
-  const seedSelection = await selectSeeds({
-    seedCount,
-    // Honour --limit at the seed layer too: without this, layers 2-4 of the
-    // seed selector pull starred/playlist/frequent/stratified/k-means picks
-    // from the full untagged pool, so a `--limit 10` run would still tag up
-    // to seedCount tracks from outside the window. Bulk runs (no --limit)
-    // pass undefined to keep the full library in play.
-    untaggedPool: limited ? new Set(targetUntagged) : undefined,
-    // NOTE: no embeddingForId here. library-db has no direct vector-read API
-    // (only knnById, a full vector scan per call), so passing any function —
-    // even one that always returns null — makes the seed selector run one
-    // KNN scan per candidate before falling back anyway. On a large library
-    // that's hours of wasted scans. Omitting it routes the selector straight
-    // to its random-shuffle path, until a cheap bulk vector read exists.
-  });
-  console.log(
-    `[tag] seeds: ${seedSelection.seeds.length} new ` +
-      `(layer counts: ${JSON.stringify(seedSelection.layerCounts)})`,
-  );
-
+  // ---- Phases 1-4: TAG MOODS (embed → seed → propagate → active-learn) ----
+  // Wrapped as the user-facing "Tag moods" step: --skip-tag skips all four so a
+  // run can refresh enrichment and/or acoustics without writing embeddings or
+  // moods. A re-scan suppresses these forward-discovery phases entirely
+  // (plan.forwardTag === false) and runs the scoped re-embed / re-decide passes
+  // below instead. llmCalls/llmTagged are hoisted here so finish() still reports
+  // 0 when tagging is skipped.
   let llmCalls = 0;
   let llmTagged = 0;
-  if (seedSelection.seeds.length > 0) {
-    const tagged = await llmTagInBatches(
-      seedSelection.seeds, flags.batchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
-    );
-    llmCalls += tagged.callCount;
-    llmTagged += tagged.tagged;
-    mergeByLeg(tagged.byLeg);
-    console.log(`[tag] phase-2 done: ${tagged.tagged}/${seedSelection.seeds.length} seeded`);
-  }
+  if (plan.forwardTag) {
+    // ---- Phase 1: EMBED ----------------------------------------------------
+    await phaseEmbed(targetUntagged, tagBatchSize, textMode);
+    lap('embed');
 
-  if (flags.noPropagate) {
-    console.log('[tag] --no-propagate: stopping after seed phase');
-    return finish(startedAt, llmCalls, llmTagged, byLeg);
-  }
-
-  // ---- Phase 3: PROPAGATE ------------------------------------------------
-  // Only operate on tracks that (a) are in this run's scope and (b) have an
-  // embedding. Tracks without vectors can't have neighbours; they'd just get
-  // marked uncertain and burn LLM budget in phase 4.
-  // knnK, moodVoteThreshold, confidenceThreshold all sourced from
-  // settings.embedding above.
-  let propagated = 0;
-  let uncertain: string[] = [];
-  let scanned = 0;
-
-  reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: 0, total: targetUntagged.length });
-  for (const id of targetUntagged) {
-    scanned += 1;
-    // The loop is synchronous — emit sparsely so a 30k-track scan doesn't
-    // spam stdout.
-    if (scanned % 500 === 0) {
-      reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: scanned, total: targetUntagged.length });
-    }
-    if (db.hasTags(id)) continue;        // already seeded
-    if (!db.hasVector(id)) continue;     // no embedding → can't propagate
-    const neighbours = db.knnById(id, knnK);
-    const result = vote(
-      neighbours,
-      (nId) => {
-        const t = db.getTrack(nId);
-        if (!t || t.moods.length === 0) return null;
-        return { moods: t.moods, energy: t.energy };
-      },
-      { moodVoteThreshold, k: knnK },
-    );
-    if (
-      result.votingNeighbours >= 1 &&
-      result.confidence >= confidenceThreshold &&
-      result.moods.length > 0
-    ) {
-      db.upsertTrackTags(id, {
-        moods: result.moods,
-        energy: result.energy,
-        source: 'propagated',
-        confidence: result.confidence,
-        promptHash,
-        model: modelLabel,
-      });
-      propagated += 1;
-    } else {
-      uncertain.push(id);
-    }
-  }
-  console.log(`[tag] phase-3 propagated ${propagated} tracks; ${uncertain.length} uncertain (in scope)`);
-  reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: targetUntagged.length, total: targetUntagged.length });
-
-  // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
-  for (let round = 1; round <= maxRounds; round++) {
-    if (uncertain.length === 0) break;
-    console.log(`[tag] phase-4 round ${round}: LLM-tagging ${uncertain.length} uncertain`);
-    const tagged = await llmTagInBatches(
-      uncertain,
-      flags.batchSize,
-      promptHash,
-      'uncertain-llm',
-      tagConsumers,
-      { phase: 'learn', round },
-    );
-    llmCalls += tagged.callCount;
-    llmTagged += tagged.tagged;
-    mergeByLeg(tagged.byLeg);
-
-    // Re-propagate over any tracks in scope still untagged after this LLM round.
-    let extra = 0;
-    const stillUncertain: string[] = [];
-    for (const id of targetUntagged) {
-      if (db.hasTags(id)) continue;
-      if (!db.hasVector(id)) continue;
-      const neighbours = db.knnById(id, knnK);
-      const result = vote(
-        neighbours,
-        (nId) => {
-          const t = db.getTrack(nId);
-          if (!t || t.moods.length === 0) return null;
-          return { moods: t.moods, energy: t.energy };
-        },
-        { moodVoteThreshold, k: knnK },
+    // ---- Phase 2: SEED -----------------------------------------------------
+    // CLI --seeds wins, then settings.embedding.seedCount, then sqrt(N) auto.
+    // When --limit is set, also clamp to the in-scope size — a `--limit 10`
+    // run can never tag more than 10 untagged tracks even if seedCount=200.
+    const rawSeedCount = flags.seedCount ?? seedCountCfg ?? autoSeedCount(walked);
+    const limited = flags.limit !== Infinity;
+    const seedCount = limited
+      ? Math.min(rawSeedCount, targetUntagged.length)
+      : rawSeedCount;
+    if (limited && seedCount < rawSeedCount) {
+      console.log(
+        `[tag] seed budget clamped from ${rawSeedCount} to ${seedCount} by --limit`,
       );
+    } else {
+      console.log(`[tag] seed budget: ${seedCount}`);
+    }
+
+    const seedSelection = await selectSeeds({
+      seedCount,
+      // Honour --limit at the seed layer too: without this, layers 2-4 of the
+      // seed selector pull starred/playlist/frequent/stratified/k-means picks
+      // from the full untagged pool, so a `--limit 10` run would still tag up
+      // to seedCount tracks from outside the window. Bulk runs (no --limit)
+      // pass undefined to keep the full library in play.
+      untaggedPool: limited ? new Set(targetUntagged) : undefined,
+      // NOTE: no embeddingForId here. library-db has no direct vector-read API
+      // (only knnById, a full vector scan per call), so passing any function —
+      // even one that always returns null — makes the seed selector run one
+      // KNN scan per candidate before falling back anyway. On a large library
+      // that's hours of wasted scans. Omitting it routes the selector straight
+      // to its random-shuffle path, until a cheap bulk vector read exists.
+    });
+    console.log(
+      `[tag] seeds: ${seedSelection.seeds.length} new ` +
+        `(layer counts: ${JSON.stringify(seedSelection.layerCounts)})`,
+    );
+
+    if (seedSelection.seeds.length > 0) {
+      const tagged = await llmTagInBatches(
+        seedSelection.seeds, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+      );
+      llmCalls += tagged.callCount;
+      llmTagged += tagged.tagged;
+      mergeByLeg(tagged.byLeg);
+      logEvent('success', `Mood tagging done — ${tagged.tagged}/${seedSelection.seeds.length}`);
+    }
+    lap('seed');
+
+    if (flags.noPropagate) {
+      console.log('[tag] --no-propagate: stopping after seed phase');
+      return finish(startedAt, llmCalls, llmTagged, byLeg, timings);
+    }
+
+    // ---- Phase 3: PROPAGATE ------------------------------------------------
+    // Only operate on tracks that (a) are in this run's scope and (b) have an
+    // embedding. Tracks without vectors can't have neighbours; they'd just get
+    // marked uncertain and burn LLM budget in phase 4.
+    // knnK, moodVoteThreshold, confidenceThreshold all sourced from
+    // settings.embedding above.
+    let propagated = 0;
+    let uncertain: string[] = [];
+    let scanned = 0;
+
+    reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: 0, total: targetUntagged.length });
+    for (const id of targetUntagged) {
+      scanned += 1;
+      // The loop is synchronous — emit sparsely so a 30k-track scan doesn't
+      // spam stdout.
+      if (scanned % 500 === 0) {
+        reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: scanned, total: targetUntagged.length });
+      }
+      if (db.hasTags(id)) continue;        // already seeded
+      if (!db.hasVector(id)) continue;     // no embedding → can't propagate
+      const result = voteForTrack(id);
       if (
         result.votingNeighbours >= 1 &&
         result.confidence >= confidenceThreshold &&
@@ -458,62 +601,219 @@ async function main() {
           promptHash,
           model: modelLabel,
         });
-        extra += 1;
+        propagated += 1;
       } else {
-        stillUncertain.push(id);
+        uncertain.push(id);
       }
     }
-    propagated += extra;
-    console.log(
-      `[tag] phase-4 round ${round} re-propagated ${extra}; ${stillUncertain.length} still uncertain`,
-    );
+    logEvent('info', `Spread tags to ${propagated.toLocaleString('en-GB')} similar tracks (${uncertain.length} unsure)`);
+    reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: targetUntagged.length, total: targetUntagged.length });
+    lap('propagate');
 
-    // Converged if no new propagation happened this round.
-    if (stillUncertain.length === uncertain.length) {
-      console.log('[tag] convergence — no further propagation possible');
-      break;
+    // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
+    for (let round = 1; round <= maxRounds; round++) {
+      if (uncertain.length === 0) break;
+      logEvent('info', `Round ${round}: re-checking ${uncertain.length} unsure tracks…`);
+      const tagged = await llmTagInBatches(
+        uncertain,
+        tagBatchSize,
+        promptHash,
+        'uncertain-llm',
+        tagConsumers,
+        { phase: 'learn', round },
+      );
+      llmCalls += tagged.callCount;
+      llmTagged += tagged.tagged;
+      mergeByLeg(tagged.byLeg);
+
+      // Re-propagate over any tracks in scope still untagged after this LLM round.
+      let extra = 0;
+      const stillUncertain: string[] = [];
+      for (const id of targetUntagged) {
+        if (db.hasTags(id)) continue;
+        if (!db.hasVector(id)) continue;
+        const result = voteForTrack(id);
+        if (
+          result.votingNeighbours >= 1 &&
+          result.confidence >= confidenceThreshold &&
+          result.moods.length > 0
+        ) {
+          db.upsertTrackTags(id, {
+            moods: result.moods,
+            energy: result.energy,
+            source: 'propagated',
+            confidence: result.confidence,
+            promptHash,
+            model: modelLabel,
+          });
+          extra += 1;
+        } else {
+          stillUncertain.push(id);
+        }
+      }
+      propagated += extra;
+      console.log(
+        `[tag] phase-4 round ${round} re-propagated ${extra}; ${stillUncertain.length} still uncertain`,
+      );
+
+      // Converged if no new propagation happened this round.
+      if (stillUncertain.length === uncertain.length) {
+        console.log('[tag] convergence — no further propagation possible');
+        break;
+      }
+      uncertain = stillUncertain;
     }
-    uncertain = stillUncertain;
+    lap('learn');
+
+    // ---- Self-check: held-out propagation agreement ------------------------
+    // Re-run the production vote on a sample of directly-decided tracks (KNN
+    // excludes self, so a track's own tags never vote for it) and score
+    // against the stored truth. A relative signal for judging knob changes
+    // (knnK, thresholds, vote weighting) run-over-run — NOT a benchmark; see
+    // propagation-eval.ts for the circularity caveat. ~150 KNN scans,
+    // negligible next to phases 1-4. Best-effort: never fails the run.
+    try {
+      const truth = db.trustedTaggedIds();
+      if (truth.length >= 20) {
+        const SAMPLE = 150;
+        // Partial Fisher-Yates — shuffle just the head we sample.
+        const pool = [...truth];
+        const n = Math.min(SAMPLE, pool.length);
+        for (let i = 0; i < n; i++) {
+          const j = i + Math.floor(Math.random() * (pool.length - i));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        const cases = pool.slice(0, n).map((id) => {
+          const t = db.getTrack(id)!;
+          return { actual: { moods: t.moods, energy: t.energy }, result: voteForTrack(id) };
+        });
+        logEvent('info', formatEvalSummary(summariseEval(cases, confidenceThreshold)));
+      }
+    } catch (err: any) {
+      console.log(`[tag] propagation self-check failed: ${err?.message || err}`);
+    }
+    lap('eval');
+  } else if (flags.skipTag) {
+    console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
+  } // end forward "Tag moods" step (plan.forwardTag)
+
+  // ---- Re-scan: RE-EMBED (model swap) ------------------------------------
+  // Rebuild vectors under the new embedding model. A same-dim swap rebuilds the
+  // already-embedded population (snapshotted before the drop above); a dim-change
+  // swap rebuilds every track that needs a vector (the whole library) because the
+  // old vectors were dropped at open() before they could be snapshotted. Either
+  // way the KNN graph the existing tags anchor is fully restored under the new
+  // model.
+  if (plan.reEmbed) {
+    console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
+    await phaseEmbed(reembedIds, tagBatchSize, textMode);
+    lap('embed');
+  }
+
+  // ---- Re-scan: RE-DECIDE moods ------------------------------------------
+  // Re-LLM-tag tagged rows whose prompt or model went stale (never manual). With
+  // no prompt/model change nothing is stale → clean no-op. Scoped to the existing
+  // tagged set, so it never reaches into the untagged remainder.
+  if (plan.reDecide) {
+    const stale = db.staleTaggedIds(
+      promptHash,
+      modelLabel,
+      flags.limit === Infinity ? undefined : flags.limit,
+    );
+    if (stale.length === 0) {
+      console.log('[tag] re-decide: no tagged rows are stale (prompt/model unchanged) — nothing to redo');
+    } else {
+      console.log(`[tag] re-decide: re-tagging ${stale.length} stale row(s)`);
+      const tagged = await llmTagInBatches(
+        stale, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+      );
+      llmCalls += tagged.callCount;
+      llmTagged += tagged.tagged;
+      mergeByLeg(tagged.byLeg);
+      console.log(`[tag] re-decide done: ${tagged.tagged}/${stale.length} re-tagged`);
+    }
+    lap('seed');
   }
 
   // ---- Phase 5: ANALYZE (acoustic bpm/key/intro) -------------------------
   // Independent of mood tagging — runs the same pass as `npm run analyze`.
   // No-ops cleanly when no analysis backend (tts-heavy sidecar / local
-  // librosa venv) is reachable, so it never blocks a tag run.
-  if (!flags.skipAnalyze) {
+  // librosa venv) is reachable, so it never blocks a tag run. In a re-scan it
+  // runs only when "Re-analyse" was selected (plan.analyze), and scopes to the
+  // already-analysed set (rescan flag threaded through).
+  if (plan.analyze) {
     try {
       await runAnalysisPass({
         limit: flags.limit === Infinity ? undefined : flags.limit,
         reAnalyze: flags.reAnalyze,
+        rescan: flags.rescan,
+        // Tri-state: --vocal forces the Demucs pass on, --no-vocal forces it off,
+        // neither (undefined) defers to settings.audio.vocalActivity / env.
+        vocalBackfill: flags.vocal ? true : flags.noVocal ? false : undefined,
       });
     } catch (err: any) {
-      console.error(`[tag] analysis phase failed (non-fatal): ${err?.message || err}`);
+      logEvent('warning', `Acoustic analysis phase failed (non-fatal): ${err?.message || err}`);
     }
   }
+  lap('analyze');
 
-  finish(startedAt, llmCalls, llmTagged, byLeg);
+  finish(startedAt, llmCalls, llmTagged, byLeg, timings);
 }
 
 function autoSeedCount(librarySize: number): number {
-  return Math.max(200, Math.ceil(Math.sqrt(librarySize)));
+  // MIRROR: web/components/admin/LibraryTaggingModal.tsx `seedBudget` replicates
+  // this formula for the Run-tab cost preview — keep the 200 / 2500 / 0.04
+  // constants in sync there if they change here.
+  // ~4% of the library, floored at 200 (small libraries still get a workable
+  // anchor set) and capped at 2500 (a 100k-track library shouldn't pay for 10k
+  // LLM seed tags — propagation carries the rest). Denser than the old
+  // ceil(sqrt(N)), which flatlined at 200 for everything up to ~40k tracks and
+  // left too few anchors for KNN propagation to fire before active-learning.
+  // A denser seed set is often net-cheaper: more seeds → higher propagation
+  // coverage → a smaller (expensive) active-learning residual.
+  return Math.max(200, Math.min(2500, Math.round(librarySize * 0.04)));
 }
 
-function finish(startedAt: number, llmCalls: number, llmTagged: number, byLeg: Record<string, number>) {
+function finish(
+  startedAt: number,
+  llmCalls: number,
+  llmTagged: number,
+  byLeg: Record<string, number>,
+  timings: Record<string, number> = {},
+) {
   const elapsed = (Date.now() - startedAt) / 1000;
-  console.log(
-    `\n[tag] done in ${elapsed.toFixed(0)}s. llm_calls=${llmCalls} llm_tagged=${llmTagged}`,
+  logEvent(
+    'success',
+    `Done in ${elapsed.toFixed(0)}s — ${llmTagged.toLocaleString('en-GB')} tracks tagged ` +
+      `(${llmCalls.toLocaleString('en-GB')} LLM calls)`,
   );
+  // Phase breakdown, slowest first — turns "tagging is slow" into "phase X is
+  // 90% of the time" so the operator knows what to actually tune.
+  const timed = sortedPhaseTimings(timings);
+  const breakdown = formatPhaseBreakdown(timings);
+  if (breakdown) logEvent('info', `Time per phase — ${breakdown}`);
   reportProgress({
     phase: 'done',
     label: 'Finished',
     done: llmTagged,
     llm: Object.keys(byLeg).length ? { legs: byLeg } : undefined,
+    timings: timed.length ? Object.fromEntries(timed) : undefined,
   });
   const legs = Object.entries(byLeg);
   if (legs.length > 1) {
     console.log(`[tag] per-leg: ${legs.map(([m, n]) => `${m}=${n}`).join(' · ')}`);
   }
-  console.log('[stats]', JSON.stringify(db.stats(), null, 2));
+  // Compact one-line summary — the full per-genre/per-mood breakdown was far too
+  // noisy for the run log + the admin log drawer (it buried the phase breakdown).
+  const s: any = db.stats();
+  const moods = Object.keys(s.byMood || {}).length;
+  const genres = Object.keys(s.byGenre || {}).length;
+  const src = Object.entries(s.bySource || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+  logEvent(
+    'info',
+    `Library now: ${(s.total ?? 0).toLocaleString('en-GB')} tagged · ${moods} moods · ${genres} genres · ` +
+      `${(s.withEmbedding ?? 0).toLocaleString('en-GB')} embedded${src ? ` · ${src}` : ''}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -541,28 +841,41 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     );
   }
   reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: 0, total: ids.length });
-  const artistTagCache = new Map<string, string[]>();
+  // Per-artist Last.fm dedup: memoize on the in-flight PROMISE (not the resolved
+  // value) so the concurrent pool below shares one API call across every track by
+  // the same artist. Direct Last.fm API when a key is present (returns crowd tags
+  // on vanilla Navidrome), else Navidrome's getArtistInfo2 — shared with the
+  // single-track retag route so the two can't drift (see lastfm.ts).
+  const artistTags = memoizeByKey<string[]>(artist =>
+    lastfm.getArtistTags(artist, { count: 10 }).then(t => t ?? []).catch(() => []),
+  );
+
   let enrichedTracks = 0;
   let enrichedLyrics = 0;
   let enrichedTags = 0;
 
-  for (const id of ids) {
+  // Enrichment is I/O-bound (Last.fm + Navidrome lyrics fetches), so a serial
+  // await-per-track loop spends almost all its time blocked on the network — on a
+  // large library that's the difference between minutes and an hour. Drain the id
+  // list with a bounded pool instead. DB writes go through better-sqlite3
+  // (synchronous), so they're naturally serialised on the single-threaded event
+  // loop between awaits — no locking needed. Pool size is gentle by default (6)
+  // and tunable via TAG_ENRICH_CONCURRENCY so a small Navidrome / Last.fm budget
+  // can dial it down.
+  const concurrency = Math.max(
+    1,
+    Math.min(32, parseInt(process.env.TAG_ENRICH_CONCURRENCY || '', 10) || 6),
+  );
+
+  await mapPool(ids, concurrency, async (id) => {
     const t = db.getTrack(id);
-    if (!t) continue;
-    if (!reEnrich && t.enrichedAt) continue;
+    if (!t) return;
+    if (!reEnrich && t.enrichedAt) return;
 
     let lastfmTags: string[] | null = null;
     if (lastfmEnabled && t.artist) {
-      const cacheKey = t.artist;
-      if (artistTagCache.has(cacheKey)) {
-        lastfmTags = artistTagCache.get(cacheKey) ?? null;
-      } else {
-        // Direct Last.fm API when a key is present (returns crowd tags on
-        // vanilla Navidrome), else Navidrome's getArtistInfo2. Shared with the
-        // single-track retag route so the two can't drift (see lastfm.ts).
-        lastfmTags = await lastfm.getArtistTags(t.artist, { count: 10 });
-        artistTagCache.set(cacheKey, lastfmTags ?? []);
-      }
+      const tags = await artistTags(t.artist);
+      lastfmTags = tags.length ? tags : null;
     }
 
     let lyricExcerpt: string | null = null;
@@ -575,10 +888,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       } catch { /* ignore */ }
     }
 
-    db.upsertTrackEnrichment(id, {
-      lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
-      lyricExcerpt,
-    });
+    db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
     enrichedTracks += 1;
     if (lastfmTags && lastfmTags.length) enrichedTags += 1;
     if (lyricExcerpt) enrichedLyrics += 1;
@@ -588,9 +898,12 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       );
       reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: enrichedTracks, total: ids.length });
     }
-  }
-  console.log(
-    `[tag] phase-0 done: enriched ${enrichedTracks} tracks (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
+  });
+
+  logEvent(
+    'info',
+    `Metadata fetched for ${enrichedTracks.toLocaleString('en-GB')} tracks ` +
+      `(${enrichedTags} Last.fm, ${enrichedLyrics} lyrics)`,
   );
 }
 
@@ -598,7 +911,13 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
 // Phase 1 — Embed
 // ---------------------------------------------------------------------------
 
-async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void> {
+async function phaseEmbed(
+  targetIds: string[],
+  batchSize: number,
+  // The index's task-prefix mode (resolved once in run()) — every document
+  // this phase writes must match the vectors already in the index.
+  textMode: embeddings.IndexTextMode,
+): Promise<void> {
   // Embed any track in scope that doesn't already have a vector. Includes
   // already-tagged tracks (legacy v1) so they can serve as KNN neighbours.
   const needsEmbed: string[] = [];
@@ -616,7 +935,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     console.log('[tag] phase-1 nothing to embed');
     return;
   }
-  console.log(`[tag] phase-1 embedding ${unique.length} tracks (batch=${batchSize})`);
+  logEvent('info', `Building similarity vectors for ${unique.length.toLocaleString('en-GB')} tracks…`);
   reportProgress({ phase: 'embed', label: 'Embedding tracks', done: 0, total: unique.length });
 
   const embedBatchSize = Math.max(8, Math.min(64, batchSize * 2));
@@ -631,7 +950,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     );
     let vecs: number[][];
     try {
-      vecs = await embeddings.embedTexts(texts);
+      vecs = await embeddings.embedDocTexts(texts, textMode);
     } catch (err: any) {
       console.error(`[tag] embedding batch failed at offset ${i}: ${err.message}`);
       throw err;
@@ -711,9 +1030,25 @@ async function processBatch(
     // 429s) against a leg that won't answer. The surviving consumer redoes the
     // requeued batch.
     if (consumer.pin && (isUnreachable(err) || isQuotaOrAuthError(err))) throw err;
-    console.error(
-      `[tag] LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
-    );
+    // A "batch length mismatch" is NOT a failure. Some models (e.g. Mercury, and
+    // small local models) don't return one structured-output entry per input
+    // track, so we tag each track individually this batch — same seed set, same
+    // cost envelope (only the seeds ever hit the LLM), just slower. Log it as an
+    // expected degrade, not an error, so it doesn't read as something broken.
+    // Genuine batch errors keep the error-level line with their message.
+    const perTrackDegrade = /batch length mismatch/i.test(err.message || '');
+    if (perTrackDegrade) {
+      logEvent(
+        'warning',
+        `${consumer.label} didn't return one entry per track — tagging ` +
+          `${songs.length} tracks individually this batch (expected for some models; just slower)`,
+      );
+    } else {
+      logEvent(
+        'error',
+        `LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
+      );
+    }
     results = [];
     for (const song of input) {
       try {
@@ -762,7 +1097,7 @@ async function runConsumer(
   total: number,
   state: TagState,
   phaseInfo: TagPhaseInfo,
-  onDrop: (() => number) | null,
+  onDrop: ((err: any) => number) | null,
 ): Promise<void> {
   for (;;) {
     const batch = batches.shift();
@@ -771,12 +1106,18 @@ async function runConsumer(
       const n = await processBatch(batch, consumer, promptHash, source, state);
       state.tagged += n;
       state.byLeg[consumer.label] = (state.byLeg[consumer.label] || 0) + n;
-    } catch {
-      // processBatch only throws on a pinned-leg host outage.
+    } catch (err: any) {
+      // processBatch rethrows only when a pinned leg can't recover this run:
+      // the host is down (isUnreachable) OR the provider refused the leg with a
+      // quota / credit / usage-limit / auth error (isQuotaOrAuthError, #438).
+      // Name the real reason — logging every drop as "unreachable" misdirected an
+      // operator whose OpenRouter credits had simply run out (Discord).
       batches.unshift(batch);
-      const remaining = onDrop ? onDrop() : 0;
-      console.log(
-        `[tag] LLM leg ${consumer.label} unreachable — dropping it (${remaining} leg(s) left)`,
+      const remaining = onDrop ? onDrop(err) : 0;
+      const reason = isQuotaOrAuthError(err) ? 'quota/credit/auth rejected' : 'host unreachable';
+      logEvent(
+        'error',
+        `LLM leg ${consumer.label} dropped — ${reason}: ${errReason(err)} (${remaining} leg(s) left)`,
       );
       return;
     }
@@ -824,13 +1165,20 @@ async function llmTagInBatches(
     await runConsumer(batches, consumers[0], promptHash, source, ids.length, state, phaseInfo, null);
   } else {
     let alive = consumers.length;
+    let quotaOrAuthDrop = false;
     await Promise.all(
       consumers.map(c =>
-        runConsumer(batches, c, promptHash, source, ids.length, state, phaseInfo, () => --alive)),
+        runConsumer(batches, c, promptHash, source, ids.length, state, phaseInfo, (err: any) => {
+          if (isQuotaOrAuthError(err)) quotaOrAuthDrop = true;
+          return --alive;
+        })),
     );
     if (batches.length > 0) {
       const abandoned = batches.reduce((n, b) => n + b.length, 0);
-      console.log(`[tag] all LLM legs unreachable — ${abandoned} tracks left for next run`);
+      const hint = quotaOrAuthDrop
+        ? ' — a leg was refused for quota/credit/auth; check the provider credit balance, spend cap, or API key'
+        : '';
+      logEvent('warning', `All LLM legs dropped — ${abandoned} tracks left for next run${hint}`);
     }
   }
   return { tagged: state.tagged, callCount: state.callCount, byLeg: state.byLeg };
@@ -849,20 +1197,24 @@ async function resolveTagConsumers(): Promise<TagConsumer[]> {
     (primary.cfg.ollamaUrl || '') === (fb.cfg.ollamaUrl || '') &&
     (primary.cfg.baseUrl || '') === (fb.cfg.baseUrl || '');
   if (fb.label === primary.label && sameHost) {
-    console.log('[tag] fallback LLM identical to primary — single-LLM mode');
+    logEvent('info', 'Fallback LLM identical to primary — single-LLM mode');
     return [{ label: primary.label }];
   }
 
   if (!(await probeLegReachable(fb))) {
-    console.log(`[tag] fallback LLM (${fb.label}) unreachable — single-LLM mode`);
+    logEvent('info', `Fallback LLM (${fb.label}) unreachable — single-LLM mode`);
     return [{ label: primary.label }];
   }
 
-  console.log(`[tag] dual-LLM mode active: primary=${primary.label} + fallback=${fb.label}`);
+  logEvent('info', `Dual-LLM mode active: primary=${primary.label} + fallback=${fb.label}`);
   return [
     { pin: 'primary', label: primary.label },
     { pin: 'fallback', label: fb.label },
   ];
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+// Explicitly exit on success. The local analyze backend (analyzer.ts) is a
+// persistent stdio child that keeps the event loop alive, so returning from
+// main() naturally would hang the CLI indefinitely after a *completed* run.
+// Mirrors the --reconcile-only path's process.exit(0).
+main().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });

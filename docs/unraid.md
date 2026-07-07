@@ -44,7 +44,18 @@ same images as the Compose stack, just packaged together.
 
 > ⚠️ **Keep Appdata on the array/pool, not the flash drive.** SUB/WAVE's state
 > grows — hourly archives, the library cache, rendered voices — so point it at
-> `/mnt/user/appdata/subwave`, never `/boot/...`.
+> your appdata share, never `/boot/...`.
+
+> ⚠️ **If your appdata share lives on a pool (cache), use the direct pool path**
+> — e.g. `/mnt/cache/appdata/subwave` instead of `/mnt/user/appdata/subwave`.
+> The library cache is a SQLite database in WAL mode, and `/mnt/user` paths go
+> through Unraid's shfs/FUSE layer even for cache-only shares. SQLite
+> [documents](https://www.sqlite.org/wal.html) that WAL doesn't work properly
+> over FUSE-style filesystems — in practice it means sluggish admin pages and
+> a WAL file that balloons to hundreds of MB (issue #786). Same rule the
+> Sonarr/Radarr projects apply to their databases. Already installed on
+> `/mnt/user`? Stop the container, edit the path mapping to the `/mnt/cache/...`
+> equivalent (same data, FUSE bypassed), and start it again.
 
 Fronting this with your own NPM / SWAG / Traefik for TLS + a hostname? See
 [Putting it behind your own reverse
@@ -149,35 +160,63 @@ where the ollama container publishes `11434`. (The one-click template adds the
 
 ---
 
-## Acoustic analysis & expressive voices: the tts-heavy sidecar
+## Acoustic analysis (default-on) & expressive voices (opt-in)
 
-The optional **`tts-heavy`** container powers two things: the expressive
-Chatterbox / PocketTTS voices, and **acoustic analysis** — the tempo, key,
-loudness, and "sounds-like" fingerprints behind the Library Observatory. It's
-**off by default** and profile-gated, so a normal start (or an Unraid reboot)
-leaves it down. If the **acoustic engine reads "off"** in admin → Library, this
-is why.
+Two heavier capabilities, now packaged separately:
 
-On Unraid you can't pass `--profile tts-heavy` to the `up` Compose Manager runs
-for you, so activate the profile from the **.env** instead:
+**Acoustic analysis** — tempo, key, and loudness — runs in the **`analyzer`**
+container, which **starts by default** (a lean, multi-arch image, so it also
+runs on arm64 Unraid boxes). On the split stack it comes up with the rest of the
+services; on the **all-in-one** image it's baked in-process. Nothing to enable —
+just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
+engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
+stack) or check its logs.
+
+**"Sounds-like" + vocal ranges (the heavy dimensions)** need a CPU-torch stack
+that isn't in the lean image (the `-heavy` images are ~1.9 GB):
+
+- **Split stack (Compose Manager).** Add `ANALYZER_HEAVY=1` to your **.env**,
+  **Save**, then **Pull & Up** — the `analyzer` container re-pulls as
+  `subwave-analyzer-heavy`.
+- **All-in-one (one-click from Community Applications).** The heavy/lean split
+  is baked into the image, so you switch by pointing the container at the heavy
+  tag — **`ANALYZER_HEAVY` does nothing here** (it's the split-stack toggle):
+  1. **Docker** tab → click the **subwave** container → **Edit** (turn on
+     *Advanced View*, top-right).
+  2. Change the **Repository** field from
+     `ghcr.io/perminder-klair/subwave-aio:latest` to
+     `ghcr.io/perminder-klair/subwave-aio-heavy:latest`.
+  3. **Apply** — Unraid re-pulls and recreates the container.
+
+  Your state is untouched (it all lives under the appdata volume, including the
+  `hf-cache` where the CLAP/Demucs weights land), so config, personas, and
+  library tags survive the swap. First boot on heavy downloads the model weights
+  into that cache, so give it a few minutes. To go back, edit the Repository
+  field back to `subwave-aio` and **Apply**.
+
+Both heavy images are **amd64-only** (~1.9 GB); on an arm64 box you'd also need
+`DOCKER_DEFAULT_PLATFORM=linux/amd64` (emulated).
+
+> Verify with `docker ps --filter name=sub-wave-analyzer`. Full details, the
+> `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` runtime flags, and
+> troubleshooting are in [`tts-heavy.md`](tts-heavy.md).
+
+**Expressive voices** — Chatterbox / PocketTTS — stay opt-in in the separate
+**`tts-heavy`** sidecar. On Unraid you can't pass `--profile tts-heavy` to the
+`up` Compose Manager runs for you, so activate the profile from the **.env**:
 
 ```ini
 COMPOSE_PROFILES=tts-heavy
 ```
 
-**Save**, then **Pull & Up** the stack. `COMPOSE_PROFILES` is read by Docker
-Compose directly, so the sidecar starts with no CLI flag — and survives reboots
+**Save**, then **Pull & Up**. `COMPOSE_PROFILES` is read by Docker Compose
+directly, so the voices sidecar starts with no CLI flag — and survives reboots
 as long as it stays in `.env`. The controller is already wired to it
-(`TTS_HEAVY_URL`), so nothing else is needed. First pull adds ~1–2 GB.
+(`TTS_HEAVY_URL`); nothing else is needed. First pull adds ~5–6 GB.
 
-Verify with `docker ps --filter name=tts-heavy`, then run **admin → Library →
-Rescan** (tick *re-analyse*) to populate acoustic data. Full details, the
-opt-in `ANALYZE_AUDIO_EMBEDDING` flag, and troubleshooting are in
-[`tts-heavy.md`](tts-heavy.md).
-
-> The sidecar wants real CPU (or a GPU). Analysis on a low-power Unraid box
-> works but is slow — it's a one-time per-track pass cached in `library.db`, so
-> let it churn in the background.
+> The analyzer (and `tts-heavy`) want real CPU (or a GPU). Analysis on a
+> low-power Unraid box works but is slow — a one-time per-track pass cached in
+> `library.db`, so let it churn in the background.
 
 ---
 

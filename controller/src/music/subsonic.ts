@@ -3,6 +3,7 @@
 
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
 
 function buildAuth() {
@@ -89,7 +90,20 @@ async function call(endpoint, params = {}) {
   const started = Date.now();
   try {
     const url = buildUrl(endpoint, params);
-    const res = await fetch(url);
+    // Bounded fetch: a hung Navidrome must fail fast, not pin the request
+    // (and every admin route queued behind it) forever (#786). The abort
+    // rejects with a TimeoutError, translated into a readable message.
+    let res;
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
+    } catch (err) {
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        throw new Error(
+          `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
+        );
+      }
+      throw err;
+    }
     if (!res.ok) {
       // Capture the first 200 chars of the body so outage triage gets the
       // actual server message (Cloudflare 522, Navidrome 5xx detail, etc.)
@@ -570,7 +584,7 @@ export function getPlayableUri(song) {
 function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -583,9 +597,14 @@ export function getAnnotatedUri(song) {
   // (seconds) on the track when the persona is in DJ mode and both tracks are
   // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
   // blend for this transition (radio.liq dj_transition reads the same key for
-  // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
-  // crossfade_duration(), i.e. today's behaviour.
-  if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
+  // its fades, keeping fade == buffer). Liquidsoap 2.4 runs cross with
+  // persist_override=true (the only mode where a stamp sizes its own
+  // transition — see radio.liq), which makes a stamp LINGER until the next
+  // one arrives; every annotated track therefore carries an explicit value,
+  // falling back to the operator's configured crossfade, so a washout's 12s
+  // canvas can never outlive its own transition.
+  const crossSec = song.crossSec ?? settings.get()?.crossfadeDuration ?? null;
+  if (crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(crossSec)}"`);
   // Loudness normalisation: the queue stashes a per-track gain offset (dB,
   // clamped) toward the loudness target when the track has a measured LUFS.
   // Emitted in the "<n> dB" form Liquidsoap's amplify override parses natively
@@ -594,6 +613,51 @@ export function getAnnotatedUri(song) {
   // tracks play at even perceived volume — masters untouched, no bus
   // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
+  // DJ filter sweep: the DJ agent may flag a pick (transition:'sweep') for a
+  // gear-change; the queue validates and stamps `sweep` on the track.
+  // radio.liq's dj_transition reads `liq_sweep` on the INCOMING track and
+  // closes a lowpass over the OUTGOING branch across the blend — the track
+  // being left sinks away while this pick rises clean. Absent → normal cross.
+  if (song.sweep) fields.push('liq_sweep="true"');
+  // DJ dissolve (reverb wash): like the sweep it rides the INCOMING pick —
+  // radio.liq reads `liq_dissolve` off `b` and washes the OUTGOING branch
+  // into diffuse ambience under it.
+  if (song.dissolve) fields.push('liq_dissolve="true"');
+  // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
+  // into an echo tail as that track ENDS; the queue validates and stamps
+  // `washout` (+ the tempo-synced comb tap below, and a long bar-snapped
+  // liq_cross_duration — this track's own stamp governs its own end, see
+  // mix.washoutCrossSecondsFor). radio.liq's dj_transition reads both off the
+  // OUTGOING track's metadata. Absent → normal cross.
+  if (song.washout) fields.push('liq_washout="true"');
+  if (song.washoutDelay != null) fields.push(`liq_washout_delay="${escAnnotate(song.washoutDelay)}"`);
+  // DJ exit loop: rides the ENDING track like the washout — its last bar is
+  // caught in a comb-cascade loop as the dry is hard-cut, repeating in
+  // tempo under whatever follows. liq_loop_bar is one bar of THIS track's
+  // own tempo (mix.loopBarFor); the canvas rides liq_cross_duration exactly
+  // like the washout's. radio.liq reads both off the OUTGOING track.
+  if (song.loop) fields.push('liq_loop="true"');
+  if (song.loopBar != null) fields.push(`liq_loop_bar="${escAnnotate(song.loopBar)}"`);
+  // DJ blend (spectral handover): validated same-lane picks trade the spectrum
+  // with their predecessor across the cross — dj_transition reads liq_blend on
+  // the INCOMING track, like the sweep.
+  if (song.blend) fields.push('liq_blend="true"');
+  // DJ chop (crossfader cut): rides the INCOMING pick like the sweep —
+  // radio.liq reads `liq_chop` off `b` and gates the OUTGOING branch on the
+  // beat. The gate period is one beat of the OUTGOING track (the queue stamps
+  // it here because the predecessor's own annotation is already sent).
+  if (song.chop) fields.push('liq_chop="true"');
+  if (song.chopPeriod != null) fields.push(`liq_chop_period="${escAnnotate(song.chopPeriod)}"`);
+  // Hard track-length cap (issue #447 / max-track-length). When the caller passes
+  // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
+  // at that second offset — a real ceiling that fires no matter how the track
+  // reached the stream, not just a selection bias. Only the capped paths set it
+  // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
+  // explicit listener requests pass null and play in full. A cue_out past a
+  // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
+  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
+    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
+  }
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }
 

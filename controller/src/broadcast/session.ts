@@ -15,15 +15,23 @@
 //   - The live session is persisted to state/session.json; archived sessions
 //     land in state/sessions/<id>.json on roll.
 
-import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
-const WINDOW_TURNS = 40;                    // turns fed to the agent (full log is kept)
+const WINDOW_TURNS = 40;                    // turns fed to the agent
+// Hard bound on the messages array. A normal 4h session generates a few
+// hundred turns, so this never trims in practice — it exists because persist()
+// rewrites the whole array on every turn (1s debounce), and an unbounded array
+// makes that O(n²) over the session (and lets a pathological session grow
+// session.json without limit). Far above WINDOW_TURNS and everything
+// buildHandoff reads, so trimming is invisible to the agent.
+const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
 const PERSIST_DEBOUNCE_MS = 1000;
 
@@ -95,7 +103,9 @@ function buildHandoff(prev: any) {
 async function persist() {
   if (!_session) return;
   try {
-    await writeFile(config.session.currentFile, JSON.stringify(_session, null, 2));
+    // Atomic replace — /debug and boot recovery read this file, and a crash
+    // mid-write should leave the previous snapshot, not a truncated one.
+    await writeFileAtomic(config.session.currentFile, JSON.stringify(_session, null, 2));
   } catch {}
 }
 
@@ -108,7 +118,7 @@ async function archive(s: any) {
   if (!s?.id) return;
   try {
     await mkdir(config.session.dir, { recursive: true });
-    await writeFile(`${config.session.dir}/${s.id}.json`, JSON.stringify(s, null, 2));
+    await writeFileAtomic(`${config.session.dir}/${s.id}.json`, JSON.stringify(s, null, 2));
   } catch {}
 }
 
@@ -122,6 +132,9 @@ export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind
   if (!_session) return null;
   const turn = { t: new Date().toISOString(), role, kind, text: text || '', meta };
   _session.messages.push(turn);
+  if (_session.messages.length > MAX_TURNS) {
+    _session.messages.splice(0, _session.messages.length - MAX_TURNS);
+  }
   schedulePersist();
   return turn;
 }
@@ -141,10 +154,19 @@ export function start(ctx: any, handoff: any = null): any {
     persona: persona ? { id: persona.id, name: persona.name } : null,
     scenario: scenarioOf(ctx),
     handoff: handoff || null,
+    // Programme episode state (plan + which beats aired) — attached lazily by
+    // broadcast/programme.ts when the session belongs to a programme show.
+    // Lives on the persisted session so a restart mid-episode can't re-plan or
+    // double-air a beat, and dies with the session at the show boundary.
+    programme: null,
     messages: [],
   };
+  // appendTurn above already scheduled a debounced persist. No immediate
+  // write here: maybeRoll's hard-roll path stamps rolledFrom right after
+  // start() returns and awaits its own persist() — an unawaited write started
+  // now could land AFTER that stamped write and leave a stale (handoff-less)
+  // session.json on disk until the next debounce.
   appendTurn({ role: 'event', kind: 'scenario', text: scenarioText(_session) });
-  persist();
   // Milestone on the unified timeline — marks where one DJ run ends and the
   // next begins, so traces can be grouped by the session they belong to.
   logEvent('session.start', {
@@ -182,7 +204,72 @@ export async function maybeRoll(ctx: any): Promise<any> {
 
   const prev = _session;
   await end();
-  return start(ctx, buildHandoff(prev));
+  const next = start(ctx, buildHandoff(prev));
+  stampRolledFrom(next, prev);
+  await persist();
+  return next;
+}
+
+// After a hard roll, record whether the on-air PERSONA changed so a caller can
+// air a two-voice mic-pass (broadcast/dj-agent.runPersonaHandoff): the outgoing
+// DJ signs off in their own voice, the incoming DJ acknowledges in theirs. Same
+// persona across a show boundary (e.g. a host's show ends but they stay on as
+// the active persona) → no on-air handoff; the existing text handoff already
+// covers continuity. The flag lives on the PERSISTED session, so a controller
+// restart between roll and airing can't double-fire, and either maybeRoll call
+// site (hourly cron at :00 or the first track-start after the boundary) can
+// trigger it. Session.ts stays free of queue/TTS imports (no cycle): callers
+// read pendingHandoff() and drive the runner.
+function stampRolledFrom(next: any, prev: any) {
+  const prevId = prev?.persona?.id ?? null;
+  const nextId = next?.persona?.id ?? null;
+  next.handoffAired = false;
+  next.rolledFrom = (prevId && nextId && prevId !== nextId)
+    ? {
+        personaId: prevId,
+        personaName: prev?.persona?.name ?? null,
+        showName: prev?.show?.name ?? null,   // show that just ended, or null for an auto block
+      }
+    : null;
+}
+
+// The pending on-air handoff for the live session (outgoing persona metadata),
+// or null when there's nothing to air (no persona change, or already aired).
+export function pendingHandoff(): { personaId: string; personaName: string | null; showName: string | null } | null {
+  if (!_session?.rolledFrom || _session.handoffAired) return null;
+  return _session.rolledFrom;
+}
+
+// Mark the handoff aired so it fires at most once. Called up front by the runner
+// (before generating/airing) so a mid-way failure can't retry into the middle
+// of the new show — the existing text handoff is the floor.
+export function markHandoffAired() {
+  if (!_session) return;
+  _session.handoffAired = true;
+  schedulePersist();
+}
+
+// --- Programme episode state (broadcast/programme.ts) -----------------------
+// Same persistence contract as handoffAired: state rides the session file so a
+// controller restart mid-episode resumes the plan and never double-airs a beat.
+
+export function getProgramme(): any {
+  return _session?.programme || null;
+}
+
+export function attachProgramme(programme: any) {
+  if (!_session) return;
+  _session.programme = programme;
+  schedulePersist();
+}
+
+// Flip one beat flag (e.g. 'intro', 'outro', 'feature:0'). Called BEFORE the
+// beat generates/airs — the markHandoffAired idempotency pattern.
+export function markProgrammeBeat(beat: string) {
+  if (!_session?.programme) return;
+  _session.programme.beats = _session.programme.beats || {};
+  _session.programme.beats[beat] = true;
+  schedulePersist();
 }
 
 // Soft continuation across an autonomous daypart/mood turnover: same session id,
@@ -220,9 +307,9 @@ function softShift(ctx: any, nextKey: string): any {
 //
 // - `kind: 'play'` track turns ("▶ Title — Artist") — redundant. Every pick
 //   event already contains the current AND previous track ("Now playing X.
-//   Pick the next track (after Y)..."), and the picker can't choose recent
-//   artists anyway because they're filtered at the tool layer (recentArtists
-//   in buildPickerTools).
+//   Pick the next track (after Y)..."), and recently-played TRACKS are filtered
+//   at the tool layer (recentIds/recentKeys in buildPickerTools) so they can't
+//   be re-picked regardless.
 //
 // - `kind: 'sfx'` cue turns (queue.playSfx records the effect NAME as a turn) —
 //   an audio-production cue, not conversation. Left in, a bare effect name like
@@ -241,9 +328,9 @@ function softShift(ctx: any, nextKey: string): any {
 // thread continues, …"); left unbounded, ~15-20 accumulate in the window and the
 // agent reads its own running commentary as a mandate to keep the thread going
 // (one artist re-airing every ~1.2h). Keeping the last few preserves short-term
-// "what did I just play" memory without the momentum. Artist-recency is enforced
-// at the tool layer regardless (recentArtists in buildPickerTools), so trimming
-// these costs the picker no anti-repeat coverage.
+// "what did I just play" memory without the momentum. Track-recency is enforced
+// at the tool layer regardless (recentIds/recentKeys in buildPickerTools), so
+// trimming these costs the picker no track-level anti-repeat coverage.
 export function windowMessages() {
   if (!_session) return [];
   const raw: any[] = [];
@@ -277,9 +364,23 @@ export function windowMessages() {
     // the same assistant block as real spoken segments, leaving the picker unable
     // to tell its own scratchpad from its broadcast voice. Mark it so the role of
     // each line stays unambiguous even after coalescing.
+    //
+    // Same identity guard for a turn VOICED BY A DIFFERENT PERSONA: the handoff
+    // sign-off is spoken by the outgoing DJ but stored in the new session
+    // (dj-agent.runPersonaHandoff tags it with the speaker's id + name), and a
+    // guest co-host's segments land the same way (the speaker rotation stamps
+    // every rotated announce with the speaker's id). Untagged they would read
+    // as the session persona's own words — name the real speaker instead.
+    const foreignSpeaker = (m.role === 'segment'
+      && m.meta?.personaId
+      && m.meta.personaId !== _session.persona?.id)
+      ? (m.meta.personaName || 'another host')
+      : null;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${m.text}`
-      : m.text;
+      : foreignSpeaker
+        ? `(${foreignSpeaker} said this on air — their words, not yours) ${m.text}`
+        : m.text;
     raw.push({ role, content });
   }
   const out: any[] = [];

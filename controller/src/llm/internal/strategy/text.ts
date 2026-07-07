@@ -9,12 +9,14 @@ import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, usageOf, failureDiagnostics } from '../core/pure.js';
 import { providerOptions, repeatPenaltyApplies, samplingWithNumCtx } from '../provider/capabilities.js';
+import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Hard output-token cap. A reasoning model with no cap can generate until it
 // fills the whole context window — one runaway <think> ramble then ties up the
 // inference slot for minutes. Generous backstop for normal output (idents are
 // ~150 tokens); raise it if you turn `llm.reasoning` on and need room for the
-// chain-of-thought.
+// chain-of-thought. The operator can override via settings.llm.maxOutputTokens
+// (issue #712); 0 there keeps this default.
 const MAX_TOKENS_TEXT = 4000;
 
 export async function djText({
@@ -24,8 +26,14 @@ export async function djText({
   topP = 0.95,
   repeatPenalty = 1.15,
   seed = null,
-  maxOutputTokens = MAX_TOKENS_TEXT,
+  maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_TEXT),
   kind = 'sdk.djText',
+  // Optional caller-supplied abort signal. No live caller wraps djText in
+  // withDeadline today, so this is inert unless one starts to — kept in the
+  // shape as a precaution so a future deadline-wrapped call can cut the
+  // Retry-After sleep short and prevent a ghost retry after the abort (mirrors
+  // djAgent's threading, PR #751 review).
+  signal = undefined,
 }: any): Promise<string> {
   return withFailover(
     kind,
@@ -40,7 +48,8 @@ export async function djText({
         ...(seed != null ? { seed } : {}),
         maxOutputTokens,
         providerOptions: providerOptions(leg.cfg, { repeatPenalty }),
-      }));
+        ...(signal ? { abortSignal: signal } : {}),
+      }), signal);
       const out = stripThinking(result.text);
       // Only record sampling knobs that actually reached the model — see
       // repeatPenaltyApplies() and providerOptions handling.

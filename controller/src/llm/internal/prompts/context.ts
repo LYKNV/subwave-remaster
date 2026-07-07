@@ -17,21 +17,36 @@ export const ANGLES = {
     'Lean into contrast: how this track sits against the time of day or the mood of the moment.',
     'Just say one true sentence and let the music start.',
   ],
+  // Links are FORWARD-LOOKING — they introduce the track now starting and never
+  // back-announce the previous one (it may not be what actually aired just
+  // before this; see generateLink + dj-agent linkClause). So every angle here is
+  // about the track coming on or the moment, never "that was…". Keep them varied
+  // so the opener doesn't settle into one shape ("here's…", "coming up…").
   link: [
-    'Comment on a contrast or similarity between the two tracks (era, mood, instrumentation, tempo).',
-    'Tie the next track to the time of day or the season — specifically, not generically.',
-    'Mention something small and tactile about right now (the dark, the smell of coffee, the day of the week).',
-    'Reference the previous artist or song obliquely — one detail, no full back-announce.',
-    'Skip the back-announce entirely and just open a small thought about what is next.',
-    'Acknowledge a listener-shaped moment (commute, late shift, weekend, midweek lull) without naming any listener.',
-    'Make one quiet observation that has nothing to do with either track and let the next song answer it.',
+    'Open mid-thought, as if you never stopped talking — skip "here\'s" / "this is" / "coming up" entirely.',
+    // No "the hour" here: a link is written one track before it airs, so a
+    // clock reference is stale on air (issue #864) — the air-time clock, when
+    // known, reaches the model through the event/prompt clause instead. No
+    // "the weather" either: it isn't in the link context (issue #471), so the
+    // model would only invent it.
+    'Lead with one specific image from right now — the light, the day, the season — and let the track answer it.',
+    'Drop one detail about the track now starting (its era, its scene, how its first seconds feel), woven into a sentence, not announced like a title card.',
+    'Make one small, true observation that has nothing to do with music, then let the song pick it up.',
+    'Name the artist only in passing, folded into a thought — never "this is X by Y".',
+    'Pose a tiny question or thought and let the track be the answer.',
+    'Acknowledge a listener-shaped moment (commute, late shift, weekend, midweek lull) without naming anyone, then ease in.',
+    'Say one honest sentence about how this track lands right now, and get out of the way.',
+    'React to the shift in the room as it comes on — how it lifts, settles, darkens, or opens things up.',
   ],
   station_id: [
     'Plain ident — say the station name and the DJ name, nothing else.',
     'Anchor the ident to the current moment (a Tuesday afternoon, a quiet evening, the slow part of Sunday).',
     'Make it a near-aside: like someone reminding themselves where they are.',
     'Open with the time of day, then drop the station name in the middle of the sentence.',
-    'A single observation about broadcasting from a homelab, with the station name woven in.',
+    'One small observation about the station itself — its scale, its late hours, its one-room intimacy — with the name woven in.',
+    'Address the listener directly for once — wherever they are, whatever they\'re doing, they found the right place.',
+    'Say it like a signature at the bottom of a letter — brief, warm, done.',
+    'Fold the ident into a quiet promise of what the next stretch holds — more of this, whatever this is.',
   ],
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
@@ -39,13 +54,27 @@ export const ANGLES = {
     'Open with where in the day we are (mid-afternoon lull, evening getting started, etc.) before the actual time.',
     'Just one short sentence that happens to mention the time.',
     'Acknowledge what kind of listener might be tuning in at this exact hour, without naming them.',
+    'Note what this hour usually means — the kettle hour, the last-push hour, the winding-down hour — then land the time inside it.',
+    'Mark the hour as a small milestone in the day: one down, or one to go, or the halfway point.',
+    'Mention the time as if answering someone who just asked — offhand, unbothered.',
+    'Let the hour prompt a tiny aside about how fast or slow the day is moving, time folded in.',
+    'Tie the hour to the light outside — what the sky is probably doing right now — and slip the time in after.',
   ],
 };
+
+// Uniform random, but never the same angle twice running for a kind — on an
+// aggressive station (3 idents/hour) a ~20% consecutive-repeat chance made the
+// segment shape audibly settle. The opener blocklist only guards first words;
+// this guards the whole framing.
+const lastAngleIdx = new Map<string, number>();
 
 export function pickAngle(kind: string) {
   const list = (ANGLES as any)[kind];
   if (!list || list.length === 0) return null;
-  return list[Math.floor(Math.random() * list.length)];
+  let idx = Math.floor(Math.random() * list.length);
+  if (list.length > 1 && idx === lastAngleIdx.get(kind)) idx = (idx + 1) % list.length;
+  lastAngleIdx.set(kind, idx);
+  return list[idx];
 }
 
 export function randomSeed() {
@@ -90,19 +119,44 @@ export function buildContextLines(
   }
   if (on('clock') && context?.clock) {
     const tags: string[] = [];
+    if (context.clock.isDark) tags.push('after dark');
     if (context.clock.isWeekend) tags.push('weekend');
     if (context.clock.isLateNight) tags.push('late night');
-    if (context.clock.isCommute) tags.push('commute hour');
+    // No 'commute hour' tag: stapling it to every spoken segment (alongside the
+    // drive-time period label) made the DJ read as a traffic-report station for
+    // two hours a day. isCommute still gates commute-window skills and the
+    // energy pacing in code (context.ts) — it just isn't prompt fodder anymore.
     lines.push(`Local time: ${context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
   }
-  if (on('time') && context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
+  if (on('time') && context?.time) {
+    // A show's pinned mood overrides the autonomous mood chain (context.ts),
+    // but the daypart vibe ("wind down") was still riding into every script
+    // prompt and pulling the talk against the show's brief — a high-energy
+    // evening show kept mellowing out. With a mood pinned, keep the period
+    // label (the clock is real) and stand the vibe down; the show line below
+    // carries the tone instead.
+    lines.push(context?.activeShow?.mood
+      ? `Period: ${context.time.period}`
+      : `Period: ${context.time.period} (${context.time.vibe})`);
+  }
   if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
     lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
   }
-  if (on('festival') && context?.festival) lines.push(`Festival: ${context.festival.name}`);
+  if (on('festival') && context?.festival) {
+    const note = context.festival.description ? ` — ${context.festival.description}` : '';
+    lines.push(`Festival: ${context.festival.name}${note}`);
+  }
   if (on('show') && context?.activeShow) {
     const topic = context.activeShow.topic ? ` — ${context.activeShow.topic}` : '';
-    lines.push(`On now: the show "${context.activeShow.name}"${topic}. Stay loosely on its theme.`);
+    // A programme episode's angle (set by the producer plan, riding on
+    // getFullContext) keeps mid-show links and segments on today's line, not
+    // just the standing brief.
+    const angle = context.activeShow.episodeAngle ? ` Today's episode angle: ${context.activeShow.episodeAngle}.` : '';
+    // The pinned mood already steers the pick pool via dominantMood, but the
+    // talk prompts never saw it — say it here so the delivery follows the
+    // show's brief, not the hour's default.
+    const mood = context.activeShow.mood ? ` Its mood is ${context.activeShow.mood} — let that set the tone, not the time of day.` : '';
+    lines.push(`On now: the show "${context.activeShow.name}"${topic}.${angle}${mood} Stay loosely on its theme.`);
   }
   if (on('listeners') && context?.listeners?.count != null) {
     const n = context.listeners.count;

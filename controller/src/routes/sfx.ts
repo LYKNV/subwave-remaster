@@ -26,6 +26,11 @@ router.post('/sfx', requireAdmin, async (req, res) => {
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (!prompt) return res.status(400).json({ error: 'prompt is required' });
   if (prompt.length > 500) return res.status(400).json({ error: 'prompt too long (max 500)' });
+  if (durationSec != null && durationSec !== '') {
+    const d = Number(durationSec);
+    if (!Number.isFinite(d) || d <= 0) return res.status(400).json({ error: 'durationSec must be a positive number' });
+    if (d > sfx.MAX_DURATION_SEC) return res.status(400).json({ error: `durationSec is capped at ${sfx.MAX_DURATION_SEC}s` });
+  }
   try {
     const created = await sfx.create({ name, description, prompt, durationSec });
     queue.log('scheduler', `New sound effect created: "${created.name}"`);
@@ -72,6 +77,22 @@ router.get('/sfx/:name/audio', requireAdmin, async (req, res) => {
     const filePath = await sfx.getPath(req.params.name);
     if (!filePath) return res.status(404).json({ error: 'unknown sound effect' });
     res.type(audioContentType(filePath)).sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fire an effect on-air now — the automation-facing trigger (MCP, webhooks,
+// an external alerting agent). Manual trigger, so it ignores the
+// settings.sfx.enabled autonomy toggle like every explicit operator press.
+router.post('/sfx/:name/play', requireAdmin, async (req, res) => {
+  try {
+    if (!(await sfx.getPath(req.params.name))) {
+      const names = (await sfx.list()).map(e => e.name).join(', ');
+      return res.status(404).json({ error: `unknown sound effect: ${req.params.name}${names ? `. Available: ${names}` : ''}` });
+    }
+    await queue.playSfx(req.params.name);
+    res.json({ ok: true, name: req.params.name });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

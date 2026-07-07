@@ -18,7 +18,10 @@ import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, failureDiagnostics } from '../core/pure.js';
 import { needsToolCallObject, providerOptions, samplingWithNumCtx } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
+import { resolveMaxOutputTokens } from '../../../settings.js';
 
+// Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
+// this default.
 const MAX_TOKENS_OBJECT = 8000;
 
 export async function djObject({
@@ -26,9 +29,15 @@ export async function djObject({
   prompt,
   schema,
   temperature = 0.4,
-  maxOutputTokens = MAX_TOKENS_OBJECT,
+  maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
+  // Optional caller-supplied abort signal. No live caller wraps djObject in
+  // withDeadline today, so this is inert unless one starts to — kept in the
+  // shape as a precaution so a future deadline-wrapped call can cut the
+  // Retry-After sleep short and prevent a ghost retry after the abort (mirrors
+  // djAgent's threading, PR #751 review).
+  signal = undefined,
 }: any): Promise<any> {
   return withFailover(
     kind,
@@ -46,7 +55,7 @@ export async function djObject({
           if (attempt === 1 && needsToolCallObject(l.cfg)) {
             lastVia = 'ai-sdk:tool';
             ({ object, usage } = await withTransientRetry(kind,
-              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens })));
+              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal }), signal));
           } else if (attempt === 1) {
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
@@ -57,7 +66,8 @@ export async function djObject({
               maxOutputTokens,
               output: Output.object({ schema }),
               providerOptions: providerOptions(l.cfg),
-            }));
+              ...(signal ? { abortSignal: signal } : {}),
+            }), signal);
             object = result.output;
             usage = usageOf(result);
           } else {
@@ -69,7 +79,8 @@ export async function djObject({
               temperature,
               maxOutputTokens,
               providerOptions: providerOptions(l.cfg),
-            }));
+              ...(signal ? { abortSignal: signal } : {}),
+            }), signal);
             object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
             usage = usageOf(result);
           }

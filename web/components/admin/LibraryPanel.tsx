@@ -34,7 +34,7 @@ import {
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
-import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts } from './LibraryTaggingPanel';
+import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 
 // ---------------------------------------------------------------------------
 // types
@@ -82,6 +82,9 @@ interface SettingsResponse {
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
   values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
+  // Daily-token-budget tier — drives the "budget nearly/already used" warning in
+  // the Tagging modal. Absent on an old controller → treated as 'normal'.
+  budget?: { mode: BudgetMode };
 }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
@@ -143,6 +146,8 @@ export default function LibraryPanel() {
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   // settings.audio.vocalActivity — null until the first /settings poll lands.
   const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
+  // Daily-token-budget tier from /settings — null until the first slow poll lands.
+  const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -196,18 +201,34 @@ export default function LibraryPanel() {
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
-  const loadTagger = useCallback(async () => {
+  // Fast loop payload — just the live tagger snapshot (GET /library/tagger), so a
+  // 3s running poll doesn't drag the whole heavy /settings body across each time.
+  const loadTaggerState = useCallback(async () => {
+    if (!ready) return;
+    try {
+      const r = await adminFetch('/library/tagger');
+      if (!r.ok) return;
+      const j = (await r.json()) as { tagger?: TaggerState };
+      setTagger(j.tagger || null);
+    } catch { /* transient */ }
+  }, [adminFetch, ready]);
+
+  // Slow loop payload — the settings-derived bits the panel shows but that change
+  // rarely: library stats, the audio/vocal opt-in toggles, and the daily-budget
+  // tier. Deliberately does NOT touch tagger state (the fast loop owns that) so
+  // the two pollers never race on it.
+  const loadSettingsData = useCallback(async () => {
     if (!ready) return;
     try {
       const r = await adminFetch('/settings');
       if (!r.ok) return;
       const j = (await r.json()) as SettingsResponse;
-      setTagger(j.tagger || null);
       if (j.libraryStats) setLibStats(j.libraryStats);
       if (j.values?.audio) {
         setAudioEnabled(!!j.values.audio.embeddings);
         setVocalEnabled(!!j.values.audio.vocalActivity);
       }
+      if (j.budget) setBudgetMode(j.budget.mode);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -218,13 +239,22 @@ export default function LibraryPanel() {
     return () => clearInterval(id);
   }, [ready, loadCoverage]);
 
+  // Fast: tagger state — 3s while a run is live so progress is snappy, 10s idle.
   useEffect(() => {
     if (!ready) return;
-    loadTagger();
+    loadTaggerState();
     const interval = tagger?.running ? 3_000 : 10_000;
-    const id = setInterval(loadTagger, interval);
+    const id = setInterval(loadTaggerState, interval);
     return () => clearInterval(id);
-  }, [ready, loadTagger, tagger?.running]);
+  }, [ready, loadTaggerState, tagger?.running]);
+
+  // Slow: settings-derived data (stats / audio toggles / budget) — 30s + on mount.
+  useEffect(() => {
+    if (!ready) return;
+    loadSettingsData();
+    const id = setInterval(loadSettingsData, 30_000);
+    return () => clearInterval(id);
+  }, [ready, loadSettingsData]);
 
   // While a run is live, poll coverage faster so the % visibly climbs.
   useEffect(() => {
@@ -485,20 +515,24 @@ export default function LibraryPanel() {
   // -----------------------------------------------------------------------
   const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
 
-  const startTagger = async () => {
+  const startTagger = async (steps?: TagSteps) => {
     setTaggerBusy(true);
     try {
       const limit = batch === 'all' ? null : parseInt(batch, 10);
+      const body: Record<string, unknown> = limit && limit > 0 ? { limit } : {};
+      // Forward-run step toggles from the modal's Run tab; absent on the legacy
+      // "Tag all" quick action, which then sends a plain full run.
+      if (steps) Object.assign(body, steps);
       const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(limit && limit > 0 ? { limit } : {}),
+        body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -513,7 +547,7 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger stop failed (${r.status})`);
       notify.ok('stopping tagger…');
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -528,7 +562,9 @@ export default function LibraryPanel() {
   //   upgrade    re-LLM-tag only rows whose prompt/model is stale
   // Sends no limit — a partial reseed leaves the library in a mixed state KNN
   // can't use. Existing mood tags survive as seeds, so a reseed re-spends
-  // embedding calls, not LLM.
+  // embedding calls, not LLM. `thenTag` (reseed-only) rides along in opts: it
+  // continues into the forward tag pass after the whole-library re-embed, still
+  // with no limit so every untagged track is processed.
   const rescanTagger = async (opts: RescanOpts) => {
     setTaggerBusy(true);
     try {
@@ -541,7 +577,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `re-scan failed (${r.status})`);
       notify.ok('re-scan started…');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -563,7 +599,20 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
       setAudioEnabled(!audioEnabled);
-      notify.ok(!audioEnabled ? 'sounds-like analysis enabled' : 'sounds-like analysis disabled');
+      // When the analyzer can't fingerprint yet (lean image), frame enabling as
+      // pending rather than done — the incapable banner below explains the upgrade.
+      const audioPending =
+        coverage?.analysisAvailable !== false && coverage?.audioAnalysisAvailable === false;
+      notify.ok(
+        !audioEnabled
+          ? audioPending
+            ? 'sounds-like enabled — starts once the heavy analyzer is up'
+            : 'sounds-like analysis enabled'
+          : 'sounds-like analysis disabled',
+      );
+      // The toggle lives on the slow /settings loop — refresh it now so a manual
+      // re-open / status recompute doesn't wait up to 30s to reflect the flip.
+      void loadSettingsData();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -588,7 +637,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `reconcile failed (${r.status})`);
       notify.ok('reconcile started, scanning Navidrome');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -611,7 +660,98 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `analysis start failed (${r.status})`);
       notify.ok('audio analysis started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Flip settings.audio.vocalActivity — the Demucs vocal-activity opt-in (#646).
+  // Mirrors toggleAudio; env ANALYZE_VOCAL_ACTIVITY still wins "on".
+  const toggleVocal = async () => {
+    if (vocalEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { vocalActivity: !vocalEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setVocalEnabled(!vocalEnabled);
+      // Mirrors toggleAudio: enabling on a lean analyzer is "armed", not active.
+      const vocalPending =
+        coverage?.analysisAvailable !== false && coverage?.vocalAnalysisAvailable === false;
+      notify.ok(
+        !vocalEnabled
+          ? vocalPending
+            ? 'vocal-activity enabled — starts once the heavy analyzer is up'
+            : 'vocal-activity analysis enabled'
+          : 'vocal-activity analysis disabled',
+      );
+      // Refresh the slow settings-derived state now rather than waiting for its
+      // tick — and coverage too, so the coverage-driven bits (vocalStatus, the
+      // vocal meter row) catch up without waiting out the 60s poll.
+      void loadSettingsData();
+      void loadCoverage();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Backfill Demucs vocal ranges on tracks that lack them — POST with vocal:true
+  // so the analyze pass forces the vocal scope (#646).
+  const vocalBackfill = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vocal: true }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `vocal analysis start failed (${r.status})`);
+      notify.ok('vocal analysis started');
+      setLogOpen(true);
+      await loadTaggerState();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Reset — wipe ALL tagging data (tags, embeddings, acoustics, enrichment) and
+  // start fresh. Deletes library.db server-side; the Navidrome library itself is
+  // untouched, so every track simply returns to the untagged pool. Gated behind
+  // the modal's typed confirmation. Refused (409) while a tagger run is active.
+  const resetLibrary = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `reset failed (${r.status})`);
+      notify.ok('library reset — all tagging data wiped');
+      // Everything the tables/meters showed is gone. Refresh coverage + settings
+      // and drop the cached views so each tab reloads against the empty library.
+      await loadCoverage();
+      void loadSettingsData();
+      setBrowse(null);
+      setSearchResults(null);
+      setRecent(null);
+      setUntagged([]);
+      setUntaggedCursor(null);
+      if (tab === 'browse') runBrowse();
+      else if (tab === 'recent') loadRecent();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -667,10 +807,14 @@ export default function LibraryPanel() {
         onStop={stopTagger}
         onRescan={rescanTagger}
         onReconcile={reconcile}
+        onReset={resetLibrary}
         audioEnabled={audioEnabled}
         onToggleAudio={toggleAudio}
         onAnalyzeAudio={analyzeAudio}
         vocalEnabled={vocalEnabled}
+        onToggleVocal={toggleVocal}
+        onVocalBackfill={vocalBackfill}
+        budgetMode={budgetMode}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />
@@ -760,7 +904,7 @@ export default function LibraryPanel() {
         }
         right={
           tab === 'untagged' && untagged.length > 0 ? (
-            <Btn sm tone="accent" onClick={startTagger} disabled={tagger?.running || taggerBusy}>
+            <Btn sm tone="accent" onClick={() => startTagger()} disabled={tagger?.running || taggerBusy}>
               <Sparkles size={11} /> Tag all
             </Btn>
           ) : tab === 'recent' ? (

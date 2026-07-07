@@ -228,7 +228,7 @@ function normArtist(s: string): string {
   return String(s || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip diacritics
     .toLowerCase()
-    .replace(/[^\p{L}\p{N} ]/gu, ' ')                       // punctuation → space
+    .replace(/[^a-z0-9 ]/g, ' ')                       // punctuation → space
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -596,4 +596,3 @@ export function getAnnotatedUri(song) {
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }
-

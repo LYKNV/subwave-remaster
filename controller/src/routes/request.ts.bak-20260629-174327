@@ -400,11 +400,7 @@ async function resolveRequest(entry) {
   // precision: "turkish" → "Turkish Pop"), then as a plain search term in
   // case the word shows up in artist/album/title. Misses fall through to the
   // remaining pick sources like every other step.
-  const hasNamedTarget =
-  !!matched.artist ||
-  (Array.isArray(matched.search_terms) &&
-    matched.search_terms.some((t: string) => String(t || '').trim().length > 0));
-if (!pick && matched.language && !hasNamedTarget) {
+  if (!pick && matched.language) {
     const genre = await resolveGenre(matched.language);
     if (genre) {
       try {
@@ -654,4 +650,3 @@ router.get('/request/:id', (req, res) => {
     message: entry.message,
   });
 });
-

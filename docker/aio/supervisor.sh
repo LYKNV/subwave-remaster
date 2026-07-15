@@ -63,6 +63,30 @@ init_state() {
 }
 
 # ---------------------------------------------------------------------------
+# Warn loudly if the state dir isn't a mounted volume. With no host path (or
+# volume) mapped to /var/sub-wave, everything the station writes — settings,
+# library.db with the acoustic analysis, hourly archives, the model cache —
+# lives in the container's throwaway writable layer, and the next image update
+# (which recreates the container) silently wipes it. The Unraid CA template maps
+# this as a required Appdata path; a bare `docker run` that forgets `-v` is the
+# footgun this catches (issue #902). A real bind/volume mount gets its own entry
+# in /proc/mounts at the target path; an un-mapped dir on the overlay fs doesn't.
+# ---------------------------------------------------------------------------
+warn_if_state_unmounted() {
+	if ! grep -q ' /var/sub-wave ' /proc/mounts 2>/dev/null; then
+		log "################################################################"
+		log "WARNING: /var/sub-wave is NOT a mounted volume."
+		log "  Your settings, library cache (library.db), hourly archives and"
+		log "  model cache are being written into the container's writable"
+		log "  layer, and will be LOST the next time this image is updated."
+		log "  Map a host path to /var/sub-wave (on Unraid: the Appdata path,"
+		log "  e.g. /mnt/user/appdata/subwave) and recreate the container."
+		log "  https://github.com/perminder-klair/subwave/issues/902"
+		log "################################################################"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Resolve the three ICECAST_*_PASSWORD values and render icecast.xml.
 # Precedence (unchanged from broadcast-entrypoint): env override > persisted
 # state/icecast-secrets.env > freshly generated. Resolved values are exported
@@ -102,10 +126,22 @@ init_secrets() {
 	# radio.liq reads ICECAST_HOST (default "icecast").
 	export ICECAST_HOST=localhost
 
+	# Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
+	# A non-numeric value would render invalid XML and fail icecast at boot,
+	# so fall back to the default with a warning instead.
+	ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
+	case "$ICECAST_MAX_CLIENTS" in
+		*[!0-9]*|'')
+			log "ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100"
+			ICECAST_MAX_CLIENTS=100
+			;;
+	esac
+
 	sed \
 		-e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
 		-e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
 		-e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
+		-e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
 		"$TEMPLATE" > "$RENDERED"
 	chown icecast2 "$RENDERED" 2>/dev/null || true
 }
@@ -203,6 +239,7 @@ supervise() {
 # ---------------------------------------------------------------------------
 # Boot.
 # ---------------------------------------------------------------------------
+warn_if_state_unmounted
 init_state
 init_secrets
 

@@ -26,6 +26,9 @@ export function useClock(): Date | null {
 export interface Analyser {
   ready: boolean;
   read: () => Uint8Array<ArrayBuffer> | null;
+  /** AudioContext sample rate in Hz — null until the graph exists. Callers
+   *  mapping bins to frequencies need it (44.1k vs 48k shifts every bin). */
+  sampleRate: number | null;
 }
 
 // Older Safari exposes AudioContext as webkitAudioContext.
@@ -34,11 +37,63 @@ interface WebkitWindow {
   webkitAudioContext?: AudioContextCtor;
 }
 
+interface ElementAudioGraph {
+  ctx: AudioContext;
+  analyser: AnalyserNode;
+}
+
+// One Web Audio graph per media element, for the lifetime of the page.
+// createMediaElementSource permanently captures the element's output (a
+// second call throws, and tearing the graph down would mute playback), and
+// skins now mount and unmount visualisers against the same shared <audio>
+// element — so a later hook instance must REUSE the first one's graph. This
+// is what keeps real spectrum data flowing after a skin switch instead of
+// every subsequent visualiser falling back to the pseudo-random walk, and
+// stops each remount from leaking a fresh AudioContext on the failed
+// re-capture.
+const ELEMENT_GRAPHS = new WeakMap<HTMLMediaElement, ElementAudioGraph>();
+
+/** Existing graph for the element, or a freshly built one. Returns null when
+ *  Web Audio is unavailable; throws (after closing the orphan context) when
+ *  capture fails, so callers keep their not-ready fallback path. */
+function getOrCreateElementGraph(audioEl: HTMLMediaElement): ElementAudioGraph | null {
+  const existing = ELEMENT_GRAPHS.get(audioEl);
+  if (existing) return existing;
+  const AC: AudioContextCtor | undefined =
+    window.AudioContext || (window as Window & WebkitWindow).webkitAudioContext;
+  if (!AC) return null;
+  const ctx = new AC();
+  try {
+    const source = ctx.createMediaElementSource(audioEl);
+    const analyser = ctx.createAnalyser();
+    // 4096-point FFT (2048 bins). The Waveform's log-frequency sweep
+    // needs low-end resolution — at 1024 the bins were ~47 Hz wide, so
+    // the sweep's bottom octave (a dozen bars) read one bin and moved as
+    // a single block. ~12 Hz bins plus the Waveform's interpolation give
+    // every bar a distinct value; 2048 bins per paint is still trivial.
+    analyser.fftSize = 4096;
+    // Light smoothing only: the old 0.78 stacked on the spans' 60 ms CSS
+    // transitions left bars trailing the beat by ~100 ms. The canvas
+    // renderer has no second smoothing layer, so this is the whole lag.
+    analyser.smoothingTimeConstant = 0.7;
+    source.connect(analyser);
+    analyser.connect(ctx.destination);
+    const graph: ElementAudioGraph = { ctx, analyser };
+    ELEMENT_GRAPHS.set(audioEl, graph);
+    return graph;
+  } catch (err) {
+    // Capture failed (element claimed outside this hook) — don't leave an
+    // idle AudioContext behind on every attempt.
+    void ctx.close().catch(() => {});
+    throw err;
+  }
+}
+
 // Web Audio analyser hook — wires an AnalyserNode to the given <audio> ref
 // the first time `active` flips true, then writes per-frame frequency bytes
-// into an internal ref read via `read()`. Returns `{ ready, read }`. If CORS
-// or anything else blocks attachment, `ready` stays false and `read()` returns
-// null — callers should fall back to `useSpectrum`.
+// into an internal ref read via `read()`. Returns `{ ready, read, sampleRate }`.
+// If CORS or anything else blocks attachment, `ready` stays false and `read()`
+// returns null — the Waveform falls back to its pseudo-random walk.
 //
 // iOS is opted out entirely: createMediaElementSource on a live MP3 stream only
 // ever yields zeros there, and merely routing the element through Web Audio
@@ -49,12 +104,11 @@ export function useAnalyser(
   audioRef: RefObject<HTMLAudioElement | null> | null | undefined,
   active: boolean,
 ): Analyser {
-  const ctxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const binsRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const probedRef = useRef(false);
   const [ready, setReadyState] = useState(false);
+  const [sampleRate, setSampleRate] = useState<number | null>(null);
   // Mirror of `ready` read by the stable `read` callback below — keeping it in
   // a ref means `read`'s identity never changes, so the caller's rAF effect
   // doesn't tear down and restart on every render.
@@ -74,29 +128,19 @@ export function useAnalyser(
     let onPlaying: (() => void) | null = null;
     (async () => {
       try {
-        if (!ctxRef.current) {
-          const AC: AudioContextCtor | undefined =
-            window.AudioContext || (window as Window & WebkitWindow).webkitAudioContext;
-          if (!AC) return;
-          ctxRef.current = new AC();
-        }
-        if (ctxRef.current.state === 'suspended') await ctxRef.current.resume();
-        if (!sourceRef.current) {
-          sourceRef.current = ctxRef.current.createMediaElementSource(audioEl);
-          analyserRef.current = ctxRef.current.createAnalyser();
-          analyserRef.current.fftSize = 256;
-          analyserRef.current.smoothingTimeConstant = 0.78;
-          sourceRef.current.connect(analyserRef.current);
-          analyserRef.current.connect(ctxRef.current.destination);
-          binsRef.current = new Uint8Array(analyserRef.current.frequencyBinCount);
-        }
+        const graph = getOrCreateElementGraph(audioEl);
+        if (!graph) return; // no Web Audio in this browser
+        analyserRef.current = graph.analyser;
+        binsRef.current = new Uint8Array(graph.analyser.frequencyBinCount);
+        setSampleRate(graph.ctx.sampleRate);
+        if (graph.ctx.state === 'suspended') await graph.ctx.resume();
         if (cancelled) return;
         setReady(true);
 
         // Some non-iOS WebKit builds (e.g. desktop Safari on a live MP3 mount)
         // also wire the graph up but only ever return zeros. Probe once after
         // playback starts — if no samples land in ~600 ms, flip ready=false so
-        // the pseudo-random useSpectrum fallback takes over.
+        // the pseudo-random walk fallback takes over.
         if (probedRef.current) return;
         onPlaying = () => {
           if (probedRef.current || cancelled) return;
@@ -121,10 +165,10 @@ export function useAnalyser(
               if (probeInterval) clearInterval(probeInterval);
               probeInterval = null;
               if (max === 0) {
-                // No usable data. Fall back to the pseudo-spectrum, but DON'T
-                // disconnect — the source feeds the speakers through this graph,
-                // so tearing it down would mute playback. An idle analyser in
-                // the chain is transparent.
+                // No usable data. Fall back to the pseudo-random walk, but
+                // DON'T disconnect — the source feeds the speakers through this
+                // graph, so tearing it down would mute playback. An idle
+                // analyser in the chain is transparent.
                 setReady(false);
               }
             }
@@ -149,5 +193,5 @@ export function useAnalyser(
     return binsRef.current;
   }, []);
 
-  return { ready, read };
+  return { ready, read, sampleRate };
 }

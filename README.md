@@ -11,7 +11,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 ## Showreel
 
-https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
+https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 
 ## Live demo
 
@@ -58,7 +58,7 @@ https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 - **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
 - **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
 - **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — plus an installable PWA on phone and desktop.
-- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist.
+- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist. Ready-made show templates install from the [community catalog](https://www.getsubwave.com/shows).
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it — or write one in the admin UI's built-in editor, or install one other operators shared on the [community exchange](https://www.getsubwave.com/skills). See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
 - **Hourly archives.** Every hour saved as MP3 for later replay.
@@ -138,6 +138,16 @@ the stack keeps running and Chatterbox/PocketTTS personas silently fall back
 to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
+
+**Run just one engine.** Both engines load by default, but each costs RAM and a
+first-boot weight download. If you only use one, name it in `.env` and the other
+never loads:
+
+```ini
+TTS_HEAVY_ENGINES=pocket-tts       # PocketTTS only (no Chatterbox)
+# TTS_HEAVY_ENGINES=chatterbox     # Chatterbox only
+# TTS_HEAVY_ENGINES=chatterbox,pocket-tts   # default — both
+```
 
 Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
 it runs in its own `subwave-analyzer` service, which **starts by default**
@@ -279,11 +289,14 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
+- **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
+- **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
+- **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
 
 ## Music licensing
 

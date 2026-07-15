@@ -26,6 +26,8 @@ Mark each box per platform. Note the device + OS version you tested on.
 ## Resilience & connectivity
 
 - [ ] **iOS** / [ ] **Android** — **Headphone / Bluetooth unplug** pauses playback; pressing play (or replugging) **resumes at the LIVE edge**, not a stale buffered segment. _(validates A3 — `service.ts` RemotePlay re-load)_
+- [ ] **iOS** — **Output device disappears** (Bluetooth speaker powered off, or CarPlay: car turned off / cable pulled): app pauses instead of "playing" silently, and the **admin listener count decrements** within a few seconds (no phantom Icecast session). _(validates #992 — `usePlayer` route-change tune-out on `oldDeviceUnavailable`)_
+- [ ] **iOS** — **AirPlay regression guard**: pick a HomePod from the in-app AirPlay button, let a crossfade pass, pick the phone back — playback keeps running on the chosen device throughout, never snapping to the built-in speaker or pausing. _(the #992 pause must fire ONLY on `oldDeviceUnavailable`, not on handoffs — 0b060a3a behavior)_
 - [ ] **iOS** / [ ] **Android** — **Phone-call interruption**: audio ducks/pauses for the call and resumes after. _(validates `autoHandleInterruptions: true`)_
 - [ ] **iOS** / [ ] **Android** — **Wi-Fi → cellular switch** while tuned in: the **`CONNECTING…` / `NO CONNECTION` banner** appears and playback **reconnects within a beat** (not the full ~6s watchdog wait). _(validates A1 — `useConnectivity` proactive reconnect)_
 - [ ] **iOS** / [ ] **Android** — **Airplane-mode cold start**: launch with no network → app reaches the player with a **`NO CONNECTION` banner**, **no stuck splash**, no crash. Turn network back on → banner clears, can tune in.
@@ -37,6 +39,10 @@ Mark each box per platform. Note the device + OS version you tested on.
 - [ ] **iOS** — **CarPlay**: SUB/WAVE appears, shows now-playing, Play/Pause/Stop work.
       _(Android Auto is intentionally **not** declared — rejected by Google Play under the Auto TTS-content policy; nothing to test there.)_
 - [ ] **Android** — **Kill the app** (swipe from recents): the **foreground-service notification is removed** and audio stops (`StopPlaybackAndRemoveNotification`).
+- [ ] **iOS** — **AirPlay**: the route-picker button in the masthead opens the system picker; audio moves to a HomePod/Apple TV and back. Lock-screen metadata still updates while routed.
+- [ ] **iOS** / [ ] **Android** — **Google Cast, connect mid-listen**: tap the cast button while tuned in → audio moves to the Cast device (phone goes silent, deck reads `Cast · <device>`), power/volume/mute now drive the device. First iOS tap shows the **Local Network permission** prompt.
+- [ ] **iOS** / [ ] **Android** — **Google Cast, disconnect**: end the session from the cast dialog → playback **resumes locally** at the live edge. Sleep timer while casting stops the Cast audio when it lapses.
+- [ ] **iOS** / [ ] **Android** — **Google Cast, station switch**: switching stations while casting stops remote playback (matches local behaviour); re-tune casts the new station.
 
 ## Accessibility
 

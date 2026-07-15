@@ -79,6 +79,10 @@ export default defineConfig([
             // (.admin-root .hs-*), ported from a Claude Design prototype.
             // Bespoke gauge/bar/lamp CSS in app/globals.css.
             '^hs-',
+            // .seg-* — the /admin/dash DJ-segment cart-machine fire pads
+            // (.admin-root .seg-*). Bespoke LED/sweep CSS in app/globals.css.
+            '^seg-',
+            '^is-firing$',
             // admin-scoped descendant classes from globals.css
             '^eyebrow$',
             '^caption$',
@@ -237,6 +241,22 @@ export default defineConfig([
     files: ['components/admin/skills/SkillEditModal.tsx'],
     rules: {
       'react/forbid-dom-props': 'off',
+    },
+  },
+
+  // Exemption for vendored AI Elements components (Vercel's shadcn-style
+  // registry, `npx ai-elements add …`). Kept close to upstream so future
+  // re-pulls diff cleanly. Inline styles there are intrinsically dynamic
+  // (shiki token colours, media-chrome theming vars, shimmer gradient
+  // spread); is-user/is-assistant/not-prose are upstream group-marker
+  // classes; shimmer's motion-component factory is module-cached, which
+  // the static-components rule can't see.
+  {
+    files: ['components/ai-elements/**/*.{ts,tsx}'],
+    rules: {
+      'react/forbid-dom-props': 'off',
+      'better-tailwindcss/no-unknown-classes': 'off',
+      'react-hooks/static-components': 'off',
     },
   },
 

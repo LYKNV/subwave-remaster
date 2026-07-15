@@ -10,7 +10,9 @@
 // agnostic.
 
 import * as db from './library-db.js';
+import * as blocklist from './blocklist.js';
 import { resolveEmbeddingDim } from './embeddings.js';
+import { openingKeyFrom, endingKeyFrom } from './mix.js';
 
 let loaded = false;
 
@@ -122,12 +124,20 @@ export function realBpm(v: any): number | null {
 // first, then whatever the track object itself carries (a Subsonic candidate's
 // bpm is the file's ID3 tag). Single source of truth for the pick/transition
 // paths — per-caller "carries analysis?" guards let Navidrome's bpm 0 skip the
-// DB lookup and mask the analyzed value (#862).
-export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
+// DB lookup and mask the analyzed value (#862). Also carries the boundary keys
+// (feature: key ranges) — opening/ending key resolved from the measured
+// per-region ranges, falling back to the dominant key — so the picker re-rank
+// can compare the pair a transition actually meets.
+export function bpmKeyFor(track: any): { bpm: number | null; key: string | null; keyStart: string | null; keyEnd: string | null } {
   const rec = track?.id ? get(track.id) : null;
+  const key = rec?.musicalKey ?? track?.musicalKey ?? null;
+  const durSec = rec?.durationSec ?? (Number(track?.duration) || 0);
+  const durMs = typeof durSec === 'number' && durSec > 0 ? durSec * 1000 : null;
   return {
     bpm: realBpm(rec?.bpm) ?? realBpm(track?.bpm),
-    key: rec?.musicalKey ?? track?.musicalKey ?? null,
+    key,
+    keyStart: openingKeyFrom(rec?.keyRanges, key),
+    keyEnd: endingKeyFrom(rec?.keyRanges, durMs, key),
   };
 }
 
@@ -206,8 +216,10 @@ const MOOD_MIN_EXACT = 12;
 
 export function songsByMood(mood: string | null | undefined): any[] {
   if (!mood || !loaded) return [];
+  // rejectBlocked here (not on the final return) so the MOOD_MIN_EXACT
+  // widening threshold counts airable tracks, not blocked ones.
   const flatten = (rows: db.TrackRecord[]) =>
-    rows.map(r => ({
+    blocklist.rejectBlocked(rows.map(r => ({
       id: r.id,
       title: r.title,
       artist: r.artist,
@@ -220,7 +232,7 @@ export function songsByMood(mood: string | null | undefined): any[] {
       // a locally mood-tagged long mix would read as "unknown length" and slip
       // past the cap.
       durationSec: r.durationSec,
-    }));
+    })));
 
   const exact = flatten(db.songsByMood(mood));
   if (exact.length >= MOOD_MIN_EXACT) return exact;
@@ -291,7 +303,7 @@ function slimTrack(r: db.TrackRecord) {
 export function songsByEnergy(energy: string | null | undefined): any[] {
   if (!energy || !loaded) return [];
   if (energy !== 'low' && energy !== 'medium' && energy !== 'high') return [];
-  return db.songsByEnergy(energy).map(slimTrack);
+  return blocklist.rejectBlocked(db.songsByEnergy(energy).map(slimTrack));
 }
 
 // KNN over the embedding space — finds tracks whose metadata + lyrics +
@@ -320,7 +332,7 @@ export function tracksLikeThis(seed: string, k: number): any[] {
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return out;
+  return blocklist.rejectBlocked(out);
 }
 
 // Audio KNN — finds tracks whose CLAP audio embedding (timbre / instrumentation
@@ -347,7 +359,7 @@ export function tracksLikeThisAudio(seed: string, k: number): any[] {
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return out;
+  return blocklist.rejectBlocked(out);
 }
 
 // The task-prefix mode the text-embedding index was built in — query embeds
@@ -385,7 +397,7 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return out;
+  return blocklist.rejectBlocked(out);
 }
 
 // Audio KNN against an externally-computed query vector — the sonic-journey
@@ -400,7 +412,7 @@ export function tracksByAudioVector(vec: number[] | Float32Array, k: number): an
     const t = db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
-  return out;
+  return blocklist.rejectBlocked(out);
 }
 
 export function stats() {

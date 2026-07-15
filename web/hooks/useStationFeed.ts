@@ -2,12 +2,11 @@
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { pollWhileVisible } from '@/lib/poll';
-import { useStationOrigin } from '@/lib/stationOrigin';
+import { useStationClient } from '@/lib/stationClient';
 import type {
   ActiveShow,
   DjState,
   ListenerCount,
-  NowPlayingResponse,
   NowPlayingTrack,
   SessionPayload,
   StationContext,
@@ -54,7 +53,7 @@ function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T): void {
 // hidden (with an immediate refetch on return). Single source of truth for
 // "what's on air right now".
 export function useStationFeed(): StationFeed {
-  const { apiUrl } = useStationOrigin();
+  const client = useStationClient();
   const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
   const [context, setContext] = useState<StationContext | null>(null);
   const [dj, setDj] = useState<DjState | null>(null);
@@ -73,16 +72,34 @@ export function useStationFeed(): StationFeed {
   useEffect(() => {
     const tick = async () => {
       try {
-        const [npRes, stRes, seRes] = (await Promise.all([
-          fetch(`${apiUrl}/now-playing`).then(r => r.json()),
-          fetch(`${apiUrl}/state`).then(r => r.json()),
-          fetch(`${apiUrl}/session`).then(r => r.json()),
-        ])) as [NowPlayingResponse, StationState, SessionPayload];
+        const [npRes, stRes, seRes] = await Promise.all([
+          client.nowPlaying(),
+          client.state(),
+          client.session(),
+        ]);
         const np = npRes.nowPlaying;
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
+        // Prefer the queue's authoritative start time over "first seen by this
+        // client": a tab that was hidden at the transition (or a poll that hit
+        // a torn now-playing.json read and flipped through null) would stamp
+        // Date.now() mid-track, dragging elapsed/remaining/progress minutes
+        // behind the broadcast. Guarded to the matching track and to plausible
+        // values (a skewed server clock in the future falls back to first-seen).
+        const cur = (stRes as StationState & { current?: { title?: string; startedAt?: string } }).current;
+        let serverStart = NaN;
+        if (np?.title && cur && cur.title === np.title && cur.startedAt) {
+          const t = Date.parse(cur.startedAt);
+          if (Number.isFinite(t) && t <= Date.now()) serverStart = t;
+        }
         if (trackKey !== lastTrackKeyRef.current) {
           lastTrackKeyRef.current = trackKey;
-          setTrackStartedAt(trackKey != null ? Date.now() : null);
+          setTrackStartedAt(trackKey != null ? (Number.isFinite(serverStart) ? serverStart : Date.now()) : null);
+        } else if (Number.isFinite(serverStart)) {
+          // Same track, better information — converge on the server stamp (and
+          // repair any mid-track reset) without re-render noise inside ±2.5s.
+          setTrackStartedAt(prev =>
+            prev != null && Math.abs(serverStart - prev) <= 2500 ? prev : serverStart,
+          );
         }
         setIfChanged(setNowPlaying, np);
         setIfChanged(setContext, npRes.context);
@@ -106,7 +123,7 @@ export function useStationFeed(): StationFeed {
       } catch {}
     };
     return pollWhileVisible(() => { void tick(); }, 5000);
-  }, [apiUrl]);
+  }, [client]);
 
   return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale };
 }

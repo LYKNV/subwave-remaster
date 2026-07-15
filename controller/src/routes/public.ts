@@ -16,7 +16,9 @@ import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
+import { listCommunityShows } from '../shows/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 export const router = express.Router();
 
@@ -92,10 +94,7 @@ router.get('/cover/:id', async (req, res) => {
   }
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch(subsonic.getCoverArtUrl(id, 512), { signal: ctrl.signal });
-    clearTimeout(timer);
+    const r = await fetchWithTimeout(subsonic.getCoverArtUrl(id, 512), { timeoutMs: 5000 });
     if (!r.ok) return res.status(502).end();
     const entry = {
       buf: Buffer.from(await r.arrayBuffer()),
@@ -178,6 +177,19 @@ router.get('/now-playing', async (req, res) => {
         nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
         nowPlaying.energy = rec.energy ?? null;
         if (nowPlaying.year == null && rec.year != null) nowPlaying.year = rec.year;
+      }
+      // Duration isn't in the annotate metadata Liquidsoap reports, so the
+      // player's track clock / up-next tease would never fire without help.
+      // The queue's record of the airing track carries the full Subsonic song
+      // (requests + DJ picks); auto-playlist plays fall back to the library
+      // DB's duration_sec. Tracks known to neither just omit it — the player
+      // degrades to an elapsed-only readout, same as the metadata strip.
+      if (nowPlaying.duration == null) {
+        const cur = queue.current;
+        const queueDuration =
+          cur?.track?.id === nowPlaying.subsonic_id ? cur?.track?.duration : null;
+        const duration = queueDuration ?? rec?.durationSec ?? null;
+        if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
       }
     }
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.
@@ -350,7 +362,10 @@ router.get('/schedule', async (req, res) => {
       id: show.id,
       name: show.name,
       topic: show.topic,
-      mood: show.mood,
+      // Multi-value moods (#929). `mood` stays as the lead entry for older
+      // clients (the native app reads this endpoint) — derived, never stored.
+      moods: Array.isArray(show.moods) ? show.moods : [],
+      mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',
       personaId: show.personaId,
     }));
     res.json({
@@ -387,9 +402,14 @@ router.get('/state', (req, res) => {
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
     theme: { active: activeThemeId },
-    // Listener-player UI toggles ride along with /state like the theme does, so
-    // the player can flip them live on the next poll. Defaults off if unset.
-    ui: { boothBuddy: s?.ui?.boothBuddy ?? false },
+    // Listener-player UI settings ride along with /state like the theme does,
+    // so the player can flip them live on the next poll. Defaults off if
+    // unset; `skin` defaults to the classic face.
+    ui: {
+      boothBuddy: s?.ui?.boothBuddy ?? false,
+      skin: s?.ui?.skin || 'classic',
+      tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
+    },
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
@@ -490,6 +510,24 @@ router.get('/personas/community', async (req, res) => {
     res.json({ community });
   } catch (err) {
     queue.log('error', `/personas/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /shows/community — the community SHOW catalog (produced-show templates
+// contributed via the community submission flow, fetched live). Same
+// posture as /skills/community + /personas/community: browse-only public
+// reference powering the public /shows showcase AND the admin Shows → Community
+// modal. Never throws — an empty/unreachable catalog returns []. No admin gate:
+// public reference data, install requires admin (routes/shows.ts).
+// ---------------------------------------------------------------------------
+router.get('/shows/community', async (req, res) => {
+  try {
+    const community = await listCommunityShows();
+    res.json({ community });
+  } catch (err) {
+    queue.log('error', `/shows/community failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

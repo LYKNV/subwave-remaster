@@ -75,7 +75,10 @@ export interface ScheduleShow {
   id: string;
   name: string;
   topic: string;
+  /** Lead mood — derived from moods[0] server-side (back-compat). */
   mood: string;
+  /** Full multi-value mood list (#929). */
+  moods?: string[];
   personaId: string;
 }
 /** 7 entries (Sun=0..Sat=6), each a 24-slot array of showId|null. */
@@ -177,8 +180,10 @@ export interface StationState {
   djLog: DjLogEntry[];
   timezone?: string;
   locale?: StationLocale;
-  /** Station-wide listener-player UI toggles (from GET /state). */
-  ui?: { boothBuddy?: boolean };
+  /** Station-wide listener-player UI settings (from GET /state). `skin` is
+   *  the operator's player-skin pick (see components/skins); `tuneInOverlay`
+   *  gates the full-bleed tap-to-tune gate (default on). */
+  ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the

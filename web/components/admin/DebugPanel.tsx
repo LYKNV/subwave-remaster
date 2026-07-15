@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { fmtSize, fmtClock } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -9,8 +9,27 @@ import { V3Alert } from '../ui/alert';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Card, Btn, Pill, Eyebrow } from './ui';
+import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
 import type { StationLocale } from '../../lib/types';
+import {
+  Tool,
+  ToolHeader,
+  ToolContent,
+  ToolInput,
+  ToolOutput,
+} from '../ai-elements/tool';
+import { CodeBlock, CodeBlockCopyButton } from '../ai-elements/code-block';
+import { Conversation, ConversationContent } from '../ai-elements/conversation';
+import { Message, MessageContent, MessageResponse } from '../ai-elements/message';
+import {
+  Context,
+  ContextTrigger,
+  ContextContent,
+  ContextContentHeader,
+  ContextContentBody,
+} from '../ai-elements/context';
+import { Terminal, TerminalContent } from '../ai-elements/terminal';
 
 // All admin endpoints return loose JSON; type as unknown then narrow with
 // optional-chaining at call sites. The shapes mirror the controller's
@@ -54,10 +73,29 @@ interface DebugTtsSpoken {
   requested?: string;
 }
 
+/** One entry from the controller's TTS call ring (stats.ts ttsCalls) — every
+ * speak() outcome since boot, newest first, incl. silent engine fallbacks. */
+interface TtsCall {
+  ok?: boolean;
+  kind?: string;
+  engine?: string;
+  requested?: string;
+  fellBack?: boolean;
+  ms?: number;
+  chars?: number;
+  t?: string;
+  error?: string;
+  /** Spoken text, capped at ~240 chars by the controller. */
+  text?: string;
+  /** Voicing persona name; null for global kinds (jingle/default). */
+  persona?: string | null;
+}
+
 interface DebugTts {
   spoken?: DebugTtsSpoken;
   jingle?: { engine?: string };
   effectivePersona?: { name?: string };
+  recentCalls?: TtsCall[];
   error?: string;
 }
 
@@ -91,12 +129,18 @@ interface LlmCall {
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
   response?: string;
+  /** What the model said INSTEAD of the expected structured output on a
+   * failed call (e.g. "agent did not call the done tool") — one labelled
+   * block per attempt that declined. Populated by failureDiagnostics() in
+   * the controller; absent on success (see `response` instead). */
+  responseText?: string;
   steps?: number;
 }
 
 interface DebugLlm {
   activeModel?: string;
   provider?: string;
+  budget?: DebugBudget;
   recentCalls?: LlmCall[];
   /** Raw-request capture status — drives the toggle + file-path hint. */
   debug?: {
@@ -184,6 +228,19 @@ interface DebugMounts {
   tuneIn: { entryCount: number; pls: string; m3u: string };
 }
 
+/** Daily token budget snapshot (settings.llm.dailyTokenCap) — mirrors the
+ * controller's budgetMode() tiers: soft mutes optional segments, hard stops
+ * model calls entirely until the UTC day rolls. */
+interface DebugBudget {
+  enabled?: boolean;
+  cap?: number;
+  softPct?: number;
+  exemptRequests?: boolean;
+  usedToday?: number;
+  remaining?: number;
+  mode?: 'normal' | 'soft' | 'hard';
+}
+
 interface DebugData {
   /** Station IANA zone — render DJ-log timestamps in it (issue #418). */
   timezone?: string;
@@ -211,7 +268,6 @@ export default function DebugPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const logRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -270,12 +326,6 @@ export default function DebugPanel() {
     };
   }, [paused, needsAuth, hydrated, adminFetch]);
 
-  useEffect(() => {
-    if (autoScroll && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [data?.liquidsoapLog, autoScroll]);
-
   return (
     <div className="grid gap-4">
       {/* ── HEALTH STRIP ────────────────────────────────────────────────── */}
@@ -285,6 +335,7 @@ export default function DebugPanel() {
             ● {err ? 'down' : 'live'}
           </Eyebrow>
           <span className="caption">refresh · 2s</span>
+          {data?.llm?.budget?.enabled ? <BudgetMeter budget={data.llm.budget} /> : null}
           <span className="ml-auto flex gap-2">
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
           </span>
@@ -335,28 +386,47 @@ export default function DebugPanel() {
         <>
           {/* ── ROW 1 — NOW PLAYING / ICECAST / DJ CONTEXT ──────────────── */}
           <div className="stack-mobile grid grid-cols-3 gap-4">
-            <Card title="Now playing" sub="now-playing.json" bodyClass="max-h-80 overflow-y-auto">
-              <KvTable obj={data.nowPlaying} />
+            <Card
+              title="Now playing"
+              headClass="flex-nowrap"
+              sub={
+                <span className="text-[9px] tracking-[0.08em] normal-case">
+                  now-playing.json
+                </span>
+              }
+            >
+              <ScrollArea className="max-h-80">
+                <KvTable obj={data.nowPlaying} />
+              </ScrollArea>
             </Card>
 
-            <Card title="Icecast" bodyClass="max-h-80 overflow-y-auto">
-              <KvTable obj={data.icecast as unknown as Record<string, unknown>} />
+            <Card title="Icecast">
+              <ScrollArea className="max-h-80">
+                <KvTable obj={data.icecast as unknown as Record<string, unknown>} />
+              </ScrollArea>
             </Card>
 
-            <Card title="DJ context" bodyClass="max-h-[200px] overflow-y-auto">
-              <DjContext ctx={data.context} />
+            <Card title="DJ context">
+              <ScrollArea className="max-h-[200px]">
+                <DjContext ctx={data.context} />
+              </ScrollArea>
             </Card>
           </div>
 
           {/* ── CONFIG + LISTEN MOUNTS ──────────────────────────── */}
-          <Card title="Config" sub="redacted · listen mounts" bodyClass="max-h-[480px] overflow-y-auto">
-            <KvTable obj={data.config} />
-            <MountsTable mounts={data.mounts} />
+          <Card title="Config" sub="redacted · listen mounts">
+            <ScrollArea className="max-h-[480px]">
+              <KvTable obj={data.config} />
+              <MountsTable mounts={data.mounts} />
+            </ScrollArea>
           </Card>
 
           {/* ── TTS ROUTING ────────────────────────────── */}
           {data.tts && !data.tts.error && (
-            <Card title="TTS routing" sub="who voices the next spoken segment">
+            <Card
+              title="TTS routing"
+              sub={`who voices the next spoken segment · ${data.tts.recentCalls?.length ?? 0} recent calls`}
+            >
               <TtsRouting tts={data.tts} />
             </Card>
           )}
@@ -383,23 +453,32 @@ export default function DebugPanel() {
               </Label>
             }
           >
-            <pre ref={logRef} className="term min-h-0 flex-1 overflow-y-auto">
-              {data.liquidsoapLog || '— no log —'}
-            </pre>
+            {/* Terminal owns scrolling + tail-follow; the Card checkbox drives
+                its autoScroll. Square corners to sit flush in the card body. */}
+            <Terminal
+              output={data.liquidsoapLog || '— no log —'}
+              autoScroll={autoScroll}
+              className="min-h-0 flex-1 rounded-none border-separator-strong"
+            >
+              <TerminalContent className="max-h-none min-h-0 flex-1 p-2.5 text-[11px] leading-[1.6]" />
+            </Terminal>
           </Card>
 
           {/* ── ROW 3 ───────────────────────────────────────── */}
           <div className="stack-mobile grid grid-cols-2 gap-4">
-            <Card title="State dir" sub="/var/sub-wave" bodyClass="max-h-80 overflow-y-auto">
-              <FilesTable files={data.stateFiles} />
+            <Card title="State dir" sub="/var/sub-wave">
+              <ScrollArea className="max-h-80">
+                <FilesTable files={data.stateFiles} />
+              </ScrollArea>
             </Card>
 
             <Card
               title="DJ voice WAVs"
               sub={`${Array.isArray(data.voiceFiles) ? data.voiceFiles.length : 0} files`}
-              bodyClass="max-h-80 overflow-y-auto"
             >
-              <FilesTable files={data.voiceFiles} />
+              <ScrollArea className="max-h-80">
+                <FilesTable files={data.voiceFiles} />
+              </ScrollArea>
             </Card>
           </div>
 
@@ -413,11 +492,11 @@ export default function DebugPanel() {
               )}
             </Card>
 
-            <Card title="Upcoming queue" sub={`${data.queue?.upcoming?.length ?? 0} tracks`} bodyClass="max-h-80 overflow-y-auto">
+            <Card title="Upcoming queue" sub={`${data.queue?.upcoming?.length ?? 0} tracks`}>
               {(data.queue?.upcoming?.length ?? 0) === 0 ? (
                 <span className="field-hint italic">queue empty</span>
               ) : (
-                <div>
+                <ScrollArea className="max-h-80">
                   {data.queue?.upcoming?.map((t, i) => (
                     <div key={i} className="track-row grid grid-cols-[24px_1fr_auto]">
                       <span className="idx">{i + 1}</span>
@@ -431,7 +510,7 @@ export default function DebugPanel() {
                       )}
                     </div>
                   ))}
-                </div>
+                </ScrollArea>
               )}
             </Card>
           </div>
@@ -453,30 +532,105 @@ export default function DebugPanel() {
 
           {/* ── DJ LOG ─────────────────────────────────────── */}
           <Card title="DJ log" sub={`${data.queue?.djLogCount} total · last 30${data.timezone ? ` · times in ${data.timezone}` : ''}`}>
-            <div className="grid max-h-72 gap-1 overflow-y-auto">
-              <AnimatePresence initial={false} mode="popLayout">
-                {(data.queue?.djLog || []).map(e => (
-                  <m.div
-                    key={e.id}
-                    layout
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.14, ease: [0.2, 0.7, 0.2, 1] }}
-                    className={`log ${kindTone(e.kind)}`}
-                  >
-                    <span className="t">
-                      {fmtClock(e.t, data.timezone, data.locale) || '—'}
-                    </span>
-                    <span className="k">[{e.kind}]</span>
-                    <span className="msg">{e.message}</span>
-                  </m.div>
-                ))}
-              </AnimatePresence>
-            </div>
+            <ScrollArea className="max-h-72">
+              <div className="grid gap-1">
+                <AnimatePresence initial={false} mode="popLayout">
+                  {(data.queue?.djLog || []).map(e => (
+                    <m.div
+                      key={e.id}
+                      layout
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.14, ease: [0.2, 0.7, 0.2, 1] }}
+                      className={`log ${kindTone(e.kind)}`}
+                    >
+                      <span className="t">
+                        {fmtClock(e.t, data.timezone, data.locale) || '—'}
+                      </span>
+                      <span className="k">[{e.kind}]</span>
+                      <span className="msg">{e.message}</span>
+                    </m.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </ScrollArea>
           </Card>
         </>
       )}
+    </div>
+  );
+}
+
+// Daily token budget meter (health-strip header). The ai-elements Context
+// ring shows today's spend against the cap on hover; the Pill mirrors the
+// controller's budgetMode() tier. No modelId/cost — self-hosted models have
+// no USD price. Renders nothing unless the cap is switched on.
+function BudgetMeter({ budget }: { budget: DebugBudget }) {
+  const cap = budget.cap ?? 0;
+  const used = budget.usedToday ?? 0;
+  if (!budget.enabled || cap <= 0) return null;
+  const mode = budget.mode || 'normal';
+  const compact = (n: number) =>
+    new Intl.NumberFormat('en-US', { notation: 'compact' }).format(n);
+  const pct = new Intl.NumberFormat('en-US', {
+    style: 'percent',
+    maximumFractionDigits: 1,
+  }).format(used / cap);
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="caption">tokens</span>
+      <Context maxTokens={cap} usedTokens={used}>
+        <ContextTrigger className="h-auto gap-1 rounded-none px-1.5 py-0.5 text-[11px]" />
+        {/* bg-bg (opaque): --overlay is translucent and lets the strip below
+            bleed through a floating card. */}
+        <ContextContent align="start" className="rounded-none border-ink bg-bg">
+          {/* Custom header children: the stock header's Progress bar paints
+              bg-muted, which is a text colour in this theme, not a surface. */}
+          <ContextContentHeader>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span>{pct} of daily cap</span>
+              <span className="mono-num text-muted">
+                {compact(used)} / {compact(cap)}
+              </span>
+            </div>
+          </ContextContentHeader>
+          <ContextContentBody className="grid gap-1.5">
+            <BudgetRow label="used today" value={used.toLocaleString('en-US')} />
+            <BudgetRow
+              label="remaining"
+              value={(budget.remaining ?? Math.max(0, cap - used)).toLocaleString('en-US')}
+            />
+            <BudgetRow
+              label="soft threshold"
+              value={budget.softPct != null ? `${budget.softPct}%` : '—'}
+            />
+            <BudgetRow label="requests exempt" value={budget.exemptRequests ? 'yes' : 'no'} />
+          </ContextContentBody>
+        </ContextContent>
+      </Context>
+      <Pill
+        tone={mode === 'soft' ? 'accent' : undefined}
+        className={mode === 'hard' ? 'border-[var(--danger)] text-[var(--danger)]' : undefined}
+        title={
+          mode === 'hard'
+            ? 'cap reached — no model calls until the UTC day rolls'
+            : mode === 'soft'
+              ? 'soft threshold reached — cheap picker, optional segments muted'
+              : 'under budget'
+        }
+      >
+        budget {mode}
+      </Pill>
+    </span>
+  );
+}
+
+function BudgetRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="caption">{label}</span>
+      <span className="mono-num">{value}</span>
     </div>
   );
 }
@@ -516,51 +670,140 @@ function TtsRouting({ tts }: { tts: DebugTts }) {
           out of <strong>{s.engine}</strong> instead. Fix it in Settings → TTS voice.
         </V3Alert>
       )}
+      <TtsCallList calls={tts.recentCalls || []} />
     </div>
   );
+}
+
+// Per-call TTS log — the raw speak() ring from the controller, rendered with
+// the same expandable-row pattern as the LLM / Subsonic call lists. A row in
+// danger tone means the call failed outright; an "↳ from <engine>" note means
+// the segment still aired but not through the engine the persona asked for.
+function TtsCallList({ calls }: { calls: TtsCall[] }) {
+  const [filter, setFilter] = useState('all');
+  const kinds = Array.from(new Set(calls.map(c => c.kind).filter(Boolean) as string[]));
+  const shown = filter === 'all' ? calls : calls.filter(c => c.kind === filter);
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="caption mr-1">recent calls</span>
+        <FilterChip active={filter === 'all'} onClick={() => setFilter('all')}>
+          all {calls.length}
+        </FilterChip>
+        {kinds.map(k => (
+          <FilterChip key={k} active={filter === k} onClick={() => setFilter(k)}>
+            {k} {calls.filter(c => c.kind === k).length}
+          </FilterChip>
+        ))}
+      </div>
+      <ScrollArea className="max-h-[420px]">
+        <div className="grid gap-1.5">
+        {shown.length === 0 && (
+          <span className="field-hint italic">
+            {calls.length === 0 ? 'no spoken segments yet' : 'no calls match this filter'}
+          </span>
+        )}
+        {shown.map((c, i) => (
+          <details key={i} className="border border-separator-strong">
+            <summary className="grid cursor-pointer grid-cols-[auto_auto_1fr_auto_auto] items-center gap-2.5 px-2.5 py-2">
+              <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
+                {c.ok ? '✓' : '✗'}
+              </span>
+              <span className="grid leading-tight">
+                <span className="text-[12px] font-bold">{c.kind}</span>
+                <span className={cn('text-[10px]', c.fellBack ? 'text-[var(--danger)]' : 'text-muted')}>
+                  {c.engine}
+                </span>
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                {c.fellBack && (
+                  <span className="caption flex-none text-[var(--danger)]">↳ from {c.requested}</span>
+                )}
+                <span className="min-w-0 overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">
+                  {oneLine(c.text)}
+                </span>
+              </span>
+              <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
+              <span className="mono-num text-[10px] text-muted">
+                {c.t ? new Date(c.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+              </span>
+            </summary>
+            <div className="grid gap-1 px-2.5 pt-1 pb-2.5">
+              <div className="caption text-[9px]">
+                {c.persona ? `${c.persona} · ` : ''}{c.chars ?? 0} chars
+                {c.fellBack ? ` · requested ${c.requested}, spoke via ${c.engine}` : ''}
+              </div>
+              {c.error && (
+                <CallSection label="error" tone="err" preview={oneLine(c.error)}>
+                  {c.error}
+                </CallSection>
+              )}
+              {c.text && (
+                <CallSection label="spoken text" preview={oneLine(c.text)}>
+                  {c.text}
+                </CallSection>
+              )}
+            </div>
+          </details>
+        ))}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+// Session roles are station-specific (dj / track / segment / listener…) — only
+// user/assistant map straight through; everything else renders as "system"
+// with the original role·kind kept visible as a label chip.
+function mapChatRole(role?: string): 'user' | 'assistant' | 'system' {
+  return role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'system';
 }
 
 function SessionChat({ session }: { session: DebugSession }) {
   const msgs = session.messages || [];
   return (
-    <div className="grid max-h-[360px] gap-1.5 overflow-y-auto">
-      {session.handoff && (
-        <div className="caption italic">
-          ↪ continuing from {session.handoff}
-        </div>
-      )}
-      {msgs.length === 0 && (
-        <span className="field-hint italic">no turns yet</span>
-      )}
-      {msgs.map((m, i) => (
-        <div
-          key={i}
-          className={cn(
-            // Time + role·kind share the first line; text wraps to a full-width
-            // second row below them.
-            'grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-0.5 py-0.5 text-[12px]',
-            i < msgs.length - 1 && 'border-b border-dashed border-separator-strong',
-          )}
-        >
-          <span className="mono-num text-[10px] text-muted">
-            {m.t ? new Date(m.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
-          </span>
-          <span
-            className={cn(
-              'text-[9px] tracking-[0.12em] uppercase',
-              m.role === 'dj' || m.role === 'segment'
-                ? 'text-vermilion'
-                : m.role === 'track'
-                  ? 'text-ink'
-                  : 'text-muted',
-            )}
-          >
-            {m.role}{m.kind ? `·${m.kind}` : ''}
-          </span>
-          <span className="col-span-2 break-words whitespace-pre-wrap">{m.text}</span>
-        </div>
-      ))}
-    </div>
+    // StickToBottom's inner scroll element is height:100%, so it needs a
+    // definite outer height to scroll — but a fixed 360px box around two
+    // turns is dead space. Short sessions size to content; long ones get the
+    // fixed, latest-turn-pinned scroll region.
+    <Conversation className={cn('w-full', msgs.length > 6 ? 'h-[360px]' : 'h-auto')}>
+      <ConversationContent className="gap-1.5 p-0">
+        {session.handoff && (
+          <div className="caption italic">
+            ↪ continuing from {session.handoff}
+          </div>
+        )}
+        {msgs.length === 0 && (
+          <span className="field-hint italic">no turns yet</span>
+        )}
+        {msgs.map((m, i) => (
+          <Message key={i} from={mapChatRole(m.role)} className="max-w-full gap-0.5">
+            <span className="flex items-baseline gap-2">
+              <span className="mono-num text-[10px] text-muted">
+                {m.t ? new Date(m.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+              </span>
+              <span
+                className={cn(
+                  'text-[9px] tracking-[0.12em] uppercase',
+                  m.role === 'dj' || m.role === 'segment'
+                    ? 'text-vermilion'
+                    : m.role === 'track'
+                      ? 'text-ink'
+                      : 'text-muted',
+                )}
+              >
+                {m.role}{m.kind ? `·${m.kind}` : ''}
+              </span>
+            </span>
+            <MessageContent className="rounded-none text-[12px] group-[.is-user]:rounded-none group-[.is-user]:bg-[var(--overlay)] group-[.is-user]:px-2.5 group-[.is-user]:py-1.5 group-[.is-user]:text-ink">
+              {/* Speech scripts — plain text, never markdown (MessageResponse
+                  would eat asterisks and underscores). */}
+              <div className="break-words whitespace-pre-wrap">{m.text}</div>
+            </MessageContent>
+          </Message>
+        ))}
+      </ConversationContent>
+    </Conversation>
   );
 }
 
@@ -570,12 +813,15 @@ function HealthCell({ label, status, v, sub }: { label: string; status: 'ok' | '
       : status === 'idle' || status === 'off' ? 'bg-muted'
         : 'bg-[var(--danger)]';
   return (
-    <div className="grid gap-1 border-l border-separator-strong px-3.5 py-3">
+    // min-w-0 lets the 1fr strip column shrink below the value's min-content
+    // width, so an unbroken token (openrouter:openai/gpt-5-mini) wraps via
+    // break-words instead of spilling into the neighbouring cell.
+    <div className="grid min-w-0 gap-0.5 border-l border-separator-strong px-3.5 py-3">
       <div className="flex items-center gap-1.5">
         <span className={cn('size-1.5 rounded-full', tone)} />
         <span className="caption">{label}</span>
       </div>
-      <div className="text-[13px] font-bold break-words">{v}</div>
+      <div className="min-w-0 text-[13px] leading-snug font-bold break-words">{v}</div>
       <div className="caption text-[9px]">{sub}</div>
     </div>
   );
@@ -824,6 +1070,43 @@ function oneLine(s: unknown, n = 110): string {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
+// Structured-output responses and JSON user payloads (pickNextTrack,
+// generateSegment, matchRequest…) are stored as compact JSON strings —
+// pretty-print them for the expanded view. Free text and truncated JSON
+// (older ring entries capped mid-string) fall through unchanged.
+function prettyMaybeJson(s: string): string {
+  const t = s.trim();
+  if (!t.startsWith('{') && !t.startsWith('[')) return s;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return s;
+  }
+}
+
+// Dense newsprint-tuned CodeBlock: shiki-highlighted JSON with a copy button.
+// Only ever rendered inside an OPEN CallSection / ToolContent, so collapsed
+// rows never pay the tokenization cost (see CallSection's open-state gate).
+function JsonBlock({ value }: { value: unknown }) {
+  const code = typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2);
+  return (
+    <CodeBlock
+      code={code}
+      language="json"
+      className="rounded-none border-separator-strong [&_code]:text-[11px] [&_pre]:p-2.5 [&_pre]:text-[11px]"
+    >
+      <CodeBlockCopyButton className="absolute top-1 right-1 z-10 size-6" />
+    </CodeBlock>
+  );
+}
+
+// Body text for a call section: JSON payloads get a highlighted CodeBlock
+// with copy, prose renders as-is.
+function JsonOrText({ text }: { text: string }) {
+  const pretty = prettyMaybeJson(text);
+  return pretty !== text ? <JsonBlock value={pretty} /> : <>{text}</>;
+}
+
 interface CallSectionProps {
   label: string;
   count?: number;
@@ -833,8 +1116,16 @@ interface CallSectionProps {
 }
 
 function CallSection({ label, count, preview, tone, children }: CallSectionProps) {
+  // Children of a closed <details> still MOUNT — and with a 120-entry ring
+  // whose bodies now hold shiki CodeBlocks, eager mounting would tokenize
+  // every collapsed row. Mirror the element's open state and only mount the
+  // body once the section is actually expanded.
+  const [open, setOpen] = useState(false);
   return (
-    <details className="border border-separator-strong bg-bg">
+    <details
+      className="border border-separator-strong bg-bg"
+      onToggle={e => setOpen(e.currentTarget.open)}
+    >
       <summary className="flex cursor-pointer items-baseline gap-2 px-2 py-1">
         <span className={cn('caption flex-none', tone === 'err' && 'text-[var(--danger)]')}>
           {label}{count != null ? ` · ${count}` : ''}
@@ -851,7 +1142,7 @@ function CallSection({ label, count, preview, tone, children }: CallSectionProps
           tone === 'err' ? 'text-[var(--danger)]' : 'text-ink',
         )}
       >
-        {children}
+        {open ? children : null}
       </div>
     </details>
   );
@@ -859,60 +1150,69 @@ function CallSection({ label, count, preview, tone, children }: CallSectionProps
 
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
   return (
-    <div className="grid gap-2">
-      {messages.map((m, i) => {
-        const body = typeof m.content === 'string'
-          ? m.content
-          : JSON.stringify(m.content, null, 2);
-        return (
-          <div key={i} className="border-l-2 border-separator-strong pl-2">
+    // Same auto-vs-fixed height dance as SessionChat: short exchanges size to
+    // content, agent runs (~40 turns) get a bounded, bottom-pinned scroll.
+    <Conversation className={cn('w-full', messages.length > 4 ? 'h-80' : 'h-auto')}>
+      <ConversationContent className="gap-2 p-0">
+        {messages.map((m, i) => (
+          <Message key={i} from={mapChatRole(m.role)} className="max-w-full gap-0.5">
             <span
               className={cn(
                 'text-[9px] tracking-[0.12em] uppercase',
                 m.role === 'assistant' ? 'text-vermilion' : 'text-muted',
               )}
             >
-              {m.role}
+              {m.role || 'system'}
             </span>
-            <div className="break-words whitespace-pre-wrap">{body}</div>
-          </div>
-        );
-      })}
-    </div>
+            <MessageContent className="rounded-none text-[11px] group-[.is-user]:rounded-none group-[.is-user]:bg-[var(--overlay)] group-[.is-user]:px-2.5 group-[.is-user]:py-1.5 group-[.is-user]:text-ink">
+              {typeof m.content === 'string' ? (
+                <div className="break-words whitespace-pre-wrap">{m.content}</div>
+              ) : (
+                <JsonBlock value={m.content} />
+              )}
+            </MessageContent>
+          </Message>
+        ))}
+      </ConversationContent>
+    </Conversation>
   );
+}
+
+// The LLM ring stores tool calls only after they've run — there's no per-tool
+// status flag, so a result object carrying an `error` key is the failure
+// signal; everything else completed.
+function toolErrorText(result: unknown): string | undefined {
+  if (result && typeof result === 'object' && !Array.isArray(result) && 'error' in result) {
+    const e = (result as { error?: unknown }).error;
+    if (e != null && e !== false && e !== '') {
+      return typeof e === 'string' ? e : JSON.stringify(e);
+    }
+  }
+  return undefined;
 }
 
 function ToolList({ calls }: { calls: Array<{ name?: string; args?: unknown; result?: unknown }> }) {
   return (
     <div className="grid gap-1">
       {calls.map((t, i) => {
-        const result = t.result == null
-          ? null
-          : (typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2));
+        const err = toolErrorText(t.result);
         return (
-          <details key={i} className="border border-separator-strong bg-[var(--card-bg)]">
-            <summary className="flex cursor-pointer items-baseline gap-2 px-2 py-1">
-              <span className="mono-num text-muted">{i + 1}</span>
-              <span className="font-bold">{t.name}</span>
-              <span className="min-w-0 overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">
-                {oneLine(t.args ? JSON.stringify(t.args) : '', 90)}
-              </span>
-            </summary>
-            <div className="grid gap-1 px-2.5 pt-1 pb-2 text-[11px]">
-              <span className="caption">args</span>
-              <pre className="m-0 font-[inherit] break-words whitespace-pre-wrap">
-                {JSON.stringify(t.args ?? {}, null, 2)}
-              </pre>
-              {result != null && (
-                <>
-                  <span className="caption">result</span>
-                  <pre className="m-0 font-[inherit] break-words whitespace-pre-wrap">
-                    {result}
-                  </pre>
-                </>
-              )}
-            </div>
-          </details>
+          <Tool
+            key={i}
+            className="mb-0 w-full rounded-none border-separator-strong bg-[var(--card-bg)]"
+          >
+            <ToolHeader
+              // Completed calls from a log: success → output-available,
+              // failure → output-error. ToolUIPart types are `tool-${name}`.
+              type={`tool-${t.name || 'unknown'}` as `tool-${string}`}
+              state={err ? 'output-error' : 'output-available'}
+              className="px-2.5 py-1.5"
+            />
+            <ToolContent className="space-y-2 p-2.5">
+              <ToolInput input={t.args ?? {}} />
+              <ToolOutput output={err ? undefined : t.result} errorText={err} />
+            </ToolContent>
+          </Tool>
         );
       })}
     </div>
@@ -1003,78 +1303,91 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
           <code className="break-all">{dbg?.file || `${'…'}/logs/llm-debug.log`}</code>
         </span>
       </div>
-      <div className="grid max-h-[600px] gap-1.5 overflow-y-auto">
-        {shown.length === 0 && (
-          <span className="field-hint italic">
-            {calls.length === 0 ? 'no calls yet' : 'no calls match this filter'}
-          </span>
-        )}
-        {shown.map((c, i) => (
-          <details
-            key={i}
-            className={cn(
-              'border border-separator-strong',
-              i === 0 && filter === 'all' ? 'bg-[var(--ink-softer)]' : 'bg-transparent',
-            )}
-          >
-            <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2.5 px-2.5 py-2">
-              <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
-                {c.ok ? '✓' : '✗'}
-              </span>
-              <span className="text-[12px] font-bold">{c.kind}</span>
-              <span className="caption text-[10px]">
-                {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
-                {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
-              </span>
-              <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
-              <span className="mono-num text-[10px] text-muted">
-                {c.t ? new Date(c.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
-              </span>
-            </summary>
-            <div className="grid gap-1 px-2.5 pt-1 pb-2.5">
-              <div className="caption text-[9px]">
-                {c.model || '—'}{c.via ? ` · ${c.via}` : ''}
+      <ScrollArea className="max-h-[600px]">
+        <div className="grid gap-1.5">
+          {shown.length === 0 && (
+            <span className="field-hint italic">
+              {calls.length === 0 ? 'no calls yet' : 'no calls match this filter'}
+            </span>
+          )}
+          {shown.map((c, i) => (
+            <details
+              key={i}
+              className={cn(
+                'border border-separator-strong',
+                i === 0 && filter === 'all' ? 'bg-[var(--ink-softer)]' : 'bg-transparent',
+              )}
+            >
+              <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2.5 px-2.5 py-2">
+                <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
+                  {c.ok ? '✓' : '✗'}
+                </span>
+                <span className="text-[12px] font-bold">{c.kind}</span>
+                <span className="caption text-[10px]">
+                  {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
+                  {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
+                </span>
+                <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
+                <span className="mono-num text-[10px] text-muted">
+                  {c.t ? new Date(c.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+                </span>
+              </summary>
+              <div className="grid gap-1 px-2.5 pt-1 pb-2.5">
+                <div className="caption text-[9px]">
+                  {c.model || '—'}{c.via ? ` · ${c.via}` : ''}
+                </div>
+                {c.error && (
+                  <CallSection label="error" tone="err" preview={oneLine(c.error)}>
+                    {c.error}
+                  </CallSection>
+                )}
+                {c.responseText && (
+                  <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
+                    {/* Free text straight from the model — may contain
+                        markdown, so this is the one MessageResponse call. */}
+                    <MessageResponse className="whitespace-normal">
+                      {c.responseText}
+                    </MessageResponse>
+                  </CallSection>
+                )}
+                {c.user && (
+                  <CallSection label="user" preview={oneLine(c.user)}>
+                    <JsonOrText text={c.user} />
+                  </CallSection>
+                )}
+                {(c.system || c.systemPreview) && (
+                  <CallSection label="system" preview={oneLine(c.system || c.systemPreview)}>
+                    {c.system || `${c.systemPreview}…`}
+                  </CallSection>
+                )}
+                {Array.isArray(c.messages) && c.messages.length > 0 && (
+                  <CallSection
+                    label="messages"
+                    count={c.messages.length}
+                    preview={oneLine(c.messages[c.messages.length - 1]?.content)}
+                  >
+                    <MessageList messages={c.messages} />
+                  </CallSection>
+                )}
+                {Array.isArray(c.toolCalls) && c.toolCalls.length > 0 && (
+                  <CallSection
+                    label="tools"
+                    count={c.toolCalls.length}
+                    preview={c.toolCalls.map(t => t.name).join(' → ')}
+                  >
+                    <ToolList calls={c.toolCalls} />
+                  </CallSection>
+                )}
+                {c.response && (
+                  <CallSection label="response" preview={oneLine(c.response)}>
+                    <JsonOrText text={c.response} />
+                  </CallSection>
+                )}
               </div>
-              {c.error && (
-                <CallSection label="error" tone="err" preview={oneLine(c.error)}>
-                  {c.error}
-                </CallSection>
-              )}
-              {c.user && (
-                <CallSection label="user" preview={oneLine(c.user)}>{c.user}</CallSection>
-              )}
-              {(c.system || c.systemPreview) && (
-                <CallSection label="system" preview={oneLine(c.system || c.systemPreview)}>
-                  {c.system || `${c.systemPreview}…`}
-                </CallSection>
-              )}
-              {Array.isArray(c.messages) && c.messages.length > 0 && (
-                <CallSection
-                  label="messages"
-                  count={c.messages.length}
-                  preview={oneLine(c.messages[c.messages.length - 1]?.content)}
-                >
-                  <MessageList messages={c.messages} />
-                </CallSection>
-              )}
-              {Array.isArray(c.toolCalls) && c.toolCalls.length > 0 && (
-                <CallSection
-                  label="tools"
-                  count={c.toolCalls.length}
-                  preview={c.toolCalls.map(t => t.name).join(' → ')}
-                >
-                  <ToolList calls={c.toolCalls} />
-                </CallSection>
-              )}
-              {c.response && (
-                <CallSection label="response" preview={oneLine(c.response)}>
-                  {c.response}
-                </CallSection>
-              )}
-            </div>
-          </details>
-        ))}
-      </div>
+            </details>
+          ))}
+        </div>
+      </ScrollArea>
     </Card>
   );
 }
@@ -1131,47 +1444,49 @@ function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefined }) {
               </FilterChip>
             ))}
           </div>
-          <div className="grid max-h-[480px] gap-1.5 overflow-y-auto">
-            {shown.length === 0 && (
-              <span className="field-hint italic">
-                {calls.length === 0 ? 'no calls yet' : 'no calls match this filter'}
-              </span>
-            )}
-            {shown.map((c, i) => (
-              <details key={i} className="border border-separator-strong">
-                <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2.5 px-2.5 py-2">
-                  <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
-                    {c.ok ? '✓' : '✗'}
-                  </span>
-                  <span className="text-[12px] font-bold">{c.endpoint}</span>
-                  <span className="caption text-[10px]">{c.count} results</span>
-                  <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
-                  <span className="mono-num text-[10px] text-muted">
-                    {c.t ? new Date(c.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
-                  </span>
-                </summary>
-                <div className="grid gap-1 px-2.5 pt-1 pb-2.5">
-                  {c.error && (
-                    <CallSection label="error" tone="err" preview={oneLine(c.error)}>
-                      {c.error}
+          <ScrollArea className="max-h-[480px]">
+            <div className="grid gap-1.5">
+              {shown.length === 0 && (
+                <span className="field-hint italic">
+                  {calls.length === 0 ? 'no calls yet' : 'no calls match this filter'}
+                </span>
+              )}
+              {shown.map((c, i) => (
+                <details key={i} className="border border-separator-strong">
+                  <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2.5 px-2.5 py-2">
+                    <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
+                      {c.ok ? '✓' : '✗'}
+                    </span>
+                    <span className="text-[12px] font-bold">{c.endpoint}</span>
+                    <span className="caption text-[10px]">{c.count} results</span>
+                    <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
+                    <span className="mono-num text-[10px] text-muted">
+                      {c.t ? new Date(c.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+                    </span>
+                  </summary>
+                  <div className="grid gap-1 px-2.5 pt-1 pb-2.5">
+                    {c.error && (
+                      <CallSection label="error" tone="err" preview={oneLine(c.error)}>
+                        {c.error}
+                      </CallSection>
+                    )}
+                    <CallSection label="params" preview={oneLine(JSON.stringify(c.params || {}))}>
+                      <JsonBlock value={c.params || {}} />
                     </CallSection>
-                  )}
-                  <CallSection label="params" preview={oneLine(JSON.stringify(c.params || {}))}>
-                    {JSON.stringify(c.params || {}, null, 2)}
-                  </CallSection>
-                  {Array.isArray(c.songIds) && c.songIds.length > 0 && (
-                    <CallSection
-                      label="songs"
-                      count={c.songIds.length}
-                      preview={c.songIds.map(s => `${s.title} — ${s.artist}`).join(' · ')}
-                    >
-                      {c.songIds.map(s => `${s.title} — ${s.artist}`).join('\n')}
-                    </CallSection>
-                  )}
-                </div>
-              </details>
-            ))}
-          </div>
+                    {Array.isArray(c.songIds) && c.songIds.length > 0 && (
+                      <CallSection
+                        label="songs"
+                        count={c.songIds.length}
+                        preview={c.songIds.map(s => `${s.title} — ${s.artist}`).join(' · ')}
+                      >
+                        {c.songIds.map(s => `${s.title} — ${s.artist}`).join('\n')}
+                      </CallSection>
+                    )}
+                  </div>
+                </details>
+              ))}
+            </div>
+          </ScrollArea>
         </div>
       </div>
     </Card>

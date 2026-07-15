@@ -5,7 +5,9 @@
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
+import * as blocklist from '../music/blocklist.js';
 import * as db from '../music/library-db.js';
+import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
 import * as lastfm from '../music/lastfm.js';
@@ -17,8 +19,23 @@ import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
+import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import * as mapProjection from '../music/map-projection.js';
 
 export const router = express.Router();
+
+// The subset of a song/track row these routes read and shape — from Subsonic
+// (untyped), a library-db TrackRecord, or an inbound request body.
+interface LibrarySong {
+  id: string;
+  albumId?: string;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  year?: number | string | null;
+  genre?: string | null;
+  duration?: number | null;
+}
 
 // ---------------------------------------------------------------------------
 // GET /library/browse — filter the tagged index.
@@ -69,7 +86,59 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
-  } catch (err: any) {
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/search-sound?q=<description>&limit=N — natural-language
+// "sounds like" search for the admin Search tab. Embeds the description
+// through the CLAP text tower (analyzer /embed-text) and KNNs it against the
+// stored track audio vectors — the same path as the picker's searchBySound
+// tool, exposed to operators. The UI gates the mode on
+// coverage.soundSearchAvailable; the 503 here is the belt-and-suspenders
+// answer when the capability drops between polls.
+// ---------------------------------------------------------------------------
+router.get('/library/search-sound', requireAdmin, async (req, res) => {
+  const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 30), 1), 60);
+  try {
+    await library.load();
+    // Interactive call — same short deadline rationale as the picker tool: a
+    // bulk analysis pass may hold the backend's single-threaded worker, and
+    // "unavailable right now" beats hanging the admin UI behind it.
+    const vecs = await analyzer.embedTexts([q], { timeoutMs: 20_000 });
+    if (!vecs || !vecs[0]) {
+      return res.status(503).json({
+        error: 'sound search unavailable — needs the heavy analyzer (CLAP text tower) and audio-analysed tracks',
+      });
+    }
+    // Wide KNN, capped after the archive filter so junk rows don't eat slots.
+    const hits = library.tracksByAudioVector(vecs[0], Math.max(limit * 2, 60));
+    const results = hits
+      .filter((t) => !subsonic.isStationArchive(t))
+      .slice(0, limit)
+      .map((t) => ({
+        id: t.id,
+        title: t.title ?? null,
+        artist: t.artist ?? null,
+        album: t.album ?? null,
+        year: t.year ?? null,
+        genre: t.genre ?? null,
+        duration: t.durationSec ?? null,
+        moods: t.moods ?? [],
+        energy: t.energy ?? null,
+        source: t.source ?? null,
+        bpm: t.bpm ?? null,
+        musicalKey: t.musicalKey ?? null,
+        loudnessLufs: t.loudnessLufs ?? null,
+        instrumental: t.vocalRanges == null ? null : t.vocalRanges.length === 0,
+        similarity: typeof t._similarity === 'number' ? t._similarity : null,
+      }));
+    res.json({ results });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -94,7 +163,7 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
       .map(([value, songCount]) => ({ value, songCount }))
       .sort((a, b) => b.songCount - a.songCount);
     res.json({ genres: list });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -110,7 +179,7 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
   try {
     await library.load();
     res.json(buildGenreSuggest());
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -137,12 +206,17 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // (Libraries above ~3k render on the canvas renderer; only small ones keep the
 // animated SVG path.)
 const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 25000);
-const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 100000);
+// The 500k ceiling is stress-verified (scripts/observatory-scale.test.ts + the
+// browser harness, both run at 200k/400k/500k): lean sampled reads stay ~1–4 s,
+// zoom holds 60 fps with a one-time geometry stall on load (~2 s at 200k,
+// ~6 s at 500k, plus brief pan hitches just after). Payloads get big past
+// 200k (500k ≈ 190 MB raw / ~26 MB gzipped), so the DEFAULT stays 25k — the
+// ceiling is opt-in headroom via the MAP SIZE control. OBSERVATORY_HARD_MAX
+// still overrides both ways.
+const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 500000);
 router.get('/library/observatory', requireAdmin, async (req, res) => {
   try {
     await library.load();
-    const stats = library.stats();
-    const total = stats.total;
     const requested = Number(req.query.max);
     const max = Math.min(
       OBSERVATORY_HARD_MAX,
@@ -152,7 +226,11 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
     // Revalidation: the payload is a pure function of library rows + max, so a
     // token that changes on any library write is a sound ETag. Matching lets us
     // skip the (multi-MB at high caps) body AND the row scan that builds it.
-    const etag = `W/"obs-${db.changeToken()}-${max}"`;
+    // The projection-running flag rides in the token too — it flips without a
+    // DB write, and a 304 must not hide "job in flight" from the UI.
+    // Checked BEFORE stats(): computeStats() is itself a multi-second scan on
+    // a very large library, and a revalidation hit must not pay for it.
+    const etag = `W/"obs-${db.changeToken()}-${max}-${mapProjection.projectionStatus().running ? 1 : 0}"`;
     res.set('ETag', etag);
     res.set('Cache-Control', 'private, no-cache');
     const inm = req.headers['if-none-match'];
@@ -160,6 +238,8 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       return res.status(304).end();
     }
 
+    const stats = library.stats();
+    const total = stats.total;
     const sampled = total > max;
     const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
     const truncated = sampled;
@@ -184,9 +264,14 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         // Cheap acoustic scalars for the Observatory's colour-by + aggregate
         // panels. The full curves/ranges stay on the per-track dossier endpoint.
         loudnessLufs: t.loudnessLufs,
-        paceMean: library.paceMeanOf(t.pace),
-        // Tri-state: 'vocal' | 'instrumental' | null (not analysed for vocals).
-        vocal: t.vocalRanges == null ? null : t.vocalRanges.length ? 'vocal' : 'instrumental',
+        // paceMean + tri-state vocal are computed in the lean bulk read
+        // (rowToObservatory) — the fat acoustic blobs never leave SQLite.
+        paceMean: t.paceMean,
+        vocal: t.vocal,
+        // Sound-map coordinates (UMAP of the CLAP vector, [0,1] per axis).
+        // null → the client falls back to its genre-cluster layout.
+        mapX: t.mapX,
+        mapY: t.mapY,
       }));
     res.json({
       tracks,
@@ -195,6 +280,9 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       max,
       defaultMax: OBSERVATORY_DEFAULT_MAX,
       hardMax: OBSERVATORY_HARD_MAX,
+      // Sound-map provenance — lets the UI say whether nodes sit by sound
+      // (projection done) or by genre (fallback), and show job progress.
+      mapProjection: mapProjection.projectionStatus(),
       moodVocab: settings.SHOW_MOODS,
       stats: {
         total: stats.total,
@@ -208,7 +296,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -233,7 +321,7 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
     const audioVec = db.getAudioVector(id);
     const mixNext = library
       .tracksLikeThis(id, 8)
-      .map((n: any) => ({
+      .map((n) => ({
         id: n.id,
         title: n.title,
         artist: n.artist,
@@ -291,7 +379,23 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
       audioEmbedding: audioVec ? Array.from(audioVec) : null,
       mixNext,
     });
-  } catch (err: any) {
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/observatory/project — force a sound-map projection pass now
+// (the boot hook only fires when the map is stale). Spawns the standalone
+// UMAP child; 409 when one is already running. Minutes-long at library scale —
+// the client polls the bulk endpoint's `mapProjection` status for completion.
+// ---------------------------------------------------------------------------
+router.post('/library/observatory/project', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    const started = mapProjection.startProjection();
+    res.status(started ? 202 : 409).json({ started, status: mapProjection.projectionStatus() });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -309,7 +413,7 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
   const startAlbumOffset = cursor.albumOffset;
   const startSongIndex = cursor.songIndex;
 
-  const rows: any[] = [];
+  const rows: LibrarySong[] = [];
   let nextCursor: string | null = null;
   let visited = 0;
   const SCAN_BUDGET = 5000; // avoid pathological full-library walks per request
@@ -323,7 +427,7 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
       if (albums.length === 0) break;
       for (let i = 0; i < albums.length; i++) {
         const album = albums[i];
-        let songs: any[] = [];
+        let songs: LibrarySong[] = [];
         try { songs = await subsonic.getAlbum(album.id); } catch { songs = []; }
         for (let j = (i === 0 ? songIndex : 0); j < songs.length; j++) {
           const s = songs[j];
@@ -353,7 +457,7 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
       songIndex = 0;
     }
     res.json({ rows, nextCursor });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -368,7 +472,7 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
   try {
     if (req.query?.refresh === '1') coverage.refresh();
     res.json(await coverage.get());
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -437,7 +541,7 @@ router.post('/library/reset', requireAdmin, async (_req, res) => {
     coverage.refresh();
     queue.log('warn', 'library reset: wiped all tagging data (tags, embeddings, acoustics, enrichment)');
     res.json({ ok: true });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/library/reset failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -464,16 +568,16 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
   if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
   try {
     await library.load();
-    let song: any = req.body || {};
+    let song = req.body || {};
     if (!song.title || !song.artist) {
       // Reach back to Subsonic to fill metadata when the caller only sent an id.
       const found = await subsonic.search(`${song.title || ''} ${song.artist || ''}`.trim() || id, { songCount: 25 });
-      const hit = (found || []).find((s: any) => s.id === id);
+      const hit = (found || []).find((s) => s.id === id);
       if (hit) song = { ...hit, ...song };
     }
     if (!song.title) return res.status(404).json({ error: 'track metadata not found' });
 
-    const embedCfg: any = (settings.get() as any).embedding ?? {};
+    const embedCfg = settings.get().embedding ?? {};
     const enrichCfg = embedCfg.enrichment ?? {};
     // Tri-state gate, shared with tag-library.phaseEnrich via lastfmEnrichEnabled:
     // explicit `true` always enriches; explicit `false` never does; the default
@@ -502,7 +606,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         // else Navidrome's getArtistInfo2 — the same source the bulk tagger uses,
         // so single-track retag surfaces the same tags it would (issue #532).
         lastfmTags = await lastfm.getArtistTags(song.artist, { count: 10 });
-      } catch (err: any) {
+      } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
     }
@@ -510,7 +614,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       try {
         const raw = await subsonic.getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) lyricExcerpt = raw.trim();
-      } catch (err: any) {
+      } catch (err) {
         queue.log('warn', `/library/retag enrich(lyrics) ${id}: ${err.message}`);
       }
     }
@@ -542,7 +646,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         );
         const [vec] = await embeddings.embedDocTexts([text], textMode);
         if (vec) db.upsertTrackVector(id, vec);
-      } catch (err: any) {
+      } catch (err) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);
       }
     }
@@ -564,7 +668,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     await library.save();
     const tagged = library.get(id);
     res.json({ id, moods, energy, taggedAt: tagged?.taggedAt });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/library/retag failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -586,7 +690,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
   const id = req.body?.id;
   if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
   const moods = req.body?.moods;
-  if (!Array.isArray(moods) || moods.some((m: any) => typeof m !== 'string')) {
+  if (!Array.isArray(moods) || moods.some((m) => typeof m !== 'string')) {
     return res.status(400).json({ error: 'moods must be an array of strings' });
   }
   if (moods.length > 3) return res.status(400).json({ error: 'at most 3 moods per track' });
@@ -606,7 +710,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
 
     // Resolve the seed track — Subsonic first (carries albumId), library-db
     // row as fallback so already-indexed tracks work even if Navidrome misses.
-    let song: any = null;
+    let song: LibrarySong | null = null;
     try { song = await subsonic.getSong(id); } catch {}
     if (!song) {
       const row = db.getTrack(id);
@@ -614,7 +718,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     }
     if (!song) return res.status(404).json({ error: 'track not found' });
 
-    let targets: any[] = [song];
+    let targets: LibrarySong[] = [song];
     if (applyToAlbum) {
       if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
       targets = await subsonic.getAlbum(song.albumId);
@@ -663,8 +767,88 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
         energy: clearing ? null : energy,
       })),
     });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/library/manual-tag failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Never-play blocklist — station-level "never let this air" entries at
+// track/album/artist granularity. Backs the Block row action + Blocked tab in
+// /admin/library. Enforcement lives in music/blocklist.ts (subsonic chokepoint,
+// library-db sources, queue.push gate); these routes only manage the list.
+// ---------------------------------------------------------------------------
+
+router.get('/library/blocklist', requireAdmin, (_req, res) => {
+  res.json({ entries: blocklist.list() });
+});
+
+// Body: { type: 'track'|'album'|'artist', trackId } — the UI flow: block from a
+// track row, server resolves the album/artist ids + display snapshots. OR a
+// pre-resolved { type, id, name?, artist?, album? } for direct entries.
+router.post('/library/blocklist', requireAdmin, async (req, res) => {
+  const type = req.body?.type;
+  if (!['track', 'album', 'artist'].includes(type)) {
+    return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
+  }
+  try {
+    let input: { type: blocklist.BlockType; id: string; name?: string | null; artist?: string | null; album?: string | null };
+    const trackId = req.body?.trackId;
+    if (trackId && typeof trackId === 'string') {
+      // Resolve from a track row — Subsonic first (carries albumId/artistId),
+      // library-db fallback so track-blocking works even if Navidrome misses.
+      let song: any = null;
+      try { song = await subsonic.getSong(trackId); } catch {}
+      if (!song) {
+        const row = db.getTrack(trackId);
+        if (row && type === 'track') song = { id: row.id, title: row.title, artist: row.artist, album: row.album };
+      }
+      if (!song) return res.status(404).json({ error: 'track not found' });
+      if (type === 'track') {
+        input = { type, id: song.id, name: song.title ?? null, artist: song.artist ?? null, album: song.album ?? null };
+      } else if (type === 'album') {
+        if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
+        input = { type, id: song.albumId, name: song.album ?? null, artist: song.artist ?? null };
+      } else {
+        if (!song.artistId) return res.status(404).json({ error: 'artist not resolvable for this track' });
+        input = { type, id: song.artistId, name: song.artist ?? null };
+      }
+    } else {
+      const id = req.body?.id;
+      if (!id || typeof id !== 'string') return res.status(400).json({ error: 'trackId or id is required' });
+      input = { type, id, name: req.body?.name ?? null, artist: req.body?.artist ?? null, album: req.body?.album ?? null };
+    }
+
+    const entry = await blocklist.add(input);
+    if (!entry) return res.status(409).json({ error: 'already blocked' });
+
+    queue.log('blocked', `${entry.type} "${entry.name ?? entry.id}"${entry.artist && entry.type !== 'artist' ? ` — ${entry.artist}` : ''} added to the never-play blocklist`);
+    // Side-effects: drop now-blocked tracks from the upcoming queue, and
+    // rebuild auto.m3u so the LLM-free fallback stops carrying them (otherwise
+    // a blocked track could still air from it for up to autoQueueRefreshMinutes).
+    const purged = queue.purgeBlocked();
+    refreshAutoPlaylist().catch((err: any) => queue.log('error', `blocklist auto-playlist refresh failed: ${err.message}`));
+
+    res.status(201).json({ entry, purged });
+  } catch (err) {
+    queue.log('error', `/library/blocklist failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/library/blocklist/:type/:id', requireAdmin, async (req, res) => {
+  const { type, id } = req.params;
+  if (!['track', 'album', 'artist'].includes(type)) {
+    return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
+  }
+  try {
+    const removed = await blocklist.remove(type as blocklist.BlockType, id);
+    if (!removed) return res.status(404).json({ error: 'not on the blocklist' });
+    queue.log('blocked', `${type} ${id} removed from the never-play blocklist`);
+    res.status(204).end();
+  } catch (err) {
+    queue.log('error', `/library/blocklist delete failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -672,13 +856,13 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-function parseList(v: any): string[] {
-  if (Array.isArray(v)) return v.flatMap((x: any) => parseList(x));
+function parseList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.flatMap((x) => parseList(x));
   if (typeof v === 'string') return v.split(',').map(s => s.trim()).filter(Boolean);
   return [];
 }
 
-function parseIntSafe<T extends number | null>(v: any, dflt: T): number | T {
+function parseIntSafe<T extends number | null>(v: unknown, dflt: T): number | T {
   if (v == null || v === '') return dflt;
   const n = parseInt(String(v), 10);
   return Number.isFinite(n) ? n : dflt;

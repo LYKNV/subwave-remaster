@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { resolveActiveShow, get as getSettings } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
-import { zonedParts, zonedISODate } from './time.js';
+import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase } from './time.js';
 
 export function getTimeContext(date = new Date()) {
   const h = zonedParts(date).hour;
@@ -211,6 +211,15 @@ export function getClockContext(date = new Date()) {
   const minutesOfDay = h * 60 + m;
   return {
     hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+    // What the prompts show the model — the model speaks whatever clock shape
+    // it sees, so this follows the operator's locale (en-US → "1:05 pm")
+    // instead of always feeding 24-hour digits (issue: "thirteen oh five" on
+    // air with AM/PM selected in admin → Settings → Station).
+    display: clockDisplay(h, m, getSettings().locale === 'en-US'),
+    // Deterministic spoken hour for the hourly time check ("midnight", "one
+    // in the morning") — computed here so the model never converts 24-hour
+    // digits itself (it says "one in the morning" at 00:03).
+    spokenHour: spokenHourPhrase(h),
     isWeekend: dow === 0 || dow === 6,
     isLateNight: h < 5,
     isCommute: (minutesOfDay >= 450 && minutesOfDay < 570) ||  // 07:30-09:30
@@ -253,7 +262,10 @@ const SHOW_ENERGY_DELIVERY: Record<string, { speed: number; register: string }> 
 };
 
 export function energyForDaypart(date = new Date()) {
-  const pinned = SHOW_ENERGY_DELIVERY[resolveActiveShow(date)?.energy ?? ''];
+  // A multi-energy show (#929) speaks at its LEAD energy — vocal delivery
+  // needs one register, so the first selected band wins here even though the
+  // pick filters treat all bands equally.
+  const pinned = SHOW_ENERGY_DELIVERY[resolveActiveShow(date)?.energies?.[0] ?? ''];
   if (pinned) return pinned;
   const { period } = getTimeContext(date);
   const { isLateNight, isCommute } = getClockContext(date);
@@ -304,7 +316,10 @@ export async function getFullContext(at?: Date) {
   }
 
   // Show > festival > weather > time, in that order of priority for mood.
-  const dominantMood = activeShow?.mood || festival?.mood || weather.mood || time.mood;
+  // dominantMood is a single value by contract (scenario lines, session keys,
+  // mood-pool seeds), so a multi-mood show leads with its FIRST mood here; the
+  // pick paths union the full moods list themselves (picker/scheduler #929).
+  const dominantMood = activeShow?.moods?.[0] || festival?.mood || weather.mood || time.mood;
 
   // Live audience size, from the cached Icecast monitor. `count` is null when
   // it couldn't be read — callers treat that as "unknown" and stay quiet.

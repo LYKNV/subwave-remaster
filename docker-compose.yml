@@ -76,6 +76,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=${ICECAST_MAX_CLIENTS:-}
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=${TZ:-Europe/London}
     extra_hosts:
@@ -216,6 +219,11 @@ services:
       # share-card tags render per-request. Define SITE_URL once in .env and
       # both build-arg and runtime env pick it up.
       - SITE_URL=${SITE_URL:-}
+      # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
+      # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
+      # turn on with a `web` recreate — no image rebuild. The build-arg above
+      # still bakes it for images built with a value.
+      - GA_ID=${NEXT_PUBLIC_GA_ID:-}
       # Server-side base URL for generateMetadata on the force-dynamic homepage
       # to read the live station name from the controller. Internal compose
       # network name — not exposed to the browser (which uses /api via Caddy).
@@ -272,6 +280,11 @@ services:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
       # Default voice id used by PocketTTS when a persona doesn't override it.
       - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+      # Which heavy engines to actually load. Both are baked into the image;
+      # each costs RAM + a first-boot weight download + startup time, so set
+      # this to a single engine if you only use one. Comma-separated.
+      # e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only (no Chatterbox).
+      - TTS_HEAVY_ENGINES=${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
       # Optional — enables PocketTTS zero-shot voice CLONING (issue #238). The
       # cloning weights (kyutai/pocket-tts) are gated on Hugging Face; without a
       # token the engine loads the open weights and cloned .wav voices revert to

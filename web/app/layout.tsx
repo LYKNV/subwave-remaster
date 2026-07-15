@@ -5,15 +5,17 @@ import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
+import { SKIN_INIT_SCRIPT } from '@/lib/skin';
 import { SITE_URL } from '@/lib/site';
+import { GA_ID } from '@/lib/ga';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
 import ThemeBootstrap from '@/components/ThemeBootstrap';
 import JsonLd from '@/components/JsonLd';
 
 // Visitor tracking. The gtag.js script only loads when a Measurement ID is
-// configured, so dev and un-instrumented deploys stay analytics-free.
-const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
+// configured (see lib/ga — resolved from the runtime env so it works without a
+// rebuild), so dev and un-instrumented deploys stay analytics-free.
 
 // Fraunces — the display serif. Soft, optical-axis editorial face used for
 // every headline + the masthead wordmark; opsz makes it self-tune contrast to
@@ -126,6 +128,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             so a pinned kiosk never flashes the heavy, blur-heavy build. Static
             constant from lib/lite — no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
+
+        {/* Hide the player shell before paint when this browser resolves to a
+            non-default skin, so a reload never flashes the wrong face. Static
+            constant from lib/skin — no untrusted input. */}
+        <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
         {/* Site-wide structured data (WebSite + Organization). */}
         <JsonLd data={SITE_JSONLD} />
